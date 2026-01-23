@@ -1,4 +1,4 @@
-namespace DefaultNamespace;
+namespace Sushi.Build;
 
 using System;
 using System.Collections.Generic;
