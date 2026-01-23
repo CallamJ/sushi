@@ -9,12 +9,11 @@ public enum TargetLanguage {
     Bash,
 }
 
-
 static class CommandRegistry
 {
     public static void RegisterCommands(RootCommand root)
     {
-        root.Subcommands.Add(BuildCommand.Create());
+        root.Subcommands.Add(TranspileCommand.Create());
         root.Subcommands.Add(CheckCommand.Create());
         root.Subcommands.Add(FormatCommand.Create());
         root.Subcommands.Add(RunCommand.Create());

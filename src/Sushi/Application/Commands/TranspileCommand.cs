@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.CommandLine;
 
 
-static class BuildCommand
+static class TranspileCommand
 {
     public static TargetLanguage GetTarget()
     {
@@ -46,7 +46,7 @@ static class BuildCommand
             }
         });
 
-        var command = new Command("build", "Transpile a .sushi file to an output file")
+        var command = new Command("transpile", "Transpile a .sushi file to an output file")
         {
             fileArgument,
             targetLanguageOption,
