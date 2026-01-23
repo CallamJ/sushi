@@ -1,4 +1,4 @@
-namespace DefaultNamespace;
+namespace Sushi.Build;
 
 public sealed class UnclassifiedToken
 {

@@ -1,4 +1,4 @@
-namespace DefaultNamespace;
+namespace Sushi.Build;
 
 public class Token
 {
