@@ -1,5 +1,5 @@
 #!/bin/env bash
-set -e # Exit on error
+set -euo pipefail # Exit on error
 PROJECT_NAME="Sushi"
 OUTPUT_DIR="./publish"
 CONFIGURATION="Release"
