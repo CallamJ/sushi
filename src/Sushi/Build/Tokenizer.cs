@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
+using Sushi.Build.SyntaxTree;
+
 public sealed class Tokenizer
 {
     private readonly string _src;
@@ -223,7 +225,7 @@ public sealed class Tokenizer
             _pos++;
         }
     }
-    
+
     public enum TokenKind
     {
         Word,        // identifiers, numbers, keywords (undecided)

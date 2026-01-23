@@ -1,4 +1,4 @@
-namespace Sushi.Build;
+namespace Sushi.Build.SyntaxTree;
 
 public sealed class UnclassifiedToken
 {
