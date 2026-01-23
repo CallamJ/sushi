@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/env bash
 set -e # Exit on error
 PROJECT_NAME="Sushi"
 OUTPUT_DIR="./publish"
