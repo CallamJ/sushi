@@ -2,7 +2,6 @@ namespace Sushi.Build;
 
 using System;
 using System.Collections.Generic;
-using System.Text;
 
 using Sushi.Build.SyntaxTree;
 
@@ -15,14 +14,14 @@ public sealed class Tokenizer
 
     // Symbols must be sorted longest-first
     private static readonly string[] Symbols =
-    {
+    [
         "==", "!=", "<=", ">=", "&&", "||", "++", "--",
         "+=", "-=", "*=", "/=", "->",
         "+", "-", "*", "/", "%", "=",
         "<", ">", "!", "&", "|",
         "(", ")", "{", "}", "[", "]",
         ";", ",", ".", ":"
-    };
+    ];
 
     public Tokenizer(string source)
     {
@@ -31,7 +30,7 @@ public sealed class Tokenizer
 
     public IEnumerable<UnclassifiedToken> Tokenize()
     {
-        while (!IsEOF())
+        while (!IsEof())
         {
             char c = Peek();
 
@@ -89,7 +88,7 @@ public sealed class Tokenizer
         int start = Mark(out int line, out int col);
         Advance(2); // //
 
-        while (!IsEOF() && Peek() != '\n')
+        while (!IsEof() && Peek() != '\n')
             Advance();
 
         return Make(TokenKind.Comment, start, line, col);
@@ -100,7 +99,7 @@ public sealed class Tokenizer
         int start = Mark(out int line, out int col);
         Advance(2); // /*
 
-        while (!IsEOF())
+        while (!IsEof())
         {
             if (Peek() == '*' && Peek(1) == '/')
             {
@@ -135,7 +134,7 @@ public sealed class Tokenizer
     {
         int start = Mark(out int line, out int col);
 
-        while (!IsEOF() && predicate(Peek()))
+        while (!IsEof() && predicate(Peek()))
             Advance();
 
         return Make(kind, start, line, col);
@@ -146,7 +145,7 @@ public sealed class Tokenizer
         int start = Mark(out int line, out int col);
         Advance(); // opening quote
 
-        while (!IsEOF())
+        while (!IsEof())
         {
             if (Peek() == '\\')
             {
@@ -184,12 +183,7 @@ public sealed class Tokenizer
         if (_pos + s.Length > _src.Length)
             return false;
 
-        for (int i = 0; i < s.Length; i++)
-        {
-            if (_src[_pos + i] != s[i])
-                return false;
-        }
-        return true;
+        return !s.Where((t, i) => _src[_pos + i] != t).Any();
     }
 
     private bool IsSymbolStart(char c)
@@ -207,7 +201,7 @@ public sealed class Tokenizer
         return _src[_pos + offset];
     }
 
-    private bool IsEOF() => _pos >= _src.Length;
+    private bool IsEof() => _pos >= _src.Length;
 
     private void Advance(int count = 1)
     {
@@ -225,15 +219,4 @@ public sealed class Tokenizer
             _pos++;
         }
     }
-
-    public enum TokenKind
-    {
-        Word,        // identifiers, numbers, keywords (undecided)
-        Symbol,      // operators, punctuation
-        String,      // "text"
-        Char,        // 'c'
-        Whitespace,  // spaces, tabs, newlines
-        Comment      // // or /* */
-    }
-
 }

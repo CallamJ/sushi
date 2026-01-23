@@ -1,6 +1,11 @@
-namespace Sushi.Build.SyntaxTree;
+namespace Sushi.Build;
 
-public class UnclassifiedToken
+public class Token
+{
+    
+}
+
+public sealed class UnclassifiedToken
 {
     public TokenKind Kind { get; }
     public string Text { get; }
@@ -61,4 +66,14 @@ public class UnclassifiedToken
     {
         return $"{Kind} \"{Text}\" @ {Line}:{Column}";
     }
+}
+
+public enum TokenKind
+{
+    Word,        // identifiers, numbers, keywords (undecided)
+    Symbol,      // operators, punctuation
+    String,      // "text"
+    Char,        // 'c'
+    Whitespace,  // spaces, tabs, newlines
+    Comment      // // or /* */
 }
