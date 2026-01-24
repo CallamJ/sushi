@@ -20,7 +20,7 @@ public sealed class Tokenizer
         "+", "-", "*", "/", "%", "=",
         "<", ">", "!", "&", "|",
         "(", ")", "{", "}", "[", "]",
-        ";", ",", ".", ":"
+        ";", ",", ".", ":", "@", "$"  // Added @ and $ for Sushi language
     ];
 
     public Tokenizer(string source)
