@@ -25,7 +25,9 @@ public class Lexer
     {
         "box", "use", "class", "new", "return", "this",
         "if", "else", "while", "for", "break", "continue",
-        "true", "false", "null"
+        "true", "false", "null",
+        "var", "switch", "case", "default", "also",
+        "do", "step", "enum", "in"
     };
 
     // Operators that should be classified as operators
@@ -229,6 +231,9 @@ public class Lexer
             ":" => ClassifiedTokenKind.Colon,
             "|" => ClassifiedTokenKind.Pipe,
             "@" => ClassifiedTokenKind.At,
+            "?" => ClassifiedTokenKind.Question,
+            ".." => ClassifiedTokenKind.Range,
+            "..." => ClassifiedTokenKind.RangeInclusive,
             _ => Operators.Contains(text) ? ClassifiedTokenKind.Operator : ClassifiedTokenKind.Operator
         };
 

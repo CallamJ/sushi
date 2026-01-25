@@ -17,10 +17,12 @@ public sealed class Tokenizer
     [
         "==", "!=", "<=", ">=", "&&", "||", "++", "--",
         "+=", "-=", "*=", "/=", "->",
+        "...",  // Inclusive range operator (must come before ..)
+        "..",   // Exclusive range operator
         "+", "-", "*", "/", "%", "=",
         "<", ">", "!", "&", "|",
         "(", ")", "{", "}", "[", "]",
-        ";", ",", ".", ":", "@", "$"  // Added @ and $ for Sushi language
+        ";", ",", ".", ":", "@", "$", "?"  // Added @, $, ? for Sushi language
     ];
 
     public Tokenizer(string source)
