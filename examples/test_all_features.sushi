@@ -1,0 +1,516 @@
+// Comprehensive Sushi Language Feature Test
+// Tests all new features: var, arrays, ternary, switch, loops, enums, named args, etc.
+
+box TestProgram
+
+// ═══════════════════════════════════════════════════════════════════
+// 1. VARIABLE DECLARATION WITH VAR
+// ═══════════════════════════════════════════════════════════════════
+
+var x = 42
+var name = "Alice"
+var isActive = true
+var price = 99.99
+
+// Type inference works
+var result = x + 10
+
+// ═══════════════════════════════════════════════════════════════════
+// 2. ARRAY LITERALS AND OPERATIONS
+// ═══════════════════════════════════════════════════════════════════
+
+var numbers = [1, 2, 3, 4, 5]
+var names = ["Alice", "Bob", "Charlie"]
+var mixed = [1, "hello", true, 3.14]
+
+// Array indexing
+var first = numbers[0]
+var last = numbers[-1]
+
+// Array slicing
+var slice1 = numbers[1:4]      // [2, 3, 4]
+var slice2 = numbers[:3]       // [0, 1, 2]
+var slice3 = numbers[2:]       // [2, 3, 4]
+var middle = numbers[1:-1]     // [1, 2, 3]
+
+// ═══════════════════════════════════════════════════════════════════
+// 3. ARRAY DESTRUCTURING
+// ═══════════════════════════════════════════════════════════════════
+
+var [a, b, c] = [10, 20, 30]
+
+var [first2, , third] = [1, 2, 3]  // Skip middle element
+
+var [head, ...tail] = [1, 2, 3, 4, 5]  // Rest pattern
+
+var [x2 = 0, y2 = 0] = [100]  // With defaults
+
+// ═══════════════════════════════════════════════════════════════════
+// 4. TERNARY OPERATOR
+// ═══════════════════════════════════════════════════════════════════
+
+var age = 25
+var status = age >= 18 ? "Adult" : "Minor"
+
+var score = 85
+var grade = score >= 90 ? "A" : 
+            score >= 80 ? "B" : 
+            score >= 70 ? "C" : "F"
+
+var max = x > y2 ? x : y2
+
+// ═══════════════════════════════════════════════════════════════════
+// 5. SWITCH STATEMENT WITH ARROWS
+// ═══════════════════════════════════════════════════════════════════
+
+processValue(int value) {
+    switch (value) {
+        1 -> {
+            print("One")
+        }
+        2, 3, 4 -> {
+            print("Two, Three, or Four")
+        }
+        5 -> {
+            print("Five")
+        }
+        default -> {
+            print("Other")
+        }
+    }
+}
+
+handleStatus(string status) {
+    switch (status) {
+        "pending", "waiting" -> {
+            print("In progress")
+        }
+        "completed", "done" -> {
+            print("Finished")
+        }
+        "failed", "error" -> {
+            print("Failed")
+        }
+        default -> {
+            print("Unknown status")
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 6. ENHANCED LOOPS
+// ═══════════════════════════════════════════════════════════════════
+
+// For-range with exclusive end
+testForRangeExclusive() {
+    for (var i : 0..5) {
+        print(i)  // 0, 1, 2, 3, 4
+    }
+}
+
+// For-range with inclusive end
+testForRangeInclusive() {
+    for (var i : 0...5) {
+        print(i)  // 0, 1, 2, 3, 4, 5
+    }
+}
+
+// For-range with step
+testForRangeStep() {
+    for (var i : 0..100 step 10) {
+        print(i)  // 0, 10, 20, ..., 90
+    }
+}
+
+// ForEach with colon
+testForEach() {
+    var items = ["apple", "banana", "cherry"]
+    
+    for (var item : items) {
+        print(item)
+    }
+}
+
+// ForEach with index
+testForEachWithIndex() {
+    var items = ["apple", "banana", "cherry"]
+    
+    for (var i, var item : items) {
+        print(i + ": " + item)
+    }
+}
+
+// Do-While loop
+testDoWhile() {
+    var count = 0
+    
+    do {
+        print(count)
+        count = count + 1
+    } while (count < 5)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 7. ENUMS - SIMPLE STYLE
+// ═══════════════════════════════════════════════════════════════════
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Yellow
+}
+
+testSimpleEnum() {
+    var c = Color.Red
+    print(c.name())      // "Red"
+    print(c.ordinal())   // 0
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 8. ENUMS - DIRECT VALUE STYLE
+// ═══════════════════════════════════════════════════════════════════
+
+enum Status {
+    Pending = 0,
+    Active = 1,
+    Completed = 2,
+    Failed = -1
+}
+
+enum LogLevel {
+    Debug = "DEBUG",
+    Info = "INFO",
+    Warning = "WARN",
+    Error = "ERROR"
+}
+
+testDirectValueEnum() {
+    var s = Status.Active
+    print(s.value())     // 1
+    print(s.name())      // "Active"
+    
+    var level = LogLevel.Error
+    print(level.value()) // "ERROR"
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 9. ENUMS - RECORD STYLE
+// ═══════════════════════════════════════════════════════════════════
+
+enum HttpStatus(int code, string message) {
+    Ok(200, "OK"),
+    Created(201, "Created"),
+    BadRequest(400, "Bad Request"),
+    NotFound(404, "Not Found"),
+    ServerError(500, "Internal Server Error")
+    
+    isSuccess() -> this.code >= 200 && this.code < 300
+    isError() -> this.code >= 400
+    
+    string() -> this.code + " " + this.message
+}
+
+testRecordEnum() {
+    var status = HttpStatus.NotFound
+    print(status.code)         // 404
+    print(status.message)      // "Not Found"
+    print(status.isError())    // true
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 10. ENUMS - INLINE PROPERTIES STYLE
+// ═══════════════════════════════════════════════════════════════════
+
+enum Direction {
+    North { x = 0, y = 1 },
+    South { x = 0, y = -1 },
+    East { x = 1, y = 0 },
+    West { x = -1, y = 0 }
+    
+    opposite() {
+        switch (this) {
+            Direction.North -> return Direction.South
+            Direction.South -> return Direction.North
+            Direction.East -> return Direction.West
+            Direction.West -> return Direction.East
+        }
+    }
+    
+    string() -> "(" + this.x + ", " + this.y + ")"
+}
+
+testInlinePropertiesEnum() {
+    var dir = Direction.North
+    print(dir.x)           // 0
+    print(dir.y)           // 1
+    print(dir.opposite())  // Direction.South
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 11. NAMED ARGUMENTS
+// ═══════════════════════════════════════════════════════════════════
+
+createUser(string name, int age, bool premium, string email) {
+    print("Creating user: " + name)
+    print("Age: " + age)
+    print("Premium: " + premium)
+    print("Email: " + email)
+}
+
+testNamedArguments() {
+    // Positional
+    createUser("Alice", 25, true, "alice@example.com")
+    
+    // All named
+    createUser(name: "Bob", age: 30, premium: false, email: "bob@example.com")
+    
+    // Mixed (positional first)
+    createUser("Charlie", age: 35, premium: true, email: "charlie@example.com")
+    
+    // Named in different order
+    createUser(email: "dave@example.com", premium: false, name: "Dave", age: 40)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 12. VARARGS
+// ═══════════════════════════════════════════════════════════════════
+
+sum(int... numbers) {
+    var total = 0
+    for (var n : numbers) {
+        total = total + n
+    }
+    return total
+}
+
+concatenate(string separator, string... parts) {
+    var result = ""
+    for (var i, var part : parts) {
+        if (i > 0) {
+            result = result + separator
+        }
+        result = result + part
+    }
+    return result
+}
+
+testVarargs() {
+    var s1 = sum(1, 2, 3, 4, 5)           // Individual args
+    var s2 = sum([10, 20, 30, 40, 50])    // Array directly
+    
+    var text = concatenate(", ", "apple", "banana", "cherry")
+    var text2 = concatenate(" - ", ["one", "two", "three"])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 13. DEFAULT PARAMETERS
+// ═══════════════════════════════════════════════════════════════════
+
+greet(string name = "World", string greeting = "Hello") {
+    print(greeting + ", " + name + "!")
+}
+
+testDefaultParameters() {
+    greet()                              // "Hello, World!"
+    greet("Alice")                       // "Hello, Alice!"
+    greet("Bob", "Hi")                   // "Hi, Bob!"
+    greet(greeting: "Hey", name: "Charlie")  // "Hey, Charlie!"
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 14. STRUCTURAL TYPES
+// ═══════════════════════════════════════════════════════════════════
+
+processUser(object { string name, int age }) {
+    print("User: " + name + ", Age: " + age)
+}
+
+processPerson(object { string name, int age, string email }) {
+    print("Person: " + name)
+    print("Age: " + age)
+    print("Email: " + email)
+}
+
+testStructuralTypes() {
+    var user = {
+        string name: "Alice",
+        int age: 25
+    }
+    
+    var person = {
+        string name: "Bob",
+        int age: 30,
+        string email: "bob@example.com"
+    }
+    
+    processUser(user)   // OK
+    processUser(person) // OK - person has all required fields
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 15. COMPLEX COMBINATIONS
+// ═══════════════════════════════════════════════════════════════════
+
+class Person {
+    string name
+    int age
+    string email
+    
+    new(string name, int age, string email = "unknown@example.com") {
+        this.name = name
+        this.age = age
+        this.email = email
+    }
+    
+    isAdult() -> this.age >= 18
+    
+    string() -> this.name + " (" + this.age + ")"
+    int() -> this.age
+}
+
+filterUsers(object { string name, int age }... users) {
+    var adults = []
+    
+    for (var user : users) {
+        if (user.age >= 18) {
+            adults.push(user)
+        }
+    }
+    
+    return adults
+}
+
+testComplexFeatures() {
+    // Create people with var
+    var people = [
+        new Person("Alice", 25),
+        new Person(name: "Bob", age: 17, email: "bob@test.com"),
+        new Person("Charlie", 30)
+    ]
+    
+    // Use for-each with index
+    for (var i, var person : people) {
+        var status = person.isAdult() ? "Adult" : "Minor"
+        print(i + ": " + person + " - " + status)
+    }
+    
+    // Array slicing and destructuring
+    var [first, ...rest] = people
+    print("First person: " + first)
+    print("Rest: " + rest.length() + " people")
+    
+    // Switch with enum
+    var currentStatus = Status.Active
+    
+    switch (currentStatus) {
+        Status.Pending -> {
+            print("Waiting...")
+        }
+        Status.Active -> {
+            print("Running!")
+        }
+        Status.Completed, Status.Failed -> {
+            print("Done")
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 16. ARRAY METHODS AND OPERATIONS
+// ═══════════════════════════════════════════════════════════════════
+
+testArrayMethods() {
+    var nums = [1, 2, 3, 4, 5]
+    
+    // Map with ternary
+    var doubled = nums.map((n) -> n * 2)
+    
+    // Filter with lambda
+    var evens = nums.filter((n) -> n % 2 == 0)
+    
+    // Reduce
+    var total = nums.reduce((acc, n) -> acc + n, 0)
+    
+    // Chaining
+    var result = nums
+        .filter((n) -> n > 2)
+        .map((n) -> n * 10)
+        .reduce((acc, n) -> acc + n, 0)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 17. NESTED STRUCTURES
+// ═══════════════════════════════════════════════════════════════════
+
+testNestedStructures() {
+    var matrix = [
+        [1, 2, 3],
+        [4, 5, 6],
+        [7, 8, 9]
+    ]
+    
+    for (var i : 0...2) {
+        for (var j : 0...2) {
+            print("matrix[" + i + "][" + j + "] = " + matrix[i][j])
+        }
+    }
+    
+    // Nested destructuring
+    var [[a1, b1], [a2, b2]] = [[1, 2], [3, 4]]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MAIN ENTRY POINT
+// ═══════════════════════════════════════════════════════════════════
+
+main() {
+    print("=== Testing Sushi Language Features ===")
+    
+    print("\n--- Simple Enum ---")
+    testSimpleEnum()
+    
+    print("\n--- Direct Value Enum ---")
+    testDirectValueEnum()
+    
+    print("\n--- Record Enum ---")
+    testRecordEnum()
+    
+    print("\n--- Inline Properties Enum ---")
+    testInlinePropertiesEnum()
+    
+    print("\n--- Named Arguments ---")
+    testNamedArguments()
+    
+    print("\n--- Varargs ---")
+    testVarargs()
+    
+    print("\n--- Default Parameters ---")
+    testDefaultParameters()
+    
+    print("\n--- Structural Types ---")
+    testStructuralTypes()
+    
+    print("\n--- For-Range Loops ---")
+    testForRangeExclusive()
+    testForRangeInclusive()
+    testForRangeStep()
+    
+    print("\n--- ForEach Loops ---")
+    testForEach()
+    testForEachWithIndex()
+    
+    print("\n--- Do-While Loop ---")
+    testDoWhile()
+    
+    print("\n--- Complex Features ---")
+    testComplexFeatures()
+    
+    print("\n--- Array Methods ---")
+    testArrayMethods()
+    
+    print("\n--- Nested Structures ---")
+    testNestedStructures()
+    
+    print("\n=== All Tests Complete ===")
+}

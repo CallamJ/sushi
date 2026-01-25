@@ -481,4 +481,356 @@ public class AstPrinter : IAstVisitor
         
         Dedent();
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // New Node Types
+    // ═══════════════════════════════════════════════════════════════════
+
+    public void Visit(EnumDeclarationNode node)
+    {
+        WriteLine($"EnumDeclaration: {node.Name}");
+        Indent();
+        
+        if (node.RecordParameters != null && node.RecordParameters.Count > 0)
+        {
+            WriteLine("RecordParameters:");
+            Indent();
+            foreach (var param in node.RecordParameters)
+                param.Accept(this);
+            Dedent();
+        }
+        
+        WriteLine("Values:");
+        Indent();
+        foreach (var value in node.Values)
+            value.Accept(this);
+        Dedent();
+        
+        if (node.ExplicitConstructor != null)
+        {
+            WriteLine("ExplicitConstructor:");
+            Indent();
+            node.ExplicitConstructor.Accept(this);
+            Dedent();
+        }
+        
+        if (node.Methods.Count > 0)
+        {
+            WriteLine("Methods:");
+            Indent();
+            foreach (var method in node.Methods)
+                method.Accept(this);
+            Dedent();
+        }
+        
+        if (node.TypeAdapters.Count > 0)
+        {
+            WriteLine("TypeAdapters:");
+            Indent();
+            foreach (var adapter in node.TypeAdapters)
+                adapter.Accept(this);
+            Dedent();
+        }
+        
+        Dedent();
+    }
+
+    public void Visit(EnumValueNode node)
+    {
+        WriteLine($"EnumValue: {node.Name}");
+        Indent();
+        
+        if (node.DirectValue != null)
+        {
+            WriteLine("DirectValue:");
+            Indent();
+            node.DirectValue.Accept(this);
+            Dedent();
+        }
+        
+        if (node.ConstructorArgs != null)
+        {
+            WriteLine("ConstructorArgs:");
+            Indent();
+            foreach (var arg in node.ConstructorArgs)
+                arg.Accept(this);
+            Dedent();
+        }
+        
+        if (node.Properties != null)
+        {
+            WriteLine("Properties:");
+            Indent();
+            foreach (var prop in node.Properties)
+            {
+                WriteLine($"{prop.Key}:");
+                Indent();
+                prop.Value.Accept(this);
+                Dedent();
+            }
+            Dedent();
+        }
+        
+        Dedent();
+    }
+
+    public void Visit(StructuralTypeNode node)
+    {
+        WriteLine("StructuralType:");
+        Indent();
+        foreach (var field in node.Fields)
+        {
+            WriteLine($"{field.Value} {field.Key}");
+        }
+        Dedent();
+    }
+
+    public void Visit(ArrayDestructuringStatementNode node)
+    {
+        WriteLine("ArrayDestructuring:");
+        Indent();
+        
+        WriteLine("Patterns:");
+        Indent();
+        foreach (var pattern in node.Patterns)
+            pattern.Accept(this);
+        Dedent();
+        
+        WriteLine("Value:");
+        Indent();
+        node.Value.Accept(this);
+        Dedent();
+        
+        Dedent();
+    }
+
+    public void Visit(DestructuringPatternNode node)
+    {
+        var typeStr = node.Type != null ? $"{node.Type} " : "";
+        var nameStr = node.Name ?? "_";
+        var restStr = node.IsRest ? "..." : "";
+        WriteLine($"Pattern: {restStr}{typeStr}{nameStr}");
+        
+        if (node.DefaultValue != null)
+        {
+            Indent();
+            WriteLine("DefaultValue:");
+            Indent();
+            node.DefaultValue.Accept(this);
+            Dedent();
+            Dedent();
+        }
+    }
+
+    public void Visit(SwitchStatementNode node)
+    {
+        WriteLine("Switch:");
+        Indent();
+        
+        WriteLine("Value:");
+        Indent();
+        node.Value.Accept(this);
+        Dedent();
+        
+        WriteLine("Cases:");
+        Indent();
+        foreach (var caseNode in node.Cases)
+            caseNode.Accept(this);
+        Dedent();
+        
+        if (node.DefaultCase != null)
+        {
+            WriteLine("Default:");
+            Indent();
+            node.DefaultCase.Accept(this);
+            Dedent();
+        }
+        
+        Dedent();
+    }
+
+    public void Visit(SwitchCaseNode node)
+    {
+        WriteLine("Case:");
+        Indent();
+        
+        WriteLine("MatchValues:");
+        Indent();
+        foreach (var value in node.MatchValues)
+            value.Accept(this);
+        Dedent();
+        
+        WriteLine("Body:");
+        Indent();
+        node.Body.Accept(this);
+        Dedent();
+        
+        if (node.AlsoCases.Count > 0)
+        {
+            WriteLine("Also:");
+            Indent();
+            foreach (var also in node.AlsoCases)
+                also.Accept(this);
+            Dedent();
+        }
+        
+        Dedent();
+    }
+
+    public void Visit(DoWhileStatementNode node)
+    {
+        WriteLine("DoWhile:");
+        Indent();
+        
+        WriteLine("Body:");
+        Indent();
+        node.Body.Accept(this);
+        Dedent();
+        
+        WriteLine("Condition:");
+        Indent();
+        node.Condition.Accept(this);
+        Dedent();
+        
+        Dedent();
+    }
+
+    public void Visit(ForRangeStatementNode node)
+    {
+        var rangeOp = node.IsInclusive ? "..." : "..";
+        WriteLine($"ForRange: {node.Variable}");
+        Indent();
+        
+        WriteLine("Start:");
+        Indent();
+        node.Start.Accept(this);
+        Dedent();
+        
+        WriteLine($"End ({rangeOp}):");
+        Indent();
+        node.End.Accept(this);
+        Dedent();
+        
+        if (node.Step != null)
+        {
+            WriteLine("Step:");
+            Indent();
+            node.Step.Accept(this);
+            Dedent();
+        }
+        
+        WriteLine("Body:");
+        Indent();
+        node.Body.Accept(this);
+        Dedent();
+        
+        Dedent();
+    }
+
+    public void Visit(ForEachStatementNode node)
+    {
+        var indexStr = node.IndexVariable != null ? $"{node.IndexVariable}, " : "";
+        WriteLine($"ForEach: {indexStr}{node.ItemVariable}");
+        Indent();
+        
+        WriteLine("Collection:");
+        Indent();
+        node.Collection.Accept(this);
+        Dedent();
+        
+        WriteLine("Body:");
+        Indent();
+        node.Body.Accept(this);
+        Dedent();
+        
+        Dedent();
+    }
+
+    public void Visit(ConditionalExpressionNode node)
+    {
+        WriteLine("Conditional (?:)");
+        Indent();
+        
+        WriteLine("Condition:");
+        Indent();
+        node.Condition.Accept(this);
+        Dedent();
+        
+        WriteLine("TrueExpression:");
+        Indent();
+        node.TrueExpression.Accept(this);
+        Dedent();
+        
+        WriteLine("FalseExpression:");
+        Indent();
+        node.FalseExpression.Accept(this);
+        Dedent();
+        
+        Dedent();
+    }
+
+    public void Visit(ArgumentNode node)
+    {
+        var nameStr = node.Name != null ? $"{node.Name}: " : "";
+        WriteLine($"Argument: {nameStr}");
+        Indent();
+        node.Value.Accept(this);
+        Dedent();
+    }
+
+    public void Visit(IndexExpressionNode node)
+    {
+        WriteLine("Index:");
+        Indent();
+        
+        WriteLine("Array:");
+        Indent();
+        node.Array.Accept(this);
+        Dedent();
+        
+        WriteLine("Index:");
+        Indent();
+        node.Index.Accept(this);
+        Dedent();
+        
+        Dedent();
+    }
+
+    public void Visit(SliceExpressionNode node)
+    {
+        WriteLine("Slice:");
+        Indent();
+        
+        WriteLine("Array:");
+        Indent();
+        node.Array.Accept(this);
+        Dedent();
+        
+        if (node.Start != null)
+        {
+            WriteLine("Start:");
+            Indent();
+            node.Start.Accept(this);
+            Dedent();
+        }
+        
+        if (node.End != null)
+        {
+            WriteLine("End:");
+            Indent();
+            node.End.Accept(this);
+            Dedent();
+        }
+        
+        Dedent();
+    }
+
+    public void Visit(ArrayLiteralExpressionNode node)
+    {
+        WriteLine($"ArrayLiteral ({node.Elements.Count} elements)");
+        Indent();
+        foreach (var element in node.Elements)
+            element.Accept(this);
+        Dedent();
+    }
 }

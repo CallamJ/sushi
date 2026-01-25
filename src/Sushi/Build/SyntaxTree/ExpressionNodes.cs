@@ -61,21 +61,68 @@ public class UnaryExpressionNode : ExpressionNode
 }
 
 /// <summary>
+/// Conditional (ternary) expression: condition ? trueExpr : falseExpr
+/// </summary>
+public class ConditionalExpressionNode : ExpressionNode
+{
+    public ExpressionNode Condition { get; }
+    public ExpressionNode TrueExpression { get; }
+    public ExpressionNode FalseExpression { get; }
+    
+    public ConditionalExpressionNode(
+        ExpressionNode condition,
+        ExpressionNode trueExpr,
+        ExpressionNode falseExpr,
+        int line,
+        int column) : base(line, column)
+    {
+        Condition = condition;
+        TrueExpression = trueExpr;
+        FalseExpression = falseExpr;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
 /// Function/method call: func(args)
 /// </summary>
 public class CallExpressionNode : ExpressionNode
 {
     public ExpressionNode Callee { get; }
-    public List<ExpressionNode> Arguments { get; }
+    public List<ArgumentNode> Arguments { get; }
     
     public CallExpressionNode(
         ExpressionNode callee,
-        List<ExpressionNode> arguments,
+        List<ArgumentNode> arguments,
         int line,
         int column) : base(line, column)
     {
         Callee = callee;
         Arguments = arguments;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// Argument in a function call (supports named arguments)
+/// </summary>
+public class ArgumentNode : AstNode
+{
+    public string? Name { get; }  // Null for positional arguments
+    public ExpressionNode Value { get; }
+    
+    public ArgumentNode(
+        string? name,
+        ExpressionNode value,
+        int line,
+        int column) : base(line, column)
+    {
+        Name = name;
+        Value = value;
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
@@ -98,6 +145,53 @@ public class MemberAccessExpressionNode : ExpressionNode
     {
         Object = obj;
         MemberName = memberName;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// Index expression: array[index]
+/// </summary>
+public class IndexExpressionNode : ExpressionNode
+{
+    public ExpressionNode Array { get; }
+    public ExpressionNode Index { get; }
+    
+    public IndexExpressionNode(
+        ExpressionNode array,
+        ExpressionNode index,
+        int line,
+        int column) : base(line, column)
+    {
+        Array = array;
+        Index = index;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// Slice expression: array[start:end]
+/// </summary>
+public class SliceExpressionNode : ExpressionNode
+{
+    public ExpressionNode Array { get; }
+    public ExpressionNode? Start { get; }  // Null means from beginning
+    public ExpressionNode? End { get; }    // Null means to end
+    
+    public SliceExpressionNode(
+        ExpressionNode array,
+        ExpressionNode? start,
+        ExpressionNode? end,
+        int line,
+        int column) : base(line, column)
+    {
+        Array = array;
+        Start = start;
+        End = end;
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
@@ -175,6 +269,25 @@ public enum LiteralKind
 }
 
 /// <summary>
+/// Array literal: [1, 2, 3]
+/// </summary>
+public class ArrayLiteralExpressionNode : ExpressionNode
+{
+    public List<ExpressionNode> Elements { get; }
+    
+    public ArrayLiteralExpressionNode(
+        List<ExpressionNode> elements,
+        int line,
+        int column) : base(line, column)
+    {
+        Elements = elements;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
 /// Interpolated string: "Hello $(name)!"
 /// </summary>
 public class InterpolatedStringExpressionNode : ExpressionNode
@@ -199,11 +312,11 @@ public class InterpolatedStringExpressionNode : ExpressionNode
 public class NewExpressionNode : ExpressionNode
 {
     public string TypeName { get; }
-    public List<ExpressionNode> Arguments { get; }
+    public List<ArgumentNode> Arguments { get; }
     
     public NewExpressionNode(
         string typeName,
-        List<ExpressionNode> arguments,
+        List<ArgumentNode> arguments,
         int line,
         int column) : base(line, column)
     {

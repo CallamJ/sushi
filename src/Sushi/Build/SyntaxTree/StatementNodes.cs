@@ -61,24 +61,77 @@ public class ExpressionStatementNode : StatementNode
 }
 
 /// <summary>
-/// Variable declaration: Type name = value;
+/// Variable declaration: Type name = value; or var name = value;
 /// </summary>
 public class VariableDeclarationStatementNode : StatementNode
 {
-    public string? Type { get; }  // null if inferred
+    public string? Type { get; }  // null if using var
     public string Name { get; }
     public ExpressionNode? Initializer { get; }
+    public bool IsVar { get; }  // true if declared with 'var' keyword
     
     public VariableDeclarationStatementNode(
         string? type, 
         string name, 
         ExpressionNode? initializer,
+        bool isVar,
         int line, 
         int column) : base(line, column)
     {
         Type = type;
         Name = name;
         Initializer = initializer;
+        IsVar = isVar;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// Array destructuring: var [a, b, c] = arr
+/// </summary>
+public class ArrayDestructuringStatementNode : StatementNode
+{
+    public List<DestructuringPatternNode> Patterns { get; }
+    public ExpressionNode Value { get; }
+    
+    public ArrayDestructuringStatementNode(
+        List<DestructuringPatternNode> patterns,
+        ExpressionNode value,
+        int line,
+        int column) : base(line, column)
+    {
+        Patterns = patterns;
+        Value = value;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// Destructuring pattern for array destructuring
+/// </summary>
+public class DestructuringPatternNode : AstNode
+{
+    public string? Type { get; }           // Optional type annotation
+    public string? Name { get; }           // Variable name (null to skip)
+    public bool IsRest { get; }            // true for ...rest
+    public ExpressionNode? DefaultValue { get; } // Default if undefined
+    
+    public DestructuringPatternNode(
+        string? type,
+        string? name,
+        bool isRest,
+        ExpressionNode? defaultValue,
+        int line,
+        int column) : base(line, column)
+    {
+        Type = type;
+        Name = name;
+        IsRest = isRest;
+        DefaultValue = defaultValue;
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
@@ -111,6 +164,56 @@ public class IfStatementNode : StatementNode
 }
 
 /// <summary>
+/// Switch statement: switch (value) { case1 -> { } case2 -> { } }
+/// </summary>
+public class SwitchStatementNode : StatementNode
+{
+    public ExpressionNode Value { get; }
+    public List<SwitchCaseNode> Cases { get; }
+    public BlockStatementNode? DefaultCase { get; }
+    
+    public SwitchStatementNode(
+        ExpressionNode value,
+        List<SwitchCaseNode> cases,
+        BlockStatementNode? defaultCase,
+        int line,
+        int column) : base(line, column)
+    {
+        Value = value;
+        Cases = cases;
+        DefaultCase = defaultCase;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// Switch case: value1, value2 -> { body }
+/// </summary>
+public class SwitchCaseNode : AstNode
+{
+    public List<ExpressionNode> MatchValues { get; }
+    public BlockStatementNode Body { get; }
+    public List<ExpressionNode> AlsoCases { get; }  // Values to also execute
+    
+    public SwitchCaseNode(
+        List<ExpressionNode> matchValues,
+        BlockStatementNode body,
+        List<ExpressionNode> alsoCases,
+        int line,
+        int column) : base(line, column)
+    {
+        MatchValues = matchValues;
+        Body = body;
+        AlsoCases = alsoCases;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
 /// While loop: while (condition) body
 /// </summary>
 public class WhileStatementNode : StatementNode
@@ -126,6 +229,28 @@ public class WhileStatementNode : StatementNode
     {
         Condition = condition;
         Body = body;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// Do-while loop: do { body } while (condition)
+/// </summary>
+public class DoWhileStatementNode : StatementNode
+{
+    public StatementNode Body { get; }
+    public ExpressionNode Condition { get; }
+    
+    public DoWhileStatementNode(
+        StatementNode body,
+        ExpressionNode condition,
+        int line,
+        int column) : base(line, column)
+    {
+        Body = body;
+        Condition = condition;
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
@@ -153,6 +278,68 @@ public class ForStatementNode : StatementNode
         Initializer = initializer;
         Condition = condition;
         Increment = increment;
+        Body = body;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// For-range loop: for (var i : 0..10) body
+/// </summary>
+public class ForRangeStatementNode : StatementNode
+{
+    public string Variable { get; }
+    public ExpressionNode Start { get; }
+    public ExpressionNode End { get; }
+    public bool IsInclusive { get; }  // .. vs ...
+    public ExpressionNode? Step { get; }
+    public StatementNode Body { get; }
+    
+    public ForRangeStatementNode(
+        string variable,
+        ExpressionNode start,
+        ExpressionNode end,
+        bool isInclusive,
+        ExpressionNode? step,
+        StatementNode body,
+        int line,
+        int column) : base(line, column)
+    {
+        Variable = variable;
+        Start = start;
+        End = end;
+        IsInclusive = isInclusive;
+        Step = step;
+        Body = body;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// For-each loop: for (var item : collection) body
+/// </summary>
+public class ForEachStatementNode : StatementNode
+{
+    public string? IndexVariable { get; }  // Optional index variable
+    public string ItemVariable { get; }
+    public ExpressionNode Collection { get; }
+    public StatementNode Body { get; }
+    
+    public ForEachStatementNode(
+        string? indexVariable,
+        string itemVariable,
+        ExpressionNode collection,
+        StatementNode body,
+        int line,
+        int column) : base(line, column)
+    {
+        IndexVariable = indexVariable;
+        ItemVariable = itemVariable;
+        Collection = collection;
         Body = body;
     }
 

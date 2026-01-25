@@ -16,13 +16,11 @@ public sealed class Tokenizer
     private static readonly string[] Symbols =
     [
         "==", "!=", "<=", ">=", "&&", "||", "++", "--",
-        "+=", "-=", "*=", "/=", "->",
-        "...",  // Inclusive range operator (must come before ..)
-        "..",   // Exclusive range operator
-        "+", "-", "*", "/", "%", "=",
+        "+=", "-=", "*=", "/=", "->", "...",
+        "..", "+", "-", "*", "/", "%", "=",
         "<", ">", "!", "&", "|",
         "(", ")", "{", "}", "[", "]",
-        ";", ",", ".", ":", "@", "$", "?"  // Added @, $, ? for Sushi language
+        ";", ",", ".", ":", "@", "$", "?"
     ];
 
     public Tokenizer(string source)

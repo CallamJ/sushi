@@ -96,6 +96,12 @@ public class Parser
             return ParseClassDeclaration();
         }
         
+        if (token.IsKeyword("enum"))
+        {
+            DebugLog("Found 'enum' keyword");
+            return ParseEnumDeclaration();
+        }
+        
         // Could be a function/variable declaration OR a statement
         if (Check(ClassifiedTokenKind.Identifier))
         {
@@ -446,7 +452,7 @@ public class Parser
         
         ExpectSemicolon();
         
-        return new VariableDeclarationStatementNode(type, name, initializer, start.Line, start.Column);
+        return new VariableDeclarationStatementNode(type, name, initializer, false, start.Line, start.Column);
     }
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -468,6 +474,12 @@ public class Parser
         
         if (token.IsKeyword("for"))
             return ParseForStatement();
+        
+        if (token.IsKeyword("switch"))
+            return ParseSwitchStatement();
+        
+        if (token.IsKeyword("do"))
+            return ParseDoWhileStatement();
         
         if (token.IsKeyword("break"))
             return ParseBreakStatement();
@@ -621,8 +633,14 @@ public class Parser
     {
         var start = Current();
         
+        bool isVar = false;
         string? type = null;
-        if (Check(ClassifiedTokenKind.Identifier))
+        
+        if (MatchKeyword("var"))
+        {
+            isVar = true;
+        }
+        else if (Check(ClassifiedTokenKind.Identifier))
         {
             var first = Advance();
             if (Check(ClassifiedTokenKind.Identifier))
@@ -643,10 +661,14 @@ public class Parser
         {
             initializer = ParseExpression();
         }
+        else if (isVar)
+        {
+            throw new Exception($"Variable declared with 'var' must have initializer at {start.Line}:{start.Column}");
+        }
         
         ExpectSemicolon();
         
-        return new VariableDeclarationStatementNode(type, name, initializer, start.Line, start.Column);
+        return new VariableDeclarationStatementNode(type, name, initializer, isVar, start.Line, start.Column);
     }
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -690,7 +712,7 @@ public class Parser
         {
             for (int i = 0; i < call.Arguments.Count; i++)
             {
-                if (IsAtPlaceholder(call.Arguments[i]))
+                if (IsAtPlaceholder(call.Arguments[i].Value))
                     return i;
             }
         }
@@ -705,9 +727,26 @@ public class Parser
         return expr is IdentifierExpressionNode id && id.Name == "@";
     }
 
-    private ExpressionNode ParseAssignmentExpression()
+    private ExpressionNode ParseConditionalExpression()
     {
         var expr = ParseLogicalOrExpression();
+        
+        if (Match(ClassifiedTokenKind.Question))
+        {
+            var trueExpr = ParseExpression();
+            Expect(ClassifiedTokenKind.Colon);
+            var falseExpr = ParseConditionalExpression();
+            
+            return new ConditionalExpressionNode(
+                expr, trueExpr, falseExpr, expr.Line, expr.Column);
+        }
+        
+        return expr;
+    }
+
+    private ExpressionNode ParseAssignmentExpression()
+    {
+        var expr = ParseConditionalExpression();  // Changed from ParseLogicalOrExpression
         
         if (MatchOperator("=") || MatchOperator("+=") || MatchOperator("-=") || 
             MatchOperator("*=") || MatchOperator("/="))
@@ -837,6 +876,39 @@ public class Parser
                 var member = Expect(ClassifiedTokenKind.Identifier).Text;
                 expr = new MemberAccessExpressionNode(expr, member, expr.Line, expr.Column);
             }
+            else if (Match(ClassifiedTokenKind.LeftBracket))
+            {
+                // Array indexing or slicing
+                ExpressionNode? first = null;
+                if (!Check(ClassifiedTokenKind.Colon) && !Check(ClassifiedTokenKind.RightBracket))
+                {
+                    first = ParseExpression();
+                }
+                
+                if (Match(ClassifiedTokenKind.Colon))
+                {
+                    // Slice: arr[start:end]
+                    ExpressionNode? end = null;
+                    if (!Check(ClassifiedTokenKind.RightBracket))
+                    {
+                        end = ParseExpression();
+                    }
+                    
+                    Expect(ClassifiedTokenKind.RightBracket);
+                    expr = new SliceExpressionNode(expr, first, end, expr.Line, expr.Column);
+                }
+                else
+                {
+                    // Index: arr[index]
+                    if (first == null)
+                    {
+                        throw new Exception("Expected index expression");
+                    }
+                    
+                    Expect(ClassifiedTokenKind.RightBracket);
+                    expr = new IndexExpressionNode(expr, first, expr.Line, expr.Column);
+                }
+            }
             else if (MatchOperator("++") || MatchOperator("--"))
             {
                 // Postfix increment/decrement
@@ -929,6 +1001,12 @@ public class Parser
         if (token.Is(ClassifiedTokenKind.LeftBrace))
         {
             return ParseObjectLiteral();
+        }
+        
+        // Array literal: [ ... ]
+        if (Match(ClassifiedTokenKind.LeftBracket))
+        {
+            return ParseArrayLiteral(token);
         }
         
         // Parenthesized expression or lambda
@@ -1070,9 +1148,37 @@ public class Parser
 
     private bool IsTypeName(string name)
     {
-        // Common type names that might be used as type adapters
-        var types = new HashSet<string> { "string", "int", "bool", "float", "double", "void", "object" };
-        return types.Contains(name);
+        if (string.IsNullOrEmpty(name))
+            return false;
+            
+        // Check if identifier starts with uppercase (type convention)
+        // or is a known type keyword
+        return char.IsUpper(name[0]) || 
+               name == "int" || name == "string" || name == "bool" || 
+               name == "float" || name == "double" || name == "object" ||
+               name == "void" || name == "var";
+    }
+
+    private bool IsTypeAdapter()
+    {
+        // Check if current position looks like a type adapter: TypeName() -> ... or TypeName() { ... }
+        if (!Check(ClassifiedTokenKind.Identifier))
+            return false;
+            
+        var identifierName = Current().Text;
+        if (!IsTypeName(identifierName))
+            return false;
+            
+        var lookahead1 = Peek(1);
+        if (lookahead1?.Is(ClassifiedTokenKind.LeftParen) != true)
+            return false;
+            
+        var lookahead2 = Peek(2);
+        if (lookahead2?.Is(ClassifiedTokenKind.RightParen) != true)
+            return false;
+            
+        var lookahead3 = Peek(3);
+        return lookahead3?.IsOperator("->") == true || lookahead3?.Is(ClassifiedTokenKind.LeftBrace) == true;
     }
 
     private bool TryParseLambdaParameters(out List<ParameterNode> parameters)
@@ -1114,7 +1220,7 @@ public class Parser
                     name = firstToken.Text;
                 }
                 
-                parameters.Add(new ParameterNode(type, name, start.Line, start.Column));
+                parameters.Add(new ParameterNode(type, null, name, false, null, start.Line, start.Column));
                 
             } while (Match(ClassifiedTokenKind.Comma));
             
@@ -1179,24 +1285,64 @@ public class Parser
                 var start = Current();
                 
                 string? type = null;
+                StructuralTypeNode? structuralType = null;
                 string name;
                 
-                // Try to parse type (optional)
-                var first = Expect(ClassifiedTokenKind.Identifier).Text;
-                
-                if (Check(ClassifiedTokenKind.Identifier))
+                // Check for object with structural type
+                if (MatchKeyword("object"))
                 {
-                    // Has type
-                    type = first;
-                    name = Advance().Text;
+                    if (Check(ClassifiedTokenKind.LeftBrace))
+                    {
+                        structuralType = ParseStructuralType();
+                    }
+                    else
+                    {
+                        type = "object";
+                    }
                 }
                 else
                 {
-                    // No type
-                    name = first;
+                    // Try to parse type (optional)
+                    var first = Expect(ClassifiedTokenKind.Identifier).Text;
+                    
+                    if (Check(ClassifiedTokenKind.Identifier) || Check(ClassifiedTokenKind.RangeInclusive))
+                    {
+                        // Has type
+                        type = first;
+                    }
+                    else
+                    {
+                        // No type, first is the name
+                        name = first;
+                        
+                        ExpressionNode? defaultValue = null;
+                        if (MatchOperator("="))
+                        {
+                            defaultValue = ParseExpression();
+                        }
+                        
+                        parameters.Add(new ParameterNode(null, null, name, false, defaultValue, start.Line, start.Column));
+                        continue;
+                    }
                 }
                 
-                parameters.Add(new ParameterNode(type, name, start.Line, start.Column));
+                // Check for varargs: type...
+                bool isVarargs = false;
+                if (Check(ClassifiedTokenKind.RangeInclusive))
+                {
+                    Advance();
+                    isVarargs = true;
+                }
+                
+                name = Expect(ClassifiedTokenKind.Identifier).Text;
+                
+                ExpressionNode? paramDefaultValue = null;
+                if (MatchOperator("="))
+                {
+                    paramDefaultValue = ParseExpression();
+                }
+                
+                parameters.Add(new ParameterNode(type, structuralType, name, isVarargs, paramDefaultValue, start.Line, start.Column));
                 
             } while (Match(ClassifiedTokenKind.Comma));
         }
@@ -1205,15 +1351,40 @@ public class Parser
         return parameters;
     }
 
-    private List<ExpressionNode> ParseArgumentList()
+    private List<ArgumentNode> ParseArgumentList()
     {
-        var arguments = new List<ExpressionNode>();
+        var arguments = new List<ArgumentNode>();
+        bool seenNamed = false;
         
         if (!Check(ClassifiedTokenKind.RightParen))
         {
             do
             {
-                arguments.Add(ParseExpression());
+                var argStart = Current();
+                
+                // Check for named argument: name: value
+                if (Check(ClassifiedTokenKind.Identifier) && 
+                    Peek(1)?.Is(ClassifiedTokenKind.Colon) == true)
+                {
+                    var name = Advance().Text;
+                    Expect(ClassifiedTokenKind.Colon);
+                    var value = ParseExpression();
+                    
+                    arguments.Add(new ArgumentNode(name, value, argStart.Line, argStart.Column));
+                    seenNamed = true;
+                }
+                else
+                {
+                    // Positional argument
+                    if (seenNamed)
+                    {
+                        throw new Exception(
+                            $"Positional argument cannot appear after named argument at {argStart.Line}:{argStart.Column}");
+                    }
+                    
+                    var value = ParseExpression();
+                    arguments.Add(new ArgumentNode(null, value, argStart.Line, argStart.Column));
+                }
             } while (Match(ClassifiedTokenKind.Comma));
         }
         
@@ -1324,5 +1495,300 @@ public class Parser
         
         var current = IsAtEnd() ? "EOF" : Current().ToString();
         throw new Exception($"Expected {kind} '{text}' but got {current}");
+    }
+
+    private void ExpectKeyword(string keyword)
+    {
+        if (!Current().IsKeyword(keyword))
+        {
+            throw new Exception($"Expected keyword '{keyword}' but got {Current()}");
+        }
+        Advance();
+    }
+
+    private bool CheckOperator(string op)
+    {
+        return !IsAtEnd() && Current().IsOperator(op);
+    }
+
+    private void ExpectOperator(string op)
+    {
+        if (!Current().IsOperator(op))
+        {
+            throw new Exception($"Expected operator '{op}' but got {Current()}");
+        }
+        Advance();
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       NEW PARSING METHODS - ARRAYS, ENUMS, SWITCH, ETC.
+       ═══════════════════════════════════════════════════════════════════ */
+
+    private ArrayLiteralExpressionNode ParseArrayLiteral(ClassifiedToken start)
+    {
+        var elements = new List<ExpressionNode>();
+        
+        while (!Check(ClassifiedTokenKind.RightBracket) && !IsAtEnd())
+        {
+            elements.Add(ParseExpression());
+            
+            if (!Check(ClassifiedTokenKind.RightBracket))
+                Expect(ClassifiedTokenKind.Comma);
+        }
+        
+        Expect(ClassifiedTokenKind.RightBracket);
+        
+        return new ArrayLiteralExpressionNode(elements, start.Line, start.Column);
+    }
+
+    private StructuralTypeNode ParseStructuralType()
+    {
+        var start = Expect(ClassifiedTokenKind.LeftBrace);
+        var fields = new Dictionary<string, string>();
+        
+        while (!Check(ClassifiedTokenKind.RightBrace) && !IsAtEnd())
+        {
+            var fieldType = Expect(ClassifiedTokenKind.Identifier).Text;
+            
+            // Optional: handle optional fields with ?
+            if (Match(ClassifiedTokenKind.Question))
+            {
+                fieldType += "?";
+            }
+            
+            var fieldName = Expect(ClassifiedTokenKind.Identifier).Text;
+            fields[fieldName] = fieldType;
+            
+            if (!Check(ClassifiedTokenKind.RightBrace))
+                Match(ClassifiedTokenKind.Comma);
+        }
+        
+        Expect(ClassifiedTokenKind.RightBrace);
+        
+        return new StructuralTypeNode(fields, start.Line, start.Column);
+    }
+
+    private SwitchStatementNode ParseSwitchStatement()
+    {
+        var start = Expect(ClassifiedTokenKind.Keyword, "switch");
+        
+        Expect(ClassifiedTokenKind.LeftParen);
+        var value = ParseExpression();
+        Expect(ClassifiedTokenKind.RightParen);
+        
+        Expect(ClassifiedTokenKind.LeftBrace);
+        
+        var cases = new List<SwitchCaseNode>();
+        BlockStatementNode? defaultCase = null;
+        
+        while (!Check(ClassifiedTokenKind.RightBrace) && !IsAtEnd())
+        {
+            if (Match(ClassifiedTokenKind.Semicolon))
+                continue;
+            
+            if (MatchKeyword("default"))
+            {
+                ExpectOperator("->");
+                defaultCase = ParseBlock();
+            }
+            else
+            {
+                cases.Add(ParseSwitchCase());
+            }
+        }
+        
+        Expect(ClassifiedTokenKind.RightBrace);
+        
+        return new SwitchStatementNode(value, cases, defaultCase, start.Line, start.Column);
+    }
+
+    private SwitchCaseNode ParseSwitchCase()
+    {
+        var start = Current();
+        var matchValues = new List<ExpressionNode>();
+        
+        // Parse match values: 1, 2, 3 ->
+        matchValues.Add(ParseExpression());
+        while (Match(ClassifiedTokenKind.Comma) && !CheckOperator("->"))
+        {
+            matchValues.Add(ParseExpression());
+        }
+        
+        ExpectOperator("->");
+        var body = ParseBlock();
+        
+        var alsoCases = new List<ExpressionNode>();
+        
+        return new SwitchCaseNode(matchValues, body, alsoCases, start.Line, start.Column);
+    }
+    
+    private DoWhileStatementNode ParseDoWhileStatement()
+    {
+        var start = Expect(ClassifiedTokenKind.Keyword, "do");
+        var body = ParseStatement();
+        
+        ExpectKeyword("while");
+        Expect(ClassifiedTokenKind.LeftParen);
+        var condition = ParseExpression();
+        Expect(ClassifiedTokenKind.RightParen);
+        
+        ExpectSemicolon();
+        
+        return new DoWhileStatementNode(body, condition, start.Line, start.Column);
+    }
+
+    private EnumDeclarationNode ParseEnumDeclaration()
+    {
+        var start = Expect(ClassifiedTokenKind.Keyword, "enum");
+        var name = Expect(ClassifiedTokenKind.Identifier).Text;
+        
+        // Optional record-style parameters: enum Status(int code, string message)
+        List<ParameterNode>? recordParams = null;
+        if (Check(ClassifiedTokenKind.LeftParen))
+        {
+            Advance();
+            recordParams = ParseParameterListFromParen();
+        }
+        
+        Expect(ClassifiedTokenKind.LeftBrace);
+        
+        var values = new List<EnumValueNode>();
+        ConstructorDeclarationNode? explicitConstructor = null;
+        var methods = new List<FunctionDeclarationNode>();
+        var typeAdapters = new List<TypeAdapterDeclarationNode>();
+        
+        bool parsingValues = true;
+        while (!Check(ClassifiedTokenKind.RightBrace) && !IsAtEnd())
+        {
+            if (Match(ClassifiedTokenKind.Semicolon))
+                continue;
+            
+            if (parsingValues && LooksLikeEnumValue())
+            {
+                values.Add(ParseEnumValue(recordParams));
+                Match(ClassifiedTokenKind.Comma);
+            }
+            else if (MatchKeyword("new"))
+            {
+                parsingValues = false;
+                explicitConstructor = ParseConstructor();
+            }
+            else if (IsTypeAdapter())
+            {
+                parsingValues = false;
+                typeAdapters.Add(ParseTypeAdapter());
+            }
+            else if (Check(ClassifiedTokenKind.Identifier))
+            {
+                parsingValues = false;
+                // Parse method
+                var methodStart = Current();
+                
+                // Try to parse return type
+                string? returnType = null;
+                if (IsTypeName(Current().Text))
+                {
+                    returnType = Advance().Text;
+                }
+                
+                var methodName = Expect(ClassifiedTokenKind.Identifier).Text;
+                var parameters = ParseParameterList();
+                
+                StatementNode body;
+                bool isArrow = false;
+                if (MatchOperator("->"))
+                {
+                    isArrow = true;
+                    var expr = ParseExpression();
+                    body = new ReturnStatementNode(expr, methodStart.Line, methodStart.Column);
+                    ExpectSemicolon();
+                }
+                else
+                {
+                    body = ParseBlock();
+                }
+                
+                var method = new FunctionDeclarationNode(returnType, methodName, parameters, methodStart.Line, methodStart.Column);
+                method.Body = body;
+                method.IsArrowFunction = isArrow;
+                methods.Add(method);
+            }
+            else
+            {
+                throw new Exception($"Unexpected token in enum: {Current()}");
+            }
+        }
+        
+        Expect(ClassifiedTokenKind.RightBrace);
+        
+        return new EnumDeclarationNode(
+            name, recordParams, values, explicitConstructor,
+            methods, typeAdapters, start.Line, start.Column);
+    }
+
+    private bool LooksLikeEnumValue()
+    {
+        if (!Check(ClassifiedTokenKind.Identifier))
+            return false;
+        
+        var next = Peek(1);
+        return next == null || 
+               next.Is(ClassifiedTokenKind.Comma) ||
+               next.Is(ClassifiedTokenKind.RightBrace) ||
+               next.Is(ClassifiedTokenKind.LeftParen) ||
+               next.Is(ClassifiedTokenKind.LeftBrace) ||
+               next.IsOperator("=");
+    }
+
+    private EnumValueNode ParseEnumValue(List<ParameterNode>? recordParams)
+    {
+        var start = Current();
+        var name = Expect(ClassifiedTokenKind.Identifier).Text;
+        
+        ExpressionNode? directValue = null;
+        List<ExpressionNode>? constructorArgs = null;
+        Dictionary<string, ExpressionNode>? properties = null;
+        
+        if (MatchOperator("="))
+        {
+            // Direct value: Red = 1
+            directValue = ParseExpression();
+        }
+        else if (Match(ClassifiedTokenKind.LeftParen))
+        {
+            // Constructor args: Ok(200, "OK")
+            constructorArgs = new List<ExpressionNode>();
+            
+            if (!Check(ClassifiedTokenKind.RightParen))
+            {
+                constructorArgs.Add(ParseExpression());
+                while (Match(ClassifiedTokenKind.Comma))
+                {
+                    constructorArgs.Add(ParseExpression());
+                }
+            }
+            
+            Expect(ClassifiedTokenKind.RightParen);
+        }
+        else if (Match(ClassifiedTokenKind.LeftBrace))
+        {
+            // Inline properties: North { x = 0, y = 1 }
+            properties = new Dictionary<string, ExpressionNode>();
+            
+            while (!Check(ClassifiedTokenKind.RightBrace))
+            {
+                var propName = Expect(ClassifiedTokenKind.Identifier).Text;
+                ExpectOperator("=");
+                var propValue = ParseExpression();
+                properties[propName] = propValue;
+                
+                if (!Check(ClassifiedTokenKind.RightBrace))
+                    Match(ClassifiedTokenKind.Comma);
+            }
+            
+            Expect(ClassifiedTokenKind.RightBrace);
+        }
+        
+        return new EnumValueNode(name, directValue, constructorArgs, properties, start.Line, start.Column);
     }
 }

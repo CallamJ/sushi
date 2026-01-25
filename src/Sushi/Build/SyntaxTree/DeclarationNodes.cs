@@ -77,6 +77,82 @@ public class ClassDeclarationNode : AstNode
 }
 
 /// <summary>
+/// Enum declaration
+/// </summary>
+public class EnumDeclarationNode : AstNode
+{
+    public string Name { get; }
+    public List<ParameterNode>? RecordParameters { get; }  // For record-style enums
+    public List<EnumValueNode> Values { get; }
+    public ConstructorDeclarationNode? ExplicitConstructor { get; }
+    public List<FunctionDeclarationNode> Methods { get; }
+    public List<TypeAdapterDeclarationNode> TypeAdapters { get; }
+    
+    // Computed during semantic analysis
+    public EnumKind Kind { get; set; }
+    public string? ValueType { get; set; }  // For DirectValue enums
+    
+    public EnumDeclarationNode(
+        string name,
+        List<ParameterNode>? recordParameters,
+        List<EnumValueNode> values,
+        ConstructorDeclarationNode? explicitConstructor,
+        List<FunctionDeclarationNode> methods,
+        List<TypeAdapterDeclarationNode> typeAdapters,
+        int line,
+        int column) : base(line, column)
+    {
+        Name = name;
+        RecordParameters = recordParameters;
+        Values = values;
+        ExplicitConstructor = explicitConstructor;
+        Methods = methods;
+        TypeAdapters = typeAdapters;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+public enum EnumKind
+{
+    Simple,           // Just names: Red, Green, Blue
+    DirectValue,      // Name = value: Red = 1
+    Record,           // Name(args): Red(255, 0, 0)
+    InlineProperties  // Name { props }: Red { r = 255 }
+}
+
+/// <summary>
+/// Enum value
+/// </summary>
+public class EnumValueNode : AstNode
+{
+    public string Name { get; }
+    
+    // Exactly one of these will be non-null:
+    public ExpressionNode? DirectValue { get; set; }              // For: Red = 1
+    public List<ExpressionNode>? ConstructorArgs { get; }    // For: Ok(200, "OK")
+    public Dictionary<string, ExpressionNode>? Properties { get; } // For: North { x = 0 }
+    
+    public EnumValueNode(
+        string name,
+        ExpressionNode? directValue,
+        List<ExpressionNode>? constructorArgs,
+        Dictionary<string, ExpressionNode>? properties,
+        int line,
+        int column) : base(line, column)
+    {
+        Name = name;
+        DirectValue = directValue;
+        ConstructorArgs = constructorArgs;
+        Properties = properties;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
 /// Field declaration: string name;
 /// </summary>
 public class FieldDeclarationNode : AstNode
@@ -164,18 +240,49 @@ public class TypeAdapterDeclarationNode : AstNode
 }
 
 /// <summary>
-/// Parameter declaration
+/// Parameter declaration (supports varargs, structural types, defaults, named args)
 /// </summary>
 public class ParameterNode : AstNode
 {
-    public string? Type { get; }  // null if inferred
+    public string? Type { get; }  // null if inferred or using structural type
+    public StructuralTypeNode? StructuralType { get; }  // For object { ... } parameters
     public string Name { get; }
+    public bool IsVarargs { get; }  // true for type... name
+    public ExpressionNode? DefaultValue { get; }  // Default parameter value
     
-    public ParameterNode(string? type, string name, int line, int column) 
-        : base(line, column)
+    public ParameterNode(
+        string? type, 
+        StructuralTypeNode? structuralType,
+        string name,
+        bool isVarargs,
+        ExpressionNode? defaultValue,
+        int line, 
+        int column) : base(line, column)
     {
         Type = type;
+        StructuralType = structuralType;
         Name = name;
+        IsVarargs = isVarargs;
+        DefaultValue = defaultValue;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
+/// <summary>
+/// Structural type notation: object { string name, int age }
+/// </summary>
+public class StructuralTypeNode : AstNode
+{
+    public Dictionary<string, string> Fields { get; }  // field name -> type
+    
+    public StructuralTypeNode(
+        Dictionary<string, string> fields,
+        int line,
+        int column) : base(line, column)
+    {
+        Fields = fields;
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
