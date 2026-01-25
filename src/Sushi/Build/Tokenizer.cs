@@ -49,6 +49,9 @@ public sealed class Tokenizer
             else if (c == '/' && Peek(1) == '*')
                 yield return ReadBlockComment();
 
+            else if (char.IsDigit(c))
+                yield return ReadNumber();
+
             else if (IsSymbolStart(c))
                 yield return ReadSymbol();
 
@@ -81,6 +84,31 @@ public sealed class Tokenizer
     private UnclassifiedToken ReadChar()
     {
         return ReadQuoted(TokenKind.Char, '\'');
+    }
+
+    private UnclassifiedToken ReadNumber()
+    {
+        int start = Mark(out int line, out int col);
+        
+        // Read digits
+        while (!IsEof() && char.IsDigit(Peek()))
+            Advance();
+        
+        // Check for decimal point followed by digits
+        if (!IsEof() && Peek() == '.' && Peek(1) != '.')
+        {
+            // Make sure next char after . is a digit (not another dot or other symbol)
+            if (!IsEof() && char.IsDigit(Peek(1)))
+            {
+                Advance(); // consume '.'
+                
+                // Read fractional part
+                while (!IsEof() && char.IsDigit(Peek()))
+                    Advance();
+            }
+        }
+        
+        return Make(TokenKind.Word, start, line, col);
     }
 
     private UnclassifiedToken ReadLineComment()

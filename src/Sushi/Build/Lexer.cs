@@ -355,11 +355,13 @@ public class Lexer
         // Don't insert if previous is an operator (statement continues)
         if (prev.IsSymbol("+") || prev.IsSymbol("-") || prev.IsSymbol("*") || 
             prev.IsSymbol("/") || prev.IsSymbol("=") || prev.IsSymbol("|") ||
-            prev.IsSymbol(",") || prev.IsSymbol("."))
+            prev.IsSymbol(",") || prev.IsSymbol(".") || prev.IsSymbol(":") ||
+            prev.IsSymbol("?") || prev.IsSymbol("&&") || prev.IsSymbol("||"))
             return false;
 
         // Don't insert if next line starts with an operator continuation
-        if (next.IsSymbol("|") || next.IsSymbol(".") || next.IsSymbol(","))
+        if (next.IsSymbol("|") || next.IsSymbol(".") || next.IsSymbol(",") ||
+            next.IsSymbol(":"))
             return false;
 
         // Insert semicolon after statements that should end

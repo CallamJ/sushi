@@ -102,6 +102,13 @@ public class Parser
             return ParseEnumDeclaration();
         }
         
+        // Variable declaration with var keyword
+        if (token.IsKeyword("var"))
+        {
+            DebugLog("Found 'var' keyword");
+            return ParseVariableDeclarationStatement();
+        }
+        
         // Could be a function/variable declaration OR a statement
         if (Check(ClassifiedTokenKind.Identifier))
         {
@@ -111,21 +118,8 @@ public class Parser
             // - Type name = ... (variable declaration)
             // - Type name(...) { } or Type name(...) -> (function declaration)
             
-            var checkpoint = _position;
-            
-            // Try to parse as declaration
-            try
-            {
-                var decl = ParseFunctionOrVariableDeclaration();
-                return decl;
-            }
-            catch
-            {
-                // If it fails, it might be a statement (like a function call)
-                _position = checkpoint;
-                DebugLog("Failed as declaration, trying as statement");
-                return ParseStatement();
-            }
+            var decl = ParseFunctionOrVariableDeclaration();
+            return decl;
         }
         
         throw new Exception($"Unexpected token in top-level declaration: {token} at {token.Line}:{token.Column}");
@@ -513,7 +507,7 @@ public class Parser
         var token = Expect(ClassifiedTokenKind.Keyword, "return");
         
         ExpressionNode? expr = null;
-        if (!Check(ClassifiedTokenKind.Semicolon) && !IsAtEnd())
+        if (!Check(ClassifiedTokenKind.Semicolon) && !Check(ClassifiedTokenKind.RightBrace) && !IsAtEnd())
         {
             expr = ParseExpression();
         }
@@ -607,6 +601,12 @@ public class Parser
 
     private StatementNode ParseVariableDeclarationOrExpressionStatement()
     {
+        // Check for var keyword
+        if (Current().IsKeyword("var"))
+        {
+            return ParseVariableDeclarationStatement();
+        }
+        
         // Look ahead to determine if this is a variable declaration
         // Variable declaration: Type name = expr OR name = expr
         var checkpoint = _position;
@@ -629,7 +629,7 @@ public class Parser
         return new ExpressionStatementNode(expr, expr.Line, expr.Column);
     }
 
-    private VariableDeclarationStatementNode ParseVariableDeclarationStatement()
+    private StatementNode ParseVariableDeclarationStatement()
     {
         var start = Current();
         
@@ -654,6 +654,12 @@ public class Parser
             }
         }
         
+        // Check for array destructuring pattern: var [a, b, c] = ...
+        if (Check(ClassifiedTokenKind.LeftBracket))
+        {
+            return ParseArrayDestructuringStatement(type, isVar, start);
+        }
+        
         var name = Expect(ClassifiedTokenKind.Identifier).Text;
         
         ExpressionNode? initializer = null;
@@ -669,6 +675,63 @@ public class Parser
         ExpectSemicolon();
         
         return new VariableDeclarationStatementNode(type, name, initializer, isVar, start.Line, start.Column);
+    }
+
+    private ArrayDestructuringStatementNode ParseArrayDestructuringStatement(string? type, bool isVar, ClassifiedToken start)
+    {
+        Expect(ClassifiedTokenKind.LeftBracket);
+        
+        var patterns = new List<DestructuringPatternNode>();
+        
+        while (!Check(ClassifiedTokenKind.RightBracket) && !IsAtEnd())
+        {
+            var patternStart = Current();
+            
+            // Check for skip pattern (empty comma: ,)
+            if (Check(ClassifiedTokenKind.Comma))
+            {
+                patterns.Add(new DestructuringPatternNode(null, null, false, null, patternStart.Line, patternStart.Column));
+                Advance();
+                continue;
+            }
+            
+            // Check for rest pattern: ...name
+            bool isRest = false;
+            if (Check(ClassifiedTokenKind.RangeInclusive))
+            {
+                Advance();
+                isRest = true;
+            }
+            
+            // Get the variable name
+            string name = Expect(ClassifiedTokenKind.Identifier).Text;
+            
+            // Check for default value: name = expr
+            ExpressionNode? defaultValue = null;
+            if (MatchOperator("="))
+            {
+                defaultValue = ParseExpression();
+            }
+            
+            patterns.Add(new DestructuringPatternNode(
+                type, name, isRest, defaultValue, patternStart.Line, patternStart.Column));
+            
+            // If we have a rest pattern, it must be the last one
+            if (isRest)
+                break;
+            
+            if (!Check(ClassifiedTokenKind.RightBracket))
+                Expect(ClassifiedTokenKind.Comma);
+        }
+        
+        Expect(ClassifiedTokenKind.RightBracket);
+        
+        ExpectOperator("=");
+        var value = ParseExpression();
+        
+        ExpectSemicolon();
+        
+        return new ArrayDestructuringStatementNode(patterns, value, start.Line, start.Column);
     }
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -1224,6 +1287,13 @@ public class Parser
                 
             } while (Match(ClassifiedTokenKind.Comma));
             
+            // Must be followed by ) for valid lambda parameters
+            if (!Check(ClassifiedTokenKind.RightParen))
+            {
+                _position = checkpoint;
+                return false;
+            }
+            
             return true;
         }
         catch
@@ -1289,8 +1359,9 @@ public class Parser
                 string name;
                 
                 // Check for object with structural type
-                if (MatchKeyword("object"))
+                if (Check(ClassifiedTokenKind.Identifier) && Current().Text == "object")
                 {
+                    Advance(); // consume "object"
                     if (Check(ClassifiedTokenKind.LeftBrace))
                     {
                         structuralType = ParseStructuralType();
@@ -1609,8 +1680,21 @@ public class Parser
         
         // Parse match values: 1, 2, 3 ->
         matchValues.Add(ParseExpression());
-        while (Match(ClassifiedTokenKind.Comma) && !CheckOperator("->"))
+        
+        while (Check(ClassifiedTokenKind.Comma))
         {
+            // Peek ahead to see if we have -> after the comma
+            var checkpoint = _position;
+            Advance(); // consume comma
+            
+            if (CheckOperator("->"))
+            {
+                // This comma was a mistake, restore and break
+                _position = checkpoint;
+                break;
+            }
+            
+            // Parse next match value
             matchValues.Add(ParseExpression());
         }
         
@@ -1660,8 +1744,15 @@ public class Parser
         bool parsingValues = true;
         while (!Check(ClassifiedTokenKind.RightBrace) && !IsAtEnd())
         {
-            if (Match(ClassifiedTokenKind.Semicolon))
-                continue;
+            // Skip any semicolons - they separate values from methods
+            while (Match(ClassifiedTokenKind.Semicolon))
+            {
+                parsingValues = false;
+            }
+            
+            // After consuming semicolons, check if we're at the end
+            if (Check(ClassifiedTokenKind.RightBrace) || IsAtEnd())
+                break;
             
             if (parsingValues && LooksLikeEnumValue())
             {
@@ -1678,19 +1769,10 @@ public class Parser
                 parsingValues = false;
                 typeAdapters.Add(ParseTypeAdapter());
             }
-            else if (Check(ClassifiedTokenKind.Identifier))
+            else if (!parsingValues && Check(ClassifiedTokenKind.Identifier))
             {
-                parsingValues = false;
-                // Parse method
+                // Parse method (no return type support in enum methods for simplicity)
                 var methodStart = Current();
-                
-                // Try to parse return type
-                string? returnType = null;
-                if (IsTypeName(Current().Text))
-                {
-                    returnType = Advance().Text;
-                }
-                
                 var methodName = Expect(ClassifiedTokenKind.Identifier).Text;
                 var parameters = ParseParameterList();
                 
@@ -1708,7 +1790,7 @@ public class Parser
                     body = ParseBlock();
                 }
                 
-                var method = new FunctionDeclarationNode(returnType, methodName, parameters, methodStart.Line, methodStart.Column);
+                var method = new FunctionDeclarationNode(null, methodName, parameters, methodStart.Line, methodStart.Column);
                 method.Body = body;
                 method.IsArrowFunction = isArrow;
                 methods.Add(method);
@@ -1732,11 +1814,46 @@ public class Parser
             return false;
         
         var next = Peek(1);
+        
+        // If followed by (, need to look further to distinguish enum value from method
+        if (next != null && next.Is(ClassifiedTokenKind.LeftParen))
+        {
+            // Scan ahead to find the matching )
+            int parenDepth = 0;
+            int offset = 1;
+            while (true)
+            {
+                var tok = Peek(offset);
+                if (tok == null) break;
+                
+                if (tok.Is(ClassifiedTokenKind.LeftParen))
+                    parenDepth++;
+                else if (tok.Is(ClassifiedTokenKind.RightParen))
+                {
+                    parenDepth--;
+                    if (parenDepth == 0)
+                    {
+                        // Found matching ), check what's after
+                        var afterParen = Peek(offset + 1);
+                        // Method if followed by { or ->
+                        // Enum value if followed by , or } or nothing
+                        if (afterParen == null)
+                            return true; // enum value
+                        if (afterParen.Is(ClassifiedTokenKind.LeftBrace) || afterParen.IsOperator("->"))
+                            return false; // method
+                        return true; // enum value
+                    }
+                }
+                offset++;
+                if (offset > 50) break; // Safety limit
+            }
+        }
+        
         return next == null || 
                next.Is(ClassifiedTokenKind.Comma) ||
                next.Is(ClassifiedTokenKind.RightBrace) ||
-               next.Is(ClassifiedTokenKind.LeftParen) ||
                next.Is(ClassifiedTokenKind.LeftBrace) ||
+               next.Is(ClassifiedTokenKind.Semicolon) ||
                next.IsOperator("=");
     }
 

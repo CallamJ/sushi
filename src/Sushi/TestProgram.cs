@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using Sushi.Build;
 using Sushi.Build.SyntaxTree;
 
@@ -8,16 +12,16 @@ namespace Sushi.Tests
         static void Main(string[] args)
         {
             Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
-            Console.WriteLine("║  Sushi Language Parser                                       ║");
+            Console.WriteLine("║  Sushi Language Parser - Comprehensive Feature Test         ║");
             Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
             Console.WriteLine();
             
-            string testFile = "examples/test_all_features.sushi";
+            string testFile = args.Length > 0 ? args[0] : "examples/test_all_features.sushi";
             
             if (!File.Exists(testFile))
             {
-                Console.WriteLine("Error: Test file not found!");
-                Console.WriteLine("Please ensure test_all_features.sushi is in the same directory.");
+                Console.WriteLine("Error: Test file '" + testFile + "' not found!");
+                Console.WriteLine("Please ensure test_all_features.sushi is in the correct directory.");
                 return;
             }
             
@@ -33,15 +37,15 @@ namespace Sushi.Tests
                 // Phase 1: Tokenization
                 Console.WriteLine("Phase 1: Tokenizing...");
                 var tokenizer = new Tokenizer(sourceCode);
-                var tokens = tokenizer.Tokenize();
-                int tokenCount = tokens.Count();
+                List<UnclassifiedToken> tokens = tokenizer.Tokenize().ToList();
+                int tokenCount = tokens.Count;
                 Console.WriteLine("  ✓ Generated " + tokenCount.ToString() + " tokens");
                 Console.WriteLine();
                 
                 // Phase 2: Lexical Analysis
                 Console.WriteLine("Phase 2: Lexical Analysis...");
                 var lexer = new Lexer(tokens);
-                var classifiedTokens = lexer.Lex().ToList();
+                List<ClassifiedToken> classifiedTokens = lexer.Lex().ToList();
                 int classifiedCount = classifiedTokens.Count;
                 Console.WriteLine("  ✓ Classified " + classifiedCount.ToString() + " tokens");
                 Console.WriteLine();
@@ -51,7 +55,7 @@ namespace Sushi.Tests
                 var parser = new Parser(classifiedTokens);
                 parser.DebugMode = false; // Set to true for detailed parsing logs
                 
-                var ast = parser.Parse();
+                ProgramNode ast = parser.Parse();
                 int declCount = ast.Declarations.Count;
                 Console.WriteLine("  ✓ Built AST with " + declCount.ToString() + " top-level declarations");
                 Console.WriteLine();
@@ -99,7 +103,7 @@ namespace Sushi.Tests
             Console.WriteLine("Feature Summary:");
             Console.WriteLine("─────────────────────────────────────────────────────────────");
             
-            var counter = new FeatureCounter();
+            FeatureCounter counter = new FeatureCounter();
             ast.Accept(counter);
             
             Console.WriteLine("  Variables (var):              " + counter.VarDeclarations.ToString());
@@ -149,14 +153,14 @@ namespace Sushi.Tests
         // Count features as we traverse
         public void Visit(ProgramNode node)
         {
-            foreach (var decl in node.Declarations)
+            foreach (AstNode decl in node.Declarations)
                 decl.Accept(this);
         }
         
         public void Visit(ClassDeclarationNode node)
         {
             Classes++;
-            foreach (var method in node.Methods)
+            foreach (FunctionDeclarationNode method in node.Methods)
                 method.Accept(this);
             if (node.Constructor != null)
                 node.Constructor.Accept(this);
@@ -165,7 +169,7 @@ namespace Sushi.Tests
         public void Visit(FunctionDeclarationNode node)
         {
             Functions++;
-            foreach (var param in node.Parameters)
+            foreach (ParameterNode param in node.Parameters)
                 param.Accept(this);
             node.Body.Accept(this);
         }
@@ -186,7 +190,7 @@ namespace Sushi.Tests
         public void Visit(ArrayLiteralExpressionNode node)
         {
             ArrayLiterals++;
-            foreach (var elem in node.Elements)
+            foreach (ExpressionNode elem in node.Elements)
                 elem.Accept(this);
         }
         
@@ -223,7 +227,7 @@ namespace Sushi.Tests
         {
             SwitchStatements++;
             node.Value.Accept(this);
-            foreach (var c in node.Cases)
+            foreach (SwitchCaseNode c in node.Cases)
                 c.Accept(this);
         }
         
@@ -279,29 +283,123 @@ namespace Sushi.Tests
         public void Visit(ConstructorDeclarationNode node) { node.Body.Accept(this); }
         public void Visit(TypeAdapterDeclarationNode node) { }
         public void Visit(FieldDeclarationNode node) { }
-        public void Visit(BlockStatementNode node) { foreach (var s in node.Statements) s.Accept(this); }
-        public void Visit(ReturnStatementNode node) { if (node.Expression != null) node.Expression.Accept(this); }
-        public void Visit(ExpressionStatementNode node) { node.Expression.Accept(this); }
+        
+        public void Visit(BlockStatementNode node) 
+        { 
+            foreach (StatementNode s in node.Statements) 
+                s.Accept(this); 
+        }
+        
+        public void Visit(ReturnStatementNode node) 
+        { 
+            if (node.Expression != null) 
+                node.Expression.Accept(this); 
+        }
+        
+        public void Visit(ExpressionStatementNode node) 
+        { 
+            node.Expression.Accept(this); 
+        }
+        
         public void Visit(DestructuringPatternNode node) { }
-        public void Visit(IfStatementNode node) { node.Condition.Accept(this); node.ThenBranch.Accept(this); if (node.ElseBranch != null) node.ElseBranch.Accept(this); }
-        public void Visit(SwitchCaseNode node) { foreach (var v in node.MatchValues) v.Accept(this); node.Body.Accept(this); }
-        public void Visit(WhileStatementNode node) { node.Condition.Accept(this); node.Body.Accept(this); }
-        public void Visit(ForStatementNode node) { if (node.Initializer != null) node.Initializer.Accept(this); if (node.Condition != null) node.Condition.Accept(this); if (node.Increment != null) node.Increment.Accept(this); node.Body.Accept(this); }
+        
+        public void Visit(IfStatementNode node) 
+        { 
+            node.Condition.Accept(this); 
+            node.ThenBranch.Accept(this); 
+            if (node.ElseBranch != null) 
+                node.ElseBranch.Accept(this); 
+        }
+        
+        public void Visit(SwitchCaseNode node) 
+        { 
+            foreach (ExpressionNode v in node.MatchValues) 
+                v.Accept(this); 
+            node.Body.Accept(this); 
+        }
+        
+        public void Visit(WhileStatementNode node) 
+        { 
+            node.Condition.Accept(this); 
+            node.Body.Accept(this); 
+        }
+        
+        public void Visit(ForStatementNode node) 
+        { 
+            if (node.Initializer != null) 
+                node.Initializer.Accept(this); 
+            if (node.Condition != null) 
+                node.Condition.Accept(this); 
+            if (node.Increment != null) 
+                node.Increment.Accept(this); 
+            node.Body.Accept(this); 
+        }
+        
         public void Visit(BreakStatementNode node) { }
         public void Visit(ContinueStatementNode node) { }
-        public void Visit(BinaryExpressionNode node) { node.Left.Accept(this); node.Right.Accept(this); }
-        public void Visit(UnaryExpressionNode node) { node.Operand.Accept(this); }
-        public void Visit(CallExpressionNode node) { node.Callee.Accept(this); foreach (var arg in node.Arguments) arg.Accept(this); }
-        public void Visit(MemberAccessExpressionNode node) { node.Object.Accept(this); }
-        public void Visit(PipeExpressionNode node) { node.Source.Accept(this); node.Target.Accept(this); }
+        
+        public void Visit(BinaryExpressionNode node) 
+        { 
+            node.Left.Accept(this); 
+            node.Right.Accept(this); 
+        }
+        
+        public void Visit(UnaryExpressionNode node) 
+        { 
+            node.Operand.Accept(this); 
+        }
+        
+        public void Visit(CallExpressionNode node) 
+        { 
+            node.Callee.Accept(this); 
+            foreach (ArgumentNode arg in node.Arguments) 
+                arg.Accept(this); 
+        }
+        
+        public void Visit(MemberAccessExpressionNode node) 
+        { 
+            node.Object.Accept(this); 
+        }
+        
+        public void Visit(PipeExpressionNode node) 
+        { 
+            node.Source.Accept(this); 
+            node.Target.Accept(this); 
+        }
+        
         public void Visit(IdentifierExpressionNode node) { }
         public void Visit(LiteralExpressionNode node) { }
         public void Visit(InterpolatedStringExpressionNode node) { }
-        public void Visit(NewExpressionNode node) { foreach (var arg in node.Arguments) arg.Accept(this); }
+        
+        public void Visit(NewExpressionNode node) 
+        { 
+            foreach (ArgumentNode arg in node.Arguments) 
+                arg.Accept(this); 
+        }
+        
         public void Visit(ThisExpressionNode node) { }
-        public void Visit(ParenthesizedExpressionNode node) { node.Expression.Accept(this); }
-        public void Visit(ObjectLiteralExpressionNode node) { foreach (var prop in node.Properties) prop.Accept(this); }
-        public void Visit(ObjectPropertyNode node) { node.Value.Accept(this); }
-        public void Visit(LambdaExpressionNode node) { foreach (var p in node.Parameters) p.Accept(this); node.Body.Accept(this); }
+        
+        public void Visit(ParenthesizedExpressionNode node) 
+        { 
+            node.Expression.Accept(this); 
+        }
+        
+        public void Visit(ObjectLiteralExpressionNode node) 
+        { 
+            foreach (ObjectPropertyNode prop in node.Properties) 
+                prop.Accept(this); 
+        }
+        
+        public void Visit(ObjectPropertyNode node) 
+        { 
+            node.Value.Accept(this); 
+        }
+        
+        public void Visit(LambdaExpressionNode node) 
+        { 
+            foreach (ParameterNode p in node.Parameters) 
+                p.Accept(this); 
+            node.Body.Accept(this); 
+        }
     }
 }
