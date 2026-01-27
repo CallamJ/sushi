@@ -42,7 +42,8 @@ public class Lexer
 
     public Lexer(IEnumerable<UnclassifiedToken> tokens)
     {
-        _tokens = tokens.ToList();
+        // Remove comments BEFORE any processing
+        _tokens = tokens.Where(t => t.Kind != TokenKind.Comment).ToList();
         _position = 0;
     }
 
@@ -71,14 +72,8 @@ public class Lexer
                     break;
 
                 case TokenKind.Comment:
-                    // Optionally yield comments or skip them
-                    yield return new ClassifiedToken(
-                        ClassifiedTokenKind.Comment,
-                        token.Text,
-                        token.Start,
-                        token.Line,
-                        token.Column
-                    );
+                    // Comments should have been filtered in constructor
+                    // This case should never be hit, but skip just in case
                     Advance();
                     break;
 
@@ -340,6 +335,9 @@ public class Lexer
 
         var prev = _tokens[_position - 1];
         var next = _tokens[_position + 1];
+        
+        if(prev.Line != whitespaceToken.Line) //dont insert semicolon if nothing else is on this line
+            return false;
 
         // Don't insert after opening braces/parens or before closing ones
         if (prev.IsSymbol("{") || prev.IsSymbol("(") || prev.IsSymbol("["))

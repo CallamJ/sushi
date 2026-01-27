@@ -992,20 +992,33 @@ namespace Sushi.Tests
         public void TestEnumWithConstructor()
         {
             var ast = Parse(@"
-                enum Result(int code, string message) {
-                    Ok(200, ""Success""),
-                    Error(500, ""Failure"")
+                enum Result {
+                    Ok,
+                    Error
                     
-                    new(int code, string message) {
-                        this.code = code
-                        this.message = message
+                    new() {
+                        print(""constructor"")
                     }
                 }
             ");
             var enumDecl = (EnumDeclarationNode)ast.Declarations[0];
-            Assert.Equal(2, enumDecl.RecordParameters.Count);
             Assert.Equal(2, enumDecl.Values.Count);
             Assert.NotNull(enumDecl.ExplicitConstructor);
+        }
+        
+        [Fact]
+        public void TestEnumWithConstructorArgs()
+        {
+            var ast = Parse(@"
+                enum Status {
+                    Pending(""pending""),
+                    Active(""active""),
+                    Done(""done"")
+                }
+            ");
+            var enumDecl = (EnumDeclarationNode)ast.Declarations[0];
+            Assert.Equal(3, enumDecl.Values.Count);
+            Assert.All(enumDecl.Values, v => Assert.NotNull(v.ConstructorArgs));
         }
         
         [Fact]
@@ -1490,13 +1503,117 @@ namespace Sushi.Tests
         }
         
         [Fact]
-        public void TestMultipleUnaryOperators()
+        public void TestPrefixDecrement()
         {
             var ast = Parse("var x = --y");
             var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
             var unary = (UnaryExpressionNode)varDecl.Initializer;
+            Assert.Equal("--", unary.Operator);
+            Assert.True(unary.IsPrefix);
+            Assert.IsType<IdentifierExpressionNode>(unary.Operand);
+        }
+        
+        [Fact]
+        public void TestPostfixDecrement()
+        {
+            var ast = Parse("var x = y--");
+            var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
+            var unary = (UnaryExpressionNode)varDecl.Initializer;
+            Assert.Equal("--", unary.Operator);
+            Assert.False(unary.IsPrefix);
+            Assert.IsType<IdentifierExpressionNode>(unary.Operand);
+        }
+        
+        [Fact]
+        public void TestPrefixIncrement()
+        {
+            var ast = Parse("var x = ++y");
+            var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
+            var unary = (UnaryExpressionNode)varDecl.Initializer;
+            Assert.Equal("++", unary.Operator);
+            Assert.True(unary.IsPrefix);
+        }
+        
+        [Fact]
+        public void TestPostfixIncrement()
+        {
+            var ast = Parse("var x = y++");
+            var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
+            var unary = (UnaryExpressionNode)varDecl.Initializer;
+            Assert.Equal("++", unary.Operator);
+            Assert.False(unary.IsPrefix);
+        }
+        
+        [Fact]
+        public void TestCompoundAssignmentPlus()
+        {
+            var ast = Parse(@"
+                test() {
+                    x += 5
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var exprStmt = (ExpressionStatementNode)block.Statements[0];
+            var binary = (BinaryExpressionNode)exprStmt.Expression;
+            Assert.Equal("+=", binary.Operator);
+        }
+        
+        [Fact]
+        public void TestCompoundAssignmentMinus()
+        {
+            var ast = Parse(@"
+                test() {
+                    x -= 5
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var exprStmt = (ExpressionStatementNode)block.Statements[0];
+            var binary = (BinaryExpressionNode)exprStmt.Expression;
+            Assert.Equal("-=", binary.Operator);
+        }
+        
+        [Fact]
+        public void TestCompoundAssignmentMultiply()
+        {
+            var ast = Parse(@"
+                test() {
+                    x *= 5
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var exprStmt = (ExpressionStatementNode)block.Statements[0];
+            var binary = (BinaryExpressionNode)exprStmt.Expression;
+            Assert.Equal("*=", binary.Operator);
+        }
+        
+        [Fact]
+        public void TestCompoundAssignmentDivide()
+        {
+            var ast = Parse(@"
+                test() {
+                    x /= 5
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var exprStmt = (ExpressionStatementNode)block.Statements[0];
+            var binary = (BinaryExpressionNode)exprStmt.Expression;
+            Assert.Equal("/=", binary.Operator);
+        }
+        
+        [Fact]
+        public void TestDoubleNegativeIsNotDecrement()
+        {
+            var ast = Parse("var x = - -y");
+            var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
+            var unary = (UnaryExpressionNode)varDecl.Initializer;
             Assert.Equal("-", unary.Operator);
             Assert.IsType<UnaryExpressionNode>(unary.Operand);
+            var innerUnary = (UnaryExpressionNode)unary.Operand;
+            Assert.Equal("-", innerUnary.Operator);
         }
         
         // ═══════════════════════════════════════════════════════════════════
@@ -1571,6 +1688,224 @@ namespace Sushi.Tests
         }
         
         // ═══════════════════════════════════════════════════════════════════
+        // FOR-RANGE LOOPS
+        // ═══════════════════════════════════════════════════════════════════
+        
+        [Fact]
+        public void TestForRangeExclusive()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i : 0..5) {
+                        print(i)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.IsType<ForRangeStatementNode>(block.Statements[0]);
+            var forRange = (ForRangeStatementNode)block.Statements[0];
+            Assert.Equal("i", forRange.Variable);
+            Assert.False(forRange.IsInclusive);
+        }
+        
+        [Fact]
+        public void TestForRangeInclusive()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i : 0...5) {
+                        print(i)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forRange = (ForRangeStatementNode)block.Statements[0];
+            Assert.Equal("i", forRange.Variable);
+            Assert.True(forRange.IsInclusive);
+        }
+        
+        [Fact]
+        public void TestForRangeWithExpressions()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i : start..end) {
+                        print(i)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forRange = (ForRangeStatementNode)block.Statements[0];
+            Assert.IsType<IdentifierExpressionNode>(forRange.Start);
+            Assert.IsType<IdentifierExpressionNode>(forRange.End);
+        }
+        
+        [Fact]
+        public void TestForRangeReverse()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i : 10..0) {
+                        print(i)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forRange = (ForRangeStatementNode)block.Statements[0];
+            Assert.Equal("i", forRange.Variable);
+        }
+        
+        [Fact]
+        public void TestForRangeWithStep()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i : 0..100 step 10) {
+                        print(i)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forRange = (ForRangeStatementNode)block.Statements[0];
+            Assert.Equal("i", forRange.Variable);
+            Assert.NotNull(forRange.Step);
+            Assert.IsType<LiteralExpressionNode>(forRange.Step);
+        }
+        
+        [Fact]
+        public void TestForRangeWithStepExpression()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i : 0..100 step stepSize) {
+                        print(i)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forRange = (ForRangeStatementNode)block.Statements[0];
+            Assert.NotNull(forRange.Step);
+            Assert.IsType<IdentifierExpressionNode>(forRange.Step);
+        }
+        
+        [Fact]
+        public void TestForRangeInclusiveWithStep()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i : 0...100 step 5) {
+                        print(i)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forRange = (ForRangeStatementNode)block.Statements[0];
+            Assert.True(forRange.IsInclusive);
+            Assert.NotNull(forRange.Step);
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // FOREACH LOOPS
+        // ═══════════════════════════════════════════════════════════════════
+        
+        [Fact]
+        public void TestForEachSimple()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var item : collection) {
+                        print(item)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.IsType<ForEachStatementNode>(block.Statements[0]);
+            var forEach = (ForEachStatementNode)block.Statements[0];
+            Assert.Equal("item", forEach.ItemVariable);
+            Assert.Null(forEach.IndexVariable);
+        }
+        
+        [Fact]
+        public void TestForEachWithIndex()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i, var item : collection) {
+                        print(i, item)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forEach = (ForEachStatementNode)block.Statements[0];
+            Assert.Equal("i", forEach.IndexVariable);
+            Assert.Equal("item", forEach.ItemVariable);
+        }
+        
+        [Fact]
+        public void TestForEachArray()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var x : [1, 2, 3]) {
+                        print(x)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forEach = (ForEachStatementNode)block.Statements[0];
+            Assert.IsType<ArrayLiteralExpressionNode>(forEach.Collection);
+        }
+        
+        [Fact]
+        public void TestForEachMethodCall()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var item : getItems()) {
+                        print(item)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forEach = (ForEachStatementNode)block.Statements[0];
+            Assert.IsType<CallExpressionNode>(forEach.Collection);
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // RANGE EXPRESSIONS
+        // ═══════════════════════════════════════════════════════════════════
+        
+        [Fact]
+        public void TestRangeExpressionExclusive()
+        {
+            var ast = Parse("var range = 1..10");
+            var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
+            Assert.IsType<BinaryExpressionNode>(varDecl.Initializer);
+            var binary = (BinaryExpressionNode)varDecl.Initializer;
+            Assert.Equal("..", binary.Operator);
+        }
+        
+        [Fact]
+        public void TestRangeExpressionInclusive()
+        {
+            var ast = Parse("var range = 1...10");
+            var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
+            var binary = (BinaryExpressionNode)varDecl.Initializer;
+            Assert.Equal("...", binary.Operator);
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
         // EDGE CASES AND ERROR CONDITIONS
         // ═══════════════════════════════════════════════════════════════════
         
@@ -1616,8 +1951,9 @@ namespace Sushi.Tests
             ");
             var func = (FunctionDeclarationNode)ast.Declarations[0];
             var outerBlock = (BlockStatementNode)func.Body;
+            Assert.Single(outerBlock.Statements); // Contains one nested block
             var nestedBlock = (BlockStatementNode)outerBlock.Statements[0];
-            Assert.Single(nestedBlock.Statements);
+            Assert.Equal(2, nestedBlock.Statements.Count); // var x and another nested block
         }
         
         [Fact]
@@ -1678,7 +2014,7 @@ namespace Sushi.Tests
         // ═══════════════════════════════════════════════════════════════════
         
         [Fact]
-        public void TestCompoundAssignment()
+        public void TestCompoundAssignmentMultiple()
         {
             var ast = Parse(@"
                 test() {
@@ -1691,6 +2027,161 @@ namespace Sushi.Tests
             var block = (BlockStatementNode)func.Body;
             Assert.Equal(3, block.Statements.Count);
             Assert.All(block.Statements, s => Assert.IsType<ExpressionStatementNode>(s));
+        }
+        
+        [Fact]
+        public void TestIncrementInForLoop()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i = 0; i < 10; i++) {
+                        print(i)
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var forLoop = (ForStatementNode)block.Statements[0];
+            Assert.NotNull(forLoop.Increment);
+            Assert.IsType<UnaryExpressionNode>(forLoop.Increment);
+            var unary = (UnaryExpressionNode)forLoop.Increment;
+            Assert.Equal("++", unary.Operator);
+            Assert.False(unary.IsPrefix); // Postfix i++
+        }
+        
+        [Fact]
+        public void TestDecrementInExpression()
+        {
+            var ast = Parse("var x = --y + z++");
+            var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
+            var binary = (BinaryExpressionNode)varDecl.Initializer;
+            Assert.Equal("+", binary.Operator);
+            
+            // Left side: --y (prefix)
+            var leftUnary = (UnaryExpressionNode)binary.Left;
+            Assert.Equal("--", leftUnary.Operator);
+            Assert.True(leftUnary.IsPrefix);
+            
+            // Right side: z++ (postfix)
+            var rightUnary = (UnaryExpressionNode)binary.Right;
+            Assert.Equal("++", rightUnary.Operator);
+            Assert.False(rightUnary.IsPrefix);
+        }
+        
+        [Fact]
+        public void TestIncrementDecrementStatement()
+        {
+            var ast = Parse(@"
+                test() {
+                    x++
+                    ++x
+                    y--
+                    --y
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(4, block.Statements.Count);
+            Assert.All(block.Statements, s => Assert.IsType<ExpressionStatementNode>(s));
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // COMMENTS
+        // ═══════════════════════════════════════════════════════════════════
+        
+        [Fact]
+        public void TestCommentsDontCauseSemicolonInsertion()
+        {
+            var ast = Parse(@"
+                test() {
+                    // This is a comment
+                    var x = 1
+                    // Another comment
+                    var y = 2
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(2, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestCommentsInFunctionBody()
+        {
+            var ast = Parse(@"
+                test() {
+                    // Comment at start
+                    print(""hello"")
+                    // Comment in middle
+                    print(""world"")
+                    // Comment at end
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(2, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestMultipleCommentsInRow()
+        {
+            var ast = Parse(@"
+                test() {
+                    // First comment
+                    // Second comment
+                    // Third comment
+                    var x = 1
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Single(block.Statements);
+        }
+        
+        [Fact]
+        public void TestInlineCommentAfterStatement()
+        {
+            var ast = Parse(@"
+                test() {
+                    fun2() // This should get semicolon BEFORE comment
+                    fun3()
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(2, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestCommentBetweenDeclarations()
+        {
+            var ast = Parse(@"
+                // Function 1
+                test1() {
+                    print(""test1"")
+                }
+                
+                // Function 2
+                test2() {
+                    print(""test2"")
+                }
+            ");
+            Assert.Equal(2, ast.Declarations.Count);
+            Assert.All(ast.Declarations, d => Assert.IsType<FunctionDeclarationNode>(d));
+        }
+        
+        [Fact]
+        public void TestCommentInExpression()
+        {
+            var ast = Parse(@"
+                test() {
+                    var x = 1 + // add
+                            2
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Single(block.Statements);
         }
     }
 }

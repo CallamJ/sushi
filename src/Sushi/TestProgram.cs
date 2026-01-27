@@ -47,7 +47,8 @@ namespace Sushi.Tests
                 var lexer = new Lexer(tokens);
                 List<ClassifiedToken> classifiedTokens = lexer.Lex().ToList();
                 int classifiedCount = classifiedTokens.Count;
-                Console.WriteLine("  ✓ Classified " + classifiedCount.ToString() + " tokens");
+                Console.WriteLine("  ✓ Classified " + classifiedCount + " tokens");
+                Console.WriteLine(classifiedTokens.Select(t => (t.Value?.ToString() ?? (t.Text.Equals("") ? t.Kind.ToString() : t.Text)).ReplaceLineEndings("\\n")).Aggregate((a, b) => a + ", " + b));
                 Console.WriteLine();
                 
                 // Phase 3: Parsing

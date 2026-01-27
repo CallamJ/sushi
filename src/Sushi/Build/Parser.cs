@@ -31,10 +31,9 @@ public class Parser
 
     public Parser(IEnumerable<ClassifiedToken> tokens)
     {
-        // Filter out whitespace and comments
+        // Filter out whitespace (comments already removed by Lexer)
         _tokens = tokens
-            .Where(t => t.Kind != ClassifiedTokenKind.Comment && 
-                       t.Kind != ClassifiedTokenKind.Whitespace)
+            .Where(t => t.Kind != ClassifiedTokenKind.Whitespace)
             .ToList();
         _position = 0;
     }
@@ -549,40 +548,123 @@ public class Parser
         return new WhileStatementNode(condition, body, token.Line, token.Column);
     }
 
-    private ForStatementNode ParseForStatement()
+    private StatementNode ParseForStatement()
     {
         var token = Expect(ClassifiedTokenKind.Keyword, "for");
         
         Expect(ClassifiedTokenKind.LeftParen);
         
-        StatementNode? init = null;
-        if (!Check(ClassifiedTokenKind.Semicolon))
+        // Try to detect for-range or foreach: look for "var x :" or "var i, var x :"
+        var checkpoint = _position;
+        bool isForEachOrRange = false;
+        string? loopVariable = null;
+        string? indexVariable = null;
+        
+        // Check for var/type followed by identifier and colon
+        if (MatchKeyword("var") || Check(ClassifiedTokenKind.Identifier))
         {
-            init = ParseVariableDeclarationOrExpressionStatement();
+            bool hasVar = Previous().IsKeyword("var");
+            if (!hasVar && Check(ClassifiedTokenKind.Identifier))
+            {
+                Advance(); // consume type name
+            }
+            
+            if (Check(ClassifiedTokenKind.Identifier))
+            {
+                loopVariable = Advance().Text;
+                
+                // Check for comma (index,item pattern)
+                if (Match(ClassifiedTokenKind.Comma))
+                {
+                    indexVariable = loopVariable;
+                    if (MatchKeyword("var") || Check(ClassifiedTokenKind.Identifier))
+                    {
+                        if (!Previous().IsKeyword("var") && Check(ClassifiedTokenKind.Identifier))
+                            Advance(); // consume type
+                        loopVariable = Expect(ClassifiedTokenKind.Identifier).Text;
+                    }
+                }
+                
+                // Check for colon
+                if (Check(ClassifiedTokenKind.Colon))
+                {
+                    isForEachOrRange = true;
+                }
+            }
+        }
+        
+        if (!isForEachOrRange)
+        {
+            _position = checkpoint;
+        }
+        
+        if (isForEachOrRange)
+        {
+            Expect(ClassifiedTokenKind.Colon);
+            var rangeOrCollection = ParseExpression();
+            
+            // Check for optional step keyword (for-range only)
+            ExpressionNode? step = null;
+            if (MatchKeyword("step"))
+            {
+                step = ParseExpression();
+            }
+            
+            Expect(ClassifiedTokenKind.RightParen);
+            var body = ParseStatement();
+            
+            // Check if it's a range expression
+            if (rangeOrCollection is BinaryExpressionNode binary && 
+                (binary.Operator == ".." || binary.Operator == "..."))
+            {
+                bool isInclusive = binary.Operator == "...";
+                return new ForRangeStatementNode(loopVariable!, binary.Left, binary.Right, 
+                    isInclusive, step, body, token.Line, token.Column);
+            }
+            else
+            {
+                // If step was specified but it's not a range, that's an error
+                if (step != null)
+                {
+                    throw new Exception($"'step' keyword can only be used with range expressions (for-range loops) at {token.Line}:{token.Column}");
+                }
+                
+                return new ForEachStatementNode(indexVariable, loopVariable!, 
+                    rangeOrCollection, body, token.Line, token.Column);
+            }
         }
         else
         {
-            Advance(); // consume semicolon
+            // Traditional for loop
+            StatementNode? init = null;
+            if (!Check(ClassifiedTokenKind.Semicolon))
+            {
+                init = ParseVariableDeclarationOrExpressionStatement();
+            }
+            else
+            {
+                Advance();
+            }
+            
+            ExpressionNode? condition = null;
+            if (!Check(ClassifiedTokenKind.Semicolon))
+            {
+                condition = ParseExpression();
+            }
+            Expect(ClassifiedTokenKind.Semicolon);
+            
+            ExpressionNode? increment = null;
+            if (!Check(ClassifiedTokenKind.RightParen))
+            {
+                increment = ParseExpression();
+            }
+            
+            Expect(ClassifiedTokenKind.RightParen);
+            
+            var body = ParseStatement();
+            
+            return new ForStatementNode(init, condition, increment, body, token.Line, token.Column);
         }
-        
-        ExpressionNode? condition = null;
-        if (!Check(ClassifiedTokenKind.Semicolon))
-        {
-            condition = ParseExpression();
-        }
-        Expect(ClassifiedTokenKind.Semicolon);
-        
-        ExpressionNode? increment = null;
-        if (!Check(ClassifiedTokenKind.RightParen))
-        {
-            increment = ParseExpression();
-        }
-        
-        Expect(ClassifiedTokenKind.RightParen);
-        
-        var body = ParseStatement();
-        
-        return new ForStatementNode(init, condition, increment, body, token.Line, token.Column);
     }
 
     private BreakStatementNode ParseBreakStatement()
@@ -866,10 +948,26 @@ public class Parser
 
     private ExpressionNode ParseRelationalExpression()
     {
-        var expr = ParseAdditiveExpression();
+        var expr = ParseRangeExpression();
         
         while (MatchOperator("<") || MatchOperator(">") || 
                MatchOperator("<=") || MatchOperator(">="))
+        {
+            var op = Previous().Text;
+            var right = ParseRangeExpression();
+            expr = new BinaryExpressionNode(expr, op, right, expr.Line, expr.Column);
+        }
+        
+        return expr;
+    }
+    
+    private ExpressionNode ParseRangeExpression()
+    {
+        var expr = ParseAdditiveExpression();
+        
+        // Range operators: .. (exclusive) and ... (inclusive)
+        // These are ClassifiedTokenKind.Range and ClassifiedTokenKind.RangeInclusive
+        if (Match(ClassifiedTokenKind.RangeInclusive) || Match(ClassifiedTokenKind.Range))
         {
             var op = Previous().Text;
             var right = ParseAdditiveExpression();
@@ -1759,7 +1857,7 @@ public class Parser
                 values.Add(ParseEnumValue(recordParams));
                 Match(ClassifiedTokenKind.Comma);
             }
-            else if (MatchKeyword("new"))
+            else if (Check(ClassifiedTokenKind.Keyword, "new"))
             {
                 parsingValues = false;
                 explicitConstructor = ParseConstructor();
@@ -1889,13 +1987,13 @@ public class Parser
         }
         else if (Match(ClassifiedTokenKind.LeftBrace))
         {
-            // Inline properties: North { x = 0, y = 1 }
+            // Inline properties: North { x : 0, y : 1 }
             properties = new Dictionary<string, ExpressionNode>();
             
             while (!Check(ClassifiedTokenKind.RightBrace))
             {
                 var propName = Expect(ClassifiedTokenKind.Identifier).Text;
-                ExpectOperator("=");
+                Expect(ClassifiedTokenKind.Colon, ":");
                 var propValue = ParseExpression();
                 properties[propName] = propValue;
                 
