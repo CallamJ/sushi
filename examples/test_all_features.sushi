@@ -464,53 +464,51 @@ testNestedStructures() {
 // MAIN ENTRY POINT
 // ═══════════════════════════════════════════════════════════════════
 
-main() {
-    print("=== Testing Sushi Language Features ===")
+print("=== Testing Sushi Language Features ===")
     
-    print("\n--- Simple Enum ---")
-    testSimpleEnum()
-    
-    print("\n--- Direct Value Enum ---")
-    testDirectValueEnum()
-    
-    print("\n--- Record Enum ---")
-    testRecordEnum()
-    
-    print("\n--- Inline Properties Enum ---")
-    testInlinePropertiesEnum()
-    
-    print("\n--- Named Arguments ---")
-    testNamedArguments()
-    
-    print("\n--- Varargs ---")
-    testVarargs()
-    
-    print("\n--- Default Parameters ---")
-    testDefaultParameters()
-    
-    print("\n--- Structural Types ---")
-    testStructuralTypes()
-    
-    print("\n--- For-Range Loops ---")
-    testForRangeExclusive()
-    testForRangeInclusive()
-    testForRangeStep()
-    
-    print("\n--- ForEach Loops ---")
-    testForEach()
-    testForEachWithIndex()
-    
-    print("\n--- Do-While Loop ---")
-    testDoWhile()
-    
-    print("\n--- Complex Features ---")
-    testComplexFeatures()
-    
-    print("\n--- Array Methods ---")
-    testArrayMethods()
-    
-    print("\n--- Nested Structures ---")
-    testNestedStructures()
-    
-    print("\n=== All Tests Complete ===")
-}
+print("\n--- Simple Enum ---")
+testSimpleEnum()
+
+print("\n--- Direct Value Enum ---")
+testDirectValueEnum()
+
+print("\n--- Record Enum ---")
+testRecordEnum()
+
+print("\n--- Inline Properties Enum ---")
+testInlinePropertiesEnum()
+
+print("\n--- Named Arguments ---")
+testNamedArguments()
+
+print("\n--- Varargs ---")
+testVarargs()
+
+print("\n--- Default Parameters ---")
+testDefaultParameters()
+
+print("\n--- Structural Types ---")
+testStructuralTypes()
+
+print("\n--- For-Range Loops ---")
+testForRangeExclusive()
+testForRangeInclusive()
+testForRangeStep()
+
+print("\n--- ForEach Loops ---")
+testForEach()
+testForEachWithIndex()
+
+print("\n--- Do-While Loop ---")
+testDoWhile()
+
+print("\n--- Complex Features ---")
+testComplexFeatures()
+
+print("\n--- Array Methods ---")
+testArrayMethods()
+
+print("\n--- Nested Structures ---")
+testNestedStructures()
+
+print("\n=== All Tests Complete ===")
