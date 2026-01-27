@@ -333,10 +333,36 @@ public class Lexer
         if (_position == 0 || _position >= _tokens.Count - 1)
             return false;
 
-        var prev = _tokens[_position - 1];
-        var next = _tokens[_position + 1];
+        // Find the previous non-whitespace token
+        UnclassifiedToken? prev = null;
+        for (int i = _position - 1; i >= 0; i--)
+        {
+            if (_tokens[i].Kind != TokenKind.Whitespace)
+            {
+                prev = _tokens[i];
+                break;
+            }
+        }
         
-        if(prev.Line != whitespaceToken.Line) //dont insert semicolon if nothing else is on this line
+        if (prev == null)
+            return false;
+        
+        // Find the next non-whitespace token
+        UnclassifiedToken? next = null;
+        for (int i = _position + 1; i < _tokens.Count; i++)
+        {
+            if (_tokens[i].Kind != TokenKind.Whitespace)
+            {
+                next = _tokens[i];
+                break;
+            }
+        }
+        
+        if (next == null)
+            return false;
+        
+        // Don't insert semicolon if nothing else is on the same line as prev token
+        if(prev.Line != whitespaceToken.Line)
             return false;
 
         // Don't insert after opening braces/parens or before closing ones

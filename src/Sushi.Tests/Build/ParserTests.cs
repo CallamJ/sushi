@@ -2183,5 +2183,528 @@ namespace Sushi.Tests
             var block = (BlockStatementNode)func.Body;
             Assert.Single(block.Statements);
         }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // OPTIONAL SEMICOLONS
+        // ═══════════════════════════════════════════════════════════════════
+        
+        [Fact]
+        public void TestExplicitSemicolons()
+        {
+            var ast = Parse(@"
+                test() {
+                    var x = 1;
+                    var y = 2;
+                    var z = 3;
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(3, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestDoubleSemicolons()
+        {
+            var ast = Parse(@"
+                test() {
+                    var x = 1;;
+                    var y = 2;;;
+                    var z = 3
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(3, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestLeadingSemicolons()
+        {
+            var ast = Parse(@"
+                test() {
+                    ;
+                    ;;
+                    var x = 1
+                    ;
+                    var y = 2
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(2, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestTrailingSemicolons()
+        {
+            var ast = Parse(@"
+                test() {
+                    var x = 1
+                    var y = 2;
+                    ;
+                    ;;
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(2, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestMixedSemicolonStyles()
+        {
+            var ast = Parse(@"
+                test() {
+                    var x = 1;
+                    var y = 2
+                    var z = 3;;
+                    print(x)
+                    print(y);
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(5, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestSemicolonsInSwitchStatement()
+        {
+            var ast = Parse(@"
+                test(int x) {
+                    switch (x) {
+                        ;
+                        1 -> { print(""one"") };
+                        2 -> { print(""two"") }
+                        ;
+                        default -> { print(""other"") };
+                    }
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            var switchStmt = (SwitchStatementNode)block.Statements[0];
+            Assert.Equal(2, switchStmt.Cases.Count);
+            Assert.NotNull(switchStmt.DefaultCase);
+        }
+        
+        [Fact]
+        public void TestEmptyStatements()
+        {
+            var ast = Parse(@"
+                test() {
+                    ;;;;;
+                    var x = 1;;;;;
+                    ;;;;;
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Single(block.Statements);
+        }
+        
+        [Fact]
+        public void TestSemicolonAfterFunctionDeclaration()
+        {
+            var ast = Parse(@"
+                myFunc() {
+                    print(""hello"")
+                };
+                
+                otherFunc() {
+                    print(""world"")
+                }
+            ");
+            Assert.Equal(2, ast.Declarations.Count);
+        }
+        
+        [Fact]
+        public void TestSemicolonAfterClassDeclaration()
+        {
+            var ast = Parse(@"
+                class MyClass {
+                    string name
+                };
+                
+                class OtherClass {
+                    int value
+                }
+            ");
+            Assert.Equal(2, ast.Declarations.Count);
+        }
+        
+        [Fact]
+        public void TestSemicolonAfterEnumDeclaration()
+        {
+            var ast = Parse(@"
+                enum Color {
+                    Red,
+                    Green,
+                    Blue
+                };
+                
+                enum Status {
+                    Active,
+                    Inactive
+                }
+            ");
+            Assert.Equal(2, ast.Declarations.Count);
+        }
+        
+        [Fact]
+        public void TestSemicolonAfterIfStatement()
+        {
+            var ast = Parse(@"
+                test() {
+                    if (x > 0) {
+                        print(""positive"")
+                    };
+                    
+                    if (x < 0) {
+                        print(""negative"")
+                    } else {
+                        print(""zero"")
+                    };
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(2, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestSemicolonAfterWhileLoop()
+        {
+            var ast = Parse(@"
+                test() {
+                    while (true) {
+                        break
+                    };
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Single(block.Statements);
+        }
+        
+        [Fact]
+        public void TestSemicolonAfterForLoop()
+        {
+            var ast = Parse(@"
+                test() {
+                    for (var i = 0; i < 10; i++) {
+                        print(i)
+                    };
+                    
+                    for (var x : 0..5) {
+                        print(x)
+                    };
+                    
+                    for (var item : items) {
+                        print(item)
+                    };
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Equal(3, block.Statements.Count);
+        }
+        
+        [Fact]
+        public void TestSemicolonAfterSwitchStatement()
+        {
+            var ast = Parse(@"
+                test(int x) {
+                    switch (x) {
+                        1 -> { print(""one"") }
+                        default -> { print(""other"") }
+                    };
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            var block = (BlockStatementNode)func.Body;
+            Assert.Single(block.Statements);
+        }
+        
+        [Fact]
+        public void TestMultipleSemicolonsAfterStatements()
+        {
+            var ast = Parse(@"
+                myFunc() {
+                    print(""test"")
+                };;;
+                
+                for (var i = 0; i < 5; i++) {
+                    continue
+                };;
+                
+                while (false) {
+                };;;
+            ");
+            // Should have: function, for loop, while loop all at top level
+            Assert.Equal(3, ast.Declarations.Count);
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // TOP-LEVEL SCRIPTING SUPPORT
+        // ═══════════════════════════════════════════════════════════════════
+        
+        [Fact]
+        public void TestTopLevelExpressionStatements()
+        {
+            var ast = Parse(@"
+                print(""Hello, World!"")
+                var x = 42
+                print(x)
+            ");
+            Assert.Equal(3, ast.Declarations.Count);
+            Assert.IsType<ExpressionStatementNode>(ast.Declarations[0]);
+            Assert.IsType<VariableDeclarationStatementNode>(ast.Declarations[1]);
+            Assert.IsType<ExpressionStatementNode>(ast.Declarations[2]);
+        }
+        
+        [Fact]
+        public void TestTopLevelIfStatement()
+        {
+            var ast = Parse(@"
+                var x = 10
+                if (x > 5) {
+                    print(""big"")
+                }
+            ");
+            Assert.Equal(2, ast.Declarations.Count);
+            Assert.IsType<VariableDeclarationStatementNode>(ast.Declarations[0]);
+            Assert.IsType<IfStatementNode>(ast.Declarations[1]);
+        }
+        
+        [Fact]
+        public void TestTopLevelForLoop()
+        {
+            var ast = Parse(@"
+                for (var i = 0; i < 10; i++) {
+                    print(i)
+                }
+            ");
+            Assert.Single(ast.Declarations);
+            Assert.IsType<ForStatementNode>(ast.Declarations[0]);
+        }
+        
+        [Fact]
+        public void TestTopLevelWhileLoop()
+        {
+            var ast = Parse(@"
+                var count = 0
+                while (count < 5) {
+                    print(count)
+                    count = count + 1
+                }
+            ");
+            Assert.Equal(2, ast.Declarations.Count);
+            Assert.IsType<VariableDeclarationStatementNode>(ast.Declarations[0]);
+            Assert.IsType<WhileStatementNode>(ast.Declarations[1]);
+        }
+        
+        [Fact]
+        public void TestTopLevelForRangeLoop()
+        {
+            var ast = Parse(@"
+                for (var i : 0..5) {
+                    print(i)
+                }
+            ");
+            Assert.Single(ast.Declarations);
+            Assert.IsType<ForRangeStatementNode>(ast.Declarations[0]);
+        }
+        
+        [Fact]
+        public void TestTopLevelSwitchStatement()
+        {
+            var ast = Parse(@"
+                var x = 2
+                switch (x) {
+                    1 -> { print(""one"") }
+                    2 -> { print(""two"") }
+                    default -> { print(""other"") }
+                }
+            ");
+            Assert.Equal(2, ast.Declarations.Count);
+            Assert.IsType<VariableDeclarationStatementNode>(ast.Declarations[0]);
+            Assert.IsType<SwitchStatementNode>(ast.Declarations[1]);
+        }
+        
+        [Fact]
+        public void TestMixedTopLevelDeclarationsAndStatements()
+        {
+            var ast = Parse(@"
+                print(""Starting script"")
+                
+                class MyClass {
+                    int value
+                }
+                
+                var obj = new MyClass()
+                
+                myFunc() {
+                    return 42
+                }
+                
+                for (var i : 0..3) {
+                    print(i)
+                }
+                
+                print(""Done"")
+            ");
+            Assert.Equal(6, ast.Declarations.Count);
+            Assert.IsType<ExpressionStatementNode>(ast.Declarations[0]); // print
+            Assert.IsType<ClassDeclarationNode>(ast.Declarations[1]); // class
+            Assert.IsType<VariableDeclarationStatementNode>(ast.Declarations[2]); // var
+            Assert.IsType<FunctionDeclarationNode>(ast.Declarations[3]); // func
+            Assert.IsType<ForRangeStatementNode>(ast.Declarations[4]); // for
+            Assert.IsType<ExpressionStatementNode>(ast.Declarations[5]); // print
+        }
+        
+        [Fact]
+        public void TestTopLevelComplexExpressions()
+        {
+            var ast = Parse(@"
+                1 + 2 * 3
+                [1, 2, 3].map((x) -> x * 2)
+                { name: ""Alice"", age: 30 }
+            ");
+            Assert.Equal(3, ast.Declarations.Count);
+            Assert.All(ast.Declarations, d => Assert.IsType<ExpressionStatementNode>(d));
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STRUCTURAL TYPES
+        // ═══════════════════════════════════════════════════════════════════
+        
+        [Fact]
+        public void TestStructuralTypeParameterWithName()
+        {
+            var ast = Parse(@"
+                processUser(object { string name, int age } user) {
+                    print(user.name)
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            Assert.Single(func.Parameters);
+            Assert.NotNull(func.Parameters[0].StructuralType);
+            Assert.Equal("user", func.Parameters[0].Name);
+        }
+        
+        [Fact]
+        public void TestStructuralTypeParameterWithoutName()
+        {
+            var ast = Parse(@"
+                processUser(object { string name, int age }) {
+                    print(""Processing user"")
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            Assert.Single(func.Parameters);
+            Assert.NotNull(func.Parameters[0].StructuralType);
+            Assert.Equal("_", func.Parameters[0].Name); // Anonymous placeholder
+        }
+        
+        [Fact]
+        public void TestMultipleStructuralTypeParameters()
+        {
+            var ast = Parse(@"
+                compare(object { int x, int y } point1, object { int x, int y } point2) {
+                    return point1.x == point2.x
+                }
+            ");
+            var func = (FunctionDeclarationNode)ast.Declarations[0];
+            Assert.Equal(2, func.Parameters.Count);
+            Assert.All(func.Parameters, p => Assert.NotNull(p.StructuralType));
+        }
+        // ═══════════════════════════════════════════════════════════════════
+        // NESTED ARRAY DESTRUCTURING
+        // ═══════════════════════════════════════════════════════════════════
+        
+        [Fact]
+        public void TestNestedArrayDestructuring()
+        {
+            var ast = Parse(@"
+                var [[a, b], [c, d]] = [[1, 2], [3, 4]]
+            ");
+            var destructure = (ArrayDestructuringStatementNode)ast.Declarations[0];
+            Assert.Equal(2, destructure.Patterns.Count);
+            
+            // First pattern should be nested
+            Assert.NotNull(destructure.Patterns[0].NestedPatterns);
+            Assert.Equal(2, destructure.Patterns[0].NestedPatterns!.Count);
+            Assert.Equal("a", destructure.Patterns[0].NestedPatterns[0].Name);
+            Assert.Equal("b", destructure.Patterns[0].NestedPatterns[1].Name);
+            
+            // Second pattern should be nested
+            Assert.NotNull(destructure.Patterns[1].NestedPatterns);
+            Assert.Equal(2, destructure.Patterns[1].NestedPatterns!.Count);
+            Assert.Equal("c", destructure.Patterns[1].NestedPatterns[0].Name);
+            Assert.Equal("d", destructure.Patterns[1].NestedPatterns[1].Name);
+        }
+        
+        [Fact]
+        public void TestDeeplyNestedArrayDestructuring()
+        {
+            var ast = Parse(@"
+                var [[[a]], b] = [[[1]], 2]
+            ");
+            var destructure = (ArrayDestructuringStatementNode)ast.Declarations[0];
+            Assert.Equal(2, destructure.Patterns.Count);
+            
+            // First is nested
+            Assert.NotNull(destructure.Patterns[0].NestedPatterns);
+            var level1 = destructure.Patterns[0].NestedPatterns![0];
+            Assert.NotNull(level1.NestedPatterns);
+            var level2 = level1.NestedPatterns![0];
+            Assert.Equal("a", level2.Name);
+            
+            // Second is simple
+            Assert.Equal("b", destructure.Patterns[1].Name);
+        }
+        
+        [Fact]
+        public void TestMixedNestedAndSimpleDestructuring()
+        {
+            var ast = Parse(@"
+                var [x, [y, z], w] = [1, [2, 3], 4]
+            ");
+            var destructure = (ArrayDestructuringStatementNode)ast.Declarations[0];
+            Assert.Equal(3, destructure.Patterns.Count);
+            
+            Assert.Equal("x", destructure.Patterns[0].Name);
+            Assert.NotNull(destructure.Patterns[1].NestedPatterns);
+            Assert.Equal("w", destructure.Patterns[2].Name);
+        }
+        
+        [Fact]
+        public void TestNestedDestructuringWithSkip()
+        {
+            var ast = Parse(@"
+                var [[a, , b], [c]] = [[1, 2, 3], [4]]
+            ");
+            var destructure = (ArrayDestructuringStatementNode)ast.Declarations[0];
+            Assert.Equal(2, destructure.Patterns.Count);
+            
+            var firstNested = destructure.Patterns[0].NestedPatterns!;
+            Assert.Equal(3, firstNested.Count);
+            Assert.Equal("a", firstNested[0].Name);
+            Assert.Null(firstNested[1].Name); // Skip
+            Assert.Equal("b", firstNested[2].Name);
+        }
+        
+        [Fact]
+        public void TestNestedDestructuringWithDefaults()
+        {
+            var ast = Parse(@"
+                var [[a = 1, b], c] = [[[], 2], 3]
+            ");
+            var destructure = (ArrayDestructuringStatementNode)ast.Declarations[0];
+            var firstNested = destructure.Patterns[0].NestedPatterns!;
+            Assert.NotNull(firstNested[0].DefaultValue);
+        }
     }
 }

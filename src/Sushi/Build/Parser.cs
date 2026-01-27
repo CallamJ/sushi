@@ -101,6 +101,55 @@ public class Parser
             return ParseEnumDeclaration();
         }
         
+        // Top-level control flow statements (for scripting support)
+        if (token.IsKeyword("if"))
+        {
+            DebugLog("Found 'if' at top level");
+            return ParseIfStatement();
+        }
+        
+        if (token.IsKeyword("while"))
+        {
+            DebugLog("Found 'while' at top level");
+            return ParseWhileStatement();
+        }
+        
+        if (token.IsKeyword("for"))
+        {
+            DebugLog("Found 'for' at top level");
+            return ParseForStatement();
+        }
+        
+        if (token.IsKeyword("switch"))
+        {
+            DebugLog("Found 'switch' at top level");
+            return ParseSwitchStatement();
+        }
+        
+        if (token.IsKeyword("do"))
+        {
+            DebugLog("Found 'do' at top level");
+            return ParseDoWhileStatement();
+        }
+        
+        if (token.IsKeyword("return"))
+        {
+            DebugLog("Found 'return' at top level");
+            return ParseReturnStatement();
+        }
+        
+        if (token.IsKeyword("break"))
+        {
+            DebugLog("Found 'break' at top level");
+            return ParseBreakStatement();
+        }
+        
+        if (token.IsKeyword("continue"))
+        {
+            DebugLog("Found 'continue' at top level");
+            return ParseContinueStatement();
+        }
+        
         // Variable declaration with var keyword
         if (token.IsKeyword("var"))
         {
@@ -121,7 +170,18 @@ public class Parser
             return decl;
         }
         
-        throw new Exception($"Unexpected token in top-level declaration: {token} at {token.Line}:{token.Column}");
+        // Try to parse as expression statement (for top-level expressions like print("hello"))
+        try
+        {
+            DebugLog("Attempting top-level expression statement");
+            var expr = ParseExpression();
+            ExpectSemicolon();
+            return new ExpressionStatementNode(expr, expr.Line, expr.Column);
+        }
+        catch
+        {
+            throw new Exception($"Unexpected token in top-level: {token} at {token.Line}:{token.Column}");
+        }
     }
 
     private BoxDeclarationNode ParseBoxDeclaration()
@@ -192,6 +252,9 @@ public class Parser
         }
         
         Expect(ClassifiedTokenKind.RightBrace);
+        
+        // Consume optional semicolon after class body
+        OptionalSemicolon();
         
         return classNode;
     }
@@ -377,10 +440,11 @@ public class Parser
         
         // Look ahead to determine what we're parsing
         // Possibilities:
-        // 1. name(...) → function without return type
-        // 2. Type name(...) → function with return type
-        // 3. Type name = ... → variable declaration
-        // 4. name = ... → variable declaration (inferred type)
+        // 1. name(...) { } or name(...) -> → function declaration
+        // 2. name(...) with no block/arrow → function call (expression statement)
+        // 3. Type name(...) → function with return type
+        // 4. Type name = ... → variable declaration
+        // 5. name = ... → variable declaration (inferred type)
         
         string? type = null;
         string name;
@@ -391,7 +455,51 @@ public class Parser
             
             if (Check(ClassifiedTokenKind.LeftParen))
             {
-                // Pattern: name(...) → function without return type
+                // Pattern: name(...) → could be function declaration or function call
+                // Need to look ahead to see if there's a block or arrow after the closing paren
+                
+                // Save position to potentially backtrack
+                var checkpoint = _position - 1; // Before the identifier
+                
+                // Try to scan ahead to find the closing paren
+                int parenDepth = 1;
+                Advance(); // consume (
+                int scanPos = _position;
+                
+                while (scanPos < _tokens.Count && parenDepth > 0)
+                {
+                    if (_tokens[scanPos].Is(ClassifiedTokenKind.LeftParen))
+                        parenDepth++;
+                    else if (_tokens[scanPos].Is(ClassifiedTokenKind.RightParen))
+                        parenDepth--;
+                    scanPos++;
+                }
+                
+                // Check what follows the closing paren
+                bool isFunctionDeclaration = false;
+                if (scanPos < _tokens.Count)
+                {
+                    var afterParen = _tokens[scanPos];
+                    if (afterParen.Is(ClassifiedTokenKind.LeftBrace) || afterParen.IsOperator("->"))
+                    {
+                        isFunctionDeclaration = true;
+                    }
+                }
+                
+                // Restore position
+                _position = checkpoint;
+                Advance(); // consume identifier again
+                
+                if (!isFunctionDeclaration)
+                {
+                    // It's a function call - restore to before identifier and parse as expression
+                    _position = checkpoint;
+                    var expr = ParseExpression();
+                    ExpectSemicolon();
+                    return new ExpressionStatementNode(expr, expr.Line, expr.Column);
+                }
+                
+                // It's a function declaration
                 name = firstToken.Text;
                 type = null;
             }
@@ -416,7 +524,7 @@ public class Parser
         // Now check if it's a function or variable
         if (Match(ClassifiedTokenKind.LeftParen))
         {
-            // It's a function
+            // It's a function declaration
             var parameters = ParseParameterListFromParen();
             var function = new FunctionDeclarationNode(type, name, parameters, start.Line, start.Column);
             
@@ -431,6 +539,8 @@ public class Parser
             {
                 function.IsArrowFunction = false;
                 function.Body = ParseBlock();
+                // Consume optional semicolon after function body
+                OptionalSemicolon();
             }
             
             return function;
@@ -494,8 +604,15 @@ public class Parser
         
         while (!Check(ClassifiedTokenKind.RightBrace) && !IsAtEnd())
         {
+            // Skip any empty statements (extra semicolons)
+            if (Match(ClassifiedTokenKind.Semicolon))
+                continue;
+                
             block.Statements.Add(ParseStatement());
         }
+        
+        // Consume any trailing semicolons before closing brace
+        OptionalSemicolon();
         
         Expect(ClassifiedTokenKind.RightBrace);
         return block;
@@ -532,6 +649,9 @@ public class Parser
             elseBranch = ParseStatement();
         }
         
+        // Consume optional semicolon after if statement
+        OptionalSemicolon();
+        
         return new IfStatementNode(condition, thenBranch, elseBranch, token.Line, token.Column);
     }
 
@@ -544,6 +664,9 @@ public class Parser
         Expect(ClassifiedTokenKind.RightParen);
         
         var body = ParseStatement();
+        
+        // Consume optional semicolon after while statement
+        OptionalSemicolon();
         
         return new WhileStatementNode(condition, body, token.Line, token.Column);
     }
@@ -618,8 +741,10 @@ public class Parser
                 (binary.Operator == ".." || binary.Operator == "..."))
             {
                 bool isInclusive = binary.Operator == "...";
-                return new ForRangeStatementNode(loopVariable!, binary.Left, binary.Right, 
+                var forRange = new ForRangeStatementNode(loopVariable!, binary.Left, binary.Right, 
                     isInclusive, step, body, token.Line, token.Column);
+                OptionalSemicolon();
+                return forRange;
             }
             else
             {
@@ -629,8 +754,10 @@ public class Parser
                     throw new Exception($"'step' keyword can only be used with range expressions (for-range loops) at {token.Line}:{token.Column}");
                 }
                 
-                return new ForEachStatementNode(indexVariable, loopVariable!, 
+                var forEach = new ForEachStatementNode(indexVariable, loopVariable!, 
                     rangeOrCollection, body, token.Line, token.Column);
+                OptionalSemicolon();
+                return forEach;
             }
         }
         else
@@ -663,7 +790,9 @@ public class Parser
             
             var body = ParseStatement();
             
-            return new ForStatementNode(init, condition, increment, body, token.Line, token.Column);
+            var forStmt = new ForStatementNode(init, condition, increment, body, token.Line, token.Column);
+            OptionalSemicolon();
+            return forStmt;
         }
     }
 
@@ -763,6 +892,20 @@ public class Parser
     {
         Expect(ClassifiedTokenKind.LeftBracket);
         
+        var patterns = ParseDestructuringPatterns(type);
+        
+        Expect(ClassifiedTokenKind.RightBracket);
+        
+        ExpectOperator("=");
+        var value = ParseExpression();
+        
+        ExpectSemicolon();
+        
+        return new ArrayDestructuringStatementNode(patterns, value, start.Line, start.Column);
+    }
+    
+    private List<DestructuringPatternNode> ParseDestructuringPatterns(string? type)
+    {
         var patterns = new List<DestructuringPatternNode>();
         
         while (!Check(ClassifiedTokenKind.RightBracket) && !IsAtEnd())
@@ -783,6 +926,20 @@ public class Parser
             {
                 Advance();
                 isRest = true;
+            }
+            
+            // Check for nested destructuring: [a, b]
+            if (Check(ClassifiedTokenKind.LeftBracket))
+            {
+                Advance(); // consume [
+                var nestedPatterns = ParseDestructuringPatterns(type);
+                Expect(ClassifiedTokenKind.RightBracket);
+                
+                patterns.Add(new DestructuringPatternNode(nestedPatterns, patternStart.Line, patternStart.Column));
+                
+                if (!Check(ClassifiedTokenKind.RightBracket))
+                    Expect(ClassifiedTokenKind.Comma);
+                continue;
             }
             
             // Get the variable name
@@ -806,14 +963,7 @@ public class Parser
                 Expect(ClassifiedTokenKind.Comma);
         }
         
-        Expect(ClassifiedTokenKind.RightBracket);
-        
-        ExpectOperator("=");
-        var value = ParseExpression();
-        
-        ExpectSemicolon();
-        
-        return new ArrayDestructuringStatementNode(patterns, value, start.Line, start.Column);
+        return patterns;
     }
 
     /* ═══════════════════════════════════════════════════════════════════
@@ -1463,6 +1613,19 @@ public class Parser
                     if (Check(ClassifiedTokenKind.LeftBrace))
                     {
                         structuralType = ParseStructuralType();
+                        // Parameter name is optional for structural types
+                        // If followed by comma or ), use a placeholder name
+                        if (Check(ClassifiedTokenKind.Comma) || Check(ClassifiedTokenKind.RightParen))
+                        {
+                            name = "_"; // Anonymous structural parameter
+                            ExpressionNode? defaultValue = null;
+                            if (MatchOperator("="))
+                            {
+                                defaultValue = ParseExpression();
+                            }
+                            parameters.Add(new ParameterNode(null, structuralType, name, false, defaultValue, start.Line, start.Column));
+                            continue;
+                        }
                     }
                     else
                     {
@@ -1566,6 +1729,19 @@ public class Parser
         {
             // Semicolons are optional in Sushi, but we should consume them if present
             // If not present, that's OK due to implicit semicolon insertion
+        }
+    }
+    
+    private void OptionalSemicolon()
+    {
+        // Consume any semicolons that are present (even multiple ones)
+        // This handles cases like:
+        // var x = 1;
+        // var y = 2;;  // double semicolon is harmless
+        // var z = 3
+        while (Match(ClassifiedTokenKind.Semicolon))
+        {
+            // Keep consuming semicolons
         }
     }
 
@@ -1768,6 +1944,9 @@ public class Parser
         
         Expect(ClassifiedTokenKind.RightBrace);
         
+        // Consume optional semicolon after switch statement
+        OptionalSemicolon();
+        
         return new SwitchStatementNode(value, cases, defaultCase, start.Line, start.Column);
     }
 
@@ -1900,6 +2079,9 @@ public class Parser
         }
         
         Expect(ClassifiedTokenKind.RightBrace);
+        
+        // Consume optional semicolon after enum body
+        OptionalSemicolon();
         
         return new EnumDeclarationNode(
             name, recordParams, values, explicitConstructor,

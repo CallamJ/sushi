@@ -89,7 +89,7 @@ public class VariableDeclarationStatementNode : StatementNode
 }
 
 /// <summary>
-/// Array destructuring: var [a, b, c] = arr
+/// Array destructuring statement: var [a, b, c] = arr
 /// </summary>
 public class ArrayDestructuringStatementNode : StatementNode
 {
@@ -119,6 +119,7 @@ public class DestructuringPatternNode : AstNode
     public string? Name { get; }           // Variable name (null to skip)
     public bool IsRest { get; }            // true for ...rest
     public ExpressionNode? DefaultValue { get; } // Default if undefined
+    public List<DestructuringPatternNode>? NestedPatterns { get; } // For nested destructuring like [[a, b], c]
     
     public DestructuringPatternNode(
         string? type,
@@ -132,6 +133,20 @@ public class DestructuringPatternNode : AstNode
         Name = name;
         IsRest = isRest;
         DefaultValue = defaultValue;
+        NestedPatterns = null;
+    }
+    
+    // Constructor for nested patterns
+    public DestructuringPatternNode(
+        List<DestructuringPatternNode> nestedPatterns,
+        int line,
+        int column) : base(line, column)
+    {
+        Type = null;
+        Name = null;
+        IsRest = false;
+        DefaultValue = null;
+        NestedPatterns = nestedPatterns;
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
@@ -164,7 +179,7 @@ public class IfStatementNode : StatementNode
 }
 
 /// <summary>
-/// Switch statement: switch (value) { case1 -> { } case2 -> { } }
+/// Switch statement with arrow syntax: switch (value) { 1 -> { } 2 -> { } }
 /// </summary>
 public class SwitchStatementNode : StatementNode
 {
@@ -189,13 +204,13 @@ public class SwitchStatementNode : StatementNode
 }
 
 /// <summary>
-/// Switch case: value1, value2 -> { body }
+/// Switch case branch: value1, value2 -> { body }
 /// </summary>
 public class SwitchCaseNode : AstNode
 {
     public List<ExpressionNode> MatchValues { get; }
     public BlockStatementNode Body { get; }
-    public List<ExpressionNode> AlsoCases { get; }  // Values to also execute
+    public List<ExpressionNode> AlsoCases { get; }  // Values to also execute (from 'also' keyword)
     
     public SwitchCaseNode(
         List<ExpressionNode> matchValues,
@@ -320,7 +335,7 @@ public class ForRangeStatementNode : StatementNode
 }
 
 /// <summary>
-/// For-each loop: for (var item : collection) body
+/// For-each loop: for (var item : collection) body or for (var i, var item : collection) body
 /// </summary>
 public class ForEachStatementNode : StatementNode
 {
