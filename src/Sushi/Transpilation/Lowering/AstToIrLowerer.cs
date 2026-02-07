@@ -105,6 +105,8 @@ public sealed class AstToIrLowerer
             return null;
         }
 
+        InjectAnonymousStructuralFieldBindings(node, signature, body);
+
         return new IrFunctionDeclarationStatement(node.Name, signature.Parameters, body, signature.ReturnType);
     }
 
@@ -767,7 +769,9 @@ public sealed class AstToIrLowerer
             }
 
             output.Add(new IrFunctionParameter(
-                parameter.Name,
+                parameter.StructuralType != null && string.Equals(parameter.Name, "_", StringComparison.Ordinal)
+                    ? $"__sushi_struct_param_{i}"
+                    : parameter.Name,
                 parameter.IsVarargs,
                 parameter.DefaultValue != null ? LowerExpression(parameter.DefaultValue) : null,
                 LowerParameterType(parameter, functionName)));
@@ -957,8 +961,15 @@ public sealed class AstToIrLowerer
             }
 
             var declaredType = LowerParameterType(parameter, function.Name);
+            var parameterName = parameter.Name;
+            if (parameter.StructuralType != null &&
+                string.Equals(parameterName, "_", StringComparison.Ordinal))
+            {
+                parameterName = $"__sushi_struct_param_{i}";
+            }
+
             parameters.Add(new IrFunctionParameter(
-                parameter.Name,
+                parameterName,
                 parameter.IsVarargs,
                 parameter.DefaultValue != null ? LowerExpression(parameter.DefaultValue) : null,
                 declaredType));
@@ -971,6 +982,45 @@ public sealed class AstToIrLowerer
             $"return type for function '{function.Name}'");
 
         return new IrFunctionSignature(returnType, parameters);
+    }
+
+    private static void InjectAnonymousStructuralFieldBindings(
+        FunctionDeclarationNode functionNode,
+        IrFunctionSignature signature,
+        IrBlockStatement body)
+    {
+        var inserts = new List<IrStatement>();
+        var count = Math.Min(functionNode.Parameters.Count, signature.Parameters.Count);
+        for (var i = 0; i < count; i++)
+        {
+            var sourceParameter = functionNode.Parameters[i];
+            var loweredParameter = signature.Parameters[i];
+            if (!string.Equals(sourceParameter.Name, "_", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (loweredParameter.DeclaredType.Kind != IrTypeKind.Structural)
+            {
+                continue;
+            }
+
+            foreach (var field in loweredParameter.DeclaredType.StructuralFields)
+            {
+                inserts.Add(new IrVariableDeclarationStatement(
+                    field.Name,
+                    new IrMemberAccessExpression(
+                        new IrIdentifierExpression(loweredParameter.Name),
+                        field.Name)));
+            }
+        }
+
+        if (inserts.Count == 0)
+        {
+            return;
+        }
+
+        body.Statements.InsertRange(0, inserts);
     }
 
     private IrTypeRef LowerParameterType(ParameterNode parameter, string functionName)

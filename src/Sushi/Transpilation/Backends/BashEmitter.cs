@@ -1225,14 +1225,26 @@ __sushi_struct_check() {
 
   [[ -z "$spec" ]] && return 0
 
-  local -a fields
-  IFS=',' read -r -a fields <<< "$spec"
+  local remaining="$spec"
+  while :; do
+    local field
+    if [[ "$remaining" == *","* ]]; then
+      field="${remaining%%,*}"
+      remaining="${remaining#*,}"
+    else
+      field="$remaining"
+      remaining=''
+    fi
 
-  local field
-  for field in "${fields[@]}"; do
-    [[ -z "$field" ]] && continue
-    local field_name field_type field_required
-    IFS=':' read -r field_name field_type field_required <<< "$field"
+    if [[ -z "$field" ]]; then
+      [[ -z "$remaining" ]] && break
+      continue
+    fi
+    local field_name field_type field_required rest
+    field_name="${field%%:*}"
+    rest="${field#*:}"
+    field_type="${rest%%:*}"
+    field_required="${rest#*:}"
     [[ -z "$field_name" ]] && continue
 
     if ! __sushi_json_has_member "$value" "$field_name"; then
@@ -1256,6 +1268,8 @@ __sushi_struct_check() {
     if ! __sushi_type_check "$field_raw" "$field_type" "$context.$field_name"; then
       return 1
     fi
+
+    [[ -z "$remaining" ]] && break
   done
 
   return 0
@@ -1483,6 +1497,22 @@ __sushi_add() {
 
   printf '%s' "${left}${right}"
 }
+
+__sushi_truthy() {
+  local value="${1-}"
+  case "$value" in
+    ''|false|FALSE|False|null|NULL|Null)
+      return 1
+      ;;
+  esac
+
+  if __sushi_j_is_integer "$value"; then
+    (( value != 0 ))
+    return $?
+  fi
+
+  return 0
+}
 """);
     }
 
@@ -1507,7 +1537,7 @@ __sushi_add() {
                 break;
 
             case IrVariableDeclarationStatement variable:
-                WriteLine($"{SanitizeName(variable.Name)}={EmitValueExpression(variable.Initializer ?? new IrLiteralExpression(null))}");
+                WriteLine($"{SanitizeVariableName(variable.Name)}={EmitValueExpression(variable.Initializer ?? new IrLiteralExpression(null))}");
                 break;
 
             case IrExpressionStatement expressionStatement:
@@ -1617,7 +1647,7 @@ __sushi_add() {
 
     private void EmitFunctionDeclaration(IrFunctionDeclarationStatement statement)
     {
-        WriteLine($"{SanitizeName(statement.Name)}() {{");
+        WriteLine($"{SanitizeFunctionName(statement.Name)}() {{");
         _indent++;
 
         var previousFunctionName = _currentFunctionName;
@@ -1628,7 +1658,7 @@ __sushi_add() {
         var argIndex = 1;
         foreach (var parameter in statement.Parameters)
         {
-            var param = SanitizeName(parameter.Name);
+            var param = SanitizeVariableName(parameter.Name);
             if (parameter.IsVarargs)
             {
                 var varargsArray = $"__sushi_varargs_{param}";
@@ -1717,7 +1747,7 @@ __sushi_add() {
                 if (unary.Operand is IrIdentifierExpression identifier)
                 {
                     var op = unary.Operator == "++" ? "+" : "-";
-                    var name = SanitizeName(identifier.Name);
+                    var name = SanitizeVariableName(identifier.Name);
                     var checkedCurrent = EmitCheckedInteger($"\"${{{name}:-}}\"", $"variable '{identifier.Name}'");
                     WriteLine($"{name}=$(( {checkedCurrent} {op} 1 ))");
                     return;
@@ -1727,7 +1757,7 @@ __sushi_add() {
             case IrMethodCallExpression methodCall:
                 if (methodCall.MethodName == "push" && methodCall.Target is IrIdentifierExpression targetIdentifier)
                 {
-                    var targetName = SanitizeName(targetIdentifier.Name);
+                    var targetName = SanitizeVariableName(targetIdentifier.Name);
                     WriteLine($"{targetName}=\"$({EmitMethodCallCommand(methodCall)})\"");
                     return;
                 }
@@ -1741,7 +1771,7 @@ __sushi_add() {
 
     private string EmitAssignmentExpression(IrAssignmentExpression assignment)
     {
-        var name = SanitizeName(assignment.Target.Name);
+        var name = SanitizeVariableName(assignment.Target.Name);
         if (assignment.Operator == "=")
         {
             return $"{name}={EmitValueExpression(assignment.Value)}";
@@ -1754,7 +1784,7 @@ __sushi_add() {
 
     private string EmitCallCommand(IrCallExpression call)
     {
-        var callee = SanitizeName(call.Callee);
+        var callee = SanitizeFunctionName(call.Callee);
         var arguments = call.Arguments.Select(argument => EmitValueExpression(argument.Value)).ToList();
         return arguments.Count > 0
             ? $"{callee} {string.Join(" ", arguments)}"
@@ -1798,17 +1828,17 @@ __sushi_add() {
 
         if (expression is IrIdentifierExpression identifier)
         {
-            return $"[[ -n \"${{{SanitizeName(identifier.Name)}:-}}\" ]]";
+            return $"__sushi_truthy \"${{{SanitizeVariableName(identifier.Name)}:-}}\"";
         }
 
-        return $"[[ {EmitValueExpression(expression)} != '' ]]";
+        return $"__sushi_truthy {EmitValueExpression(expression)}";
     }
 
     private string EmitComparableValue(IrExpression expression)
     {
         return expression switch
         {
-            IrIdentifierExpression identifier => $"\"${{{SanitizeName(identifier.Name)}:-}}\"",
+            IrIdentifierExpression identifier => $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\"",
             IrLiteralExpression literal when literal.Value is string str => Escape.BashSingleQuoted(str),
             IrLiteralExpression literal when literal.Value is char ch => Escape.BashSingleQuoted(ch.ToString()),
             IrLiteralExpression literal when literal.Value is bool boolean => Escape.BashSingleQuoted(boolean ? "true" : "false"),
@@ -1823,15 +1853,19 @@ __sushi_add() {
         return expression switch
         {
             IrLiteralExpression literal => EmitLiteral(literal.Value),
-            IrIdentifierExpression identifier => $"\"${{{SanitizeName(identifier.Name)}:-}}\"",
+            IrIdentifierExpression identifier => $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\"",
             IrArrayLiteralExpression array => EmitArrayLiteral(array),
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
             IrMemberAccessExpression member => $"\"$(__sushi_json_member {EmitValueExpression(member.Target)} {Escape.BashSingleQuoted(member.MemberName)})\"",
             IrIndexExpression index => $"\"$(__sushi_json_index {EmitValueExpression(index.Target)} {EmitValueExpression(index.Index)})\"",
+            IrUnaryExpression unary when unary.Operator == "!" =>
+                $"\"$(if {EmitConditionCommand(unary.Operand)}; then printf '%s' 'false'; else printf '%s' 'true'; fi)\"",
             IrUnaryExpression unary when unary.Operator is "-" or "+" =>
                 $"$(( {unary.Operator}{EmitArithmeticExpression(unary.Operand)} ))",
             IrBinaryExpression binary when binary.Operator is "+" =>
                 $"\"$(__sushi_add {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})\"",
+            IrBinaryExpression binary when binary.Operator is "==" or "!=" or "<" or ">" or "<=" or ">=" or "&&" or "||" =>
+                $"\"$(if {EmitConditionCommand(binary)}; then printf '%s' 'true'; else printf '%s' 'false'; fi)\"",
             IrBinaryExpression binary when binary.Operator is "-" or "*" or "/" or "%" =>
                 $"$(( {EmitArithmeticExpression(binary)} ))",
             IrConditionalExpression conditional =>
@@ -1839,7 +1873,7 @@ __sushi_add() {
             IrIntrinsicCallExpression intrinsicCall => EmitIntrinsicValue(intrinsicCall),
             IrCallExpression call => $"$({EmitCallCommand(call)})",
             IrMethodCallExpression methodCall => $"\"$({EmitMethodCallCommand(methodCall)})\"",
-            IrAssignmentExpression assignment => $"$({EmitAssignmentExpression(assignment)}; printf '%s' \"${{{SanitizeName(assignment.Target.Name)}:-}}\")",
+            IrAssignmentExpression assignment => $"$({EmitAssignmentExpression(assignment)}; printf '%s' \"${{{SanitizeVariableName(assignment.Target.Name)}:-}}\")",
             _ => "''"
         };
     }
@@ -1935,7 +1969,7 @@ __sushi_add() {
                 => Convert.ToString(literal.Value, CultureInfo.InvariantCulture) ?? "0",
             IrLiteralExpression literal => EmitCheckedInteger(EmitLiteral(literal.Value), "arithmetic literal"),
             IrIdentifierExpression identifier => EmitCheckedInteger(
-                $"\"${{{SanitizeName(identifier.Name)}:-}}\"",
+                $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\"",
                 $"variable '{identifier.Name}'"),
             IrUnaryExpression unary when unary.Operator is "+" or "-" =>
                 $"{unary.Operator}{EmitArithmeticExpression(unary.Operand)}",
@@ -1976,9 +2010,27 @@ __sushi_add() {
         _builder.Append('\n');
     }
 
-    private static string SanitizeName(string name)
+    private static string SanitizeFunctionName(string name)
     {
         return name.Replace(".", "_").Replace("-", "_");
+    }
+
+    private string SanitizeVariableName(string name)
+    {
+        var sanitized = SanitizeFunctionName(name);
+        if (_zshMode && IsZshReservedVariableName(sanitized))
+        {
+            return $"__sushi_var_{sanitized}";
+        }
+
+        return sanitized;
+    }
+
+    private static bool IsZshReservedVariableName(string name)
+    {
+        return string.Equals(name, "status", StringComparison.Ordinal) ||
+               string.Equals(name, "pipestatus", StringComparison.Ordinal) ||
+               string.Equals(name, "_", StringComparison.Ordinal);
     }
 
     private string EmitIntrinsicCommand(IrIntrinsicCallExpression call)
