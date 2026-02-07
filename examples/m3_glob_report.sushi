@@ -1,0 +1,8 @@
+var files = std.fs.glob("src/**/*.cs")
+println("matched files:")
+println(std.json.stringify(files, indent: 2))
+
+var outPath = std.path.join("tmp", "glob-report.json")
+std.io.writeText(outPath, std.json.stringify(files, indent: 2))
+println("wrote report:")
+println(outPath)

@@ -1,0 +1,108 @@
+# Runtime Prerequisites and Portability (M3)
+
+This document defines what the generated scripts need at runtime, and where
+behavior differs between Bash and PowerShell targets.
+
+## 1. Runtime prerequisites
+
+### 1.1 For transpiling `.sushi` source
+
+- .NET SDK 9.0+
+
+### 1.2 For running Bash output (`-t Bash`)
+
+- Bash
+- `jq`
+- `curl`
+- standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`)
+
+### 1.3 For running PowerShell output (`-t Powershell7`)
+
+- PowerShell 7+ (`pwsh`) recommended
+- .NET runtime available to PowerShell (for `System.Net.Http.HttpClient`)
+
+## 2. Intrinsic behavior contract (M3)
+
+### 2.1 `std.process.run(...)`
+
+Returns an object with fields:
+
+- `code` (number)
+- `stdout` (string)
+- `stderr` (string)
+- `ok` (bool)
+- `command` (string)
+- `timedOut` (bool; currently always `false`)
+
+Notes:
+
+- Arguments are passed as arrays to avoid unsafe string concat/splitting.
+- If `allowFailure` is false and exit code is non-zero, script exits with that
+  code.
+
+### 2.2 `std.process.pipeline(...)`
+
+Runs stage descriptors in order. Stage `stdout` becomes the next stage `stdin`.
+Returns the same object shape as `std.process.run`, from the final stage.
+
+### 2.3 `std.json.parse(...)` and `std.json.stringify(...)`
+
+- `parse`: parses JSON text into dynamic object/array values.
+- invalid JSON returns a non-throwing fallback:
+  - Bash helper returns raw text
+  - PowerShell helper returns raw text
+- `stringify`: emits compact JSON by default.
+
+### 2.4 `std.fs.glob(pattern, cwd?)`
+
+- Supports recursive `**` patterns.
+- Returns an array.
+- Returns empty array on no match.
+- Path separators and absolute/relative shape are target-native right now.
+
+Portability guidance:
+
+- treat glob results as opaque paths
+- prefer `std.path.*` helpers for composing paths
+
+### 2.5 `std.http.get/post`
+
+Returns object fields:
+
+- `status` (number)
+- `ok` (bool)
+- `headers` (map/object)
+- `body` (string)
+- `json` (parsed JSON or null)
+- `url` (string)
+
+Network/runtime failure contract:
+
+- helpers return `status = 0` and `ok = false` instead of throwing through Sushi
+  script code.
+
+## 3. Known M3 limitations
+
+- `timeoutMs` parameter is accepted in process APIs but not enforced yet.
+- HTTP behavior can vary by host networking/TLS policy.
+- Glob output format is not fully normalized cross-target yet.
+
+## 4. Verification commands
+
+### 4.1 PowerShell target
+
+```powershell
+dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Powershell7
+pwsh -NoLogo -NoProfile -File examples/m3_verification.ps1
+```
+
+### 4.2 Bash target
+
+```bash
+dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Bash
+bash examples/m3_verification.sh
+```
+
+### 4.3 No-network environments
+
+Set `SUSHI_SKIP_HTTP=1` to skip HTTP assertions in verification scripts.
