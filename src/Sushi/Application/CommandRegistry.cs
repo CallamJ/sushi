@@ -7,6 +7,7 @@ using Sushi.Application.Commands;
 public enum TargetLanguage {
     Powershell7,
     Bash,
+    Zsh,
 }
 
 static class CommandRegistry

@@ -60,13 +60,39 @@ jobs:
       - name: Install Bash runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl
+          sudo apt-get install -y curl
 
       - name: Transpile M3 verification to Bash
         run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t Bash
 
       - name: Execute Bash verification
         run: bash examples/m3_verification.sh
+
+  m3-verification-zsh:
+    name: M3 Verification (Zsh)
+    runs-on: macos-latest
+    needs: unit-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/packages.lock.json
+
+      - name: Restore
+        run: dotnet restore src/Sushi/Sushi.csproj
+
+      - name: Transpile M3 verification to Zsh
+        run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t Zsh
+
+      - name: Execute Zsh verification
+        run: zsh examples/m3_verification.zsh
 
   m3-verification-powershell:
     name: M3 Verification (PowerShell)

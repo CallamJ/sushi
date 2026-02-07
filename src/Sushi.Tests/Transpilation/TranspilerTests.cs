@@ -29,6 +29,28 @@ public class TranspilerTests
     }
 
     [Fact]
+    public void Transpile_Zsh_BasicScript_Succeeds()
+    {
+        const string source = """
+            var x = 1
+            println(x)
+            """;
+
+        var transpiler = new Transpiler();
+        var result = transpiler.Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "basic.sushi",
+            TargetLanguage = TargetLanguage.Zsh
+        });
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.EmittedCode);
+        Assert.Contains("#!/usr/bin/env zsh", result.EmittedCode);
+        Assert.Contains("printf '%s\\n'", result.EmittedCode);
+    }
+
+    [Fact]
     public void Transpile_PowerShell_BasicScript_Succeeds()
     {
         const string source = """

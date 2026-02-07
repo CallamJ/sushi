@@ -87,6 +87,7 @@ public sealed class Transpiler
         return targetLanguage switch
         {
             TargetLanguage.Bash => new BashEmitter(),
+            TargetLanguage.Zsh => new ZshEmitter(),
             TargetLanguage.Powershell7 => new PowerShellEmitter(),
             _ => throw new ArgumentOutOfRangeException(nameof(targetLanguage), targetLanguage, "Unsupported target")
         };

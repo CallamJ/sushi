@@ -218,7 +218,36 @@ public class EmitterTests
         Assert.Contains("__sushi_http_get", script);
         Assert.Contains("__sushi_fs_glob", script);
         Assert.Contains("__sushi_http_request()", script);
-        Assert.Contains("jq -Rsc", script);
+        Assert.Contains("__sushi_j_parse_value", script);
+        Assert.DoesNotContain("perl ", script);
+        Assert.DoesNotContain("| jq", script);
+        Assert.DoesNotContain("jq -", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ZshEmitter_EmitsZshScript()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("x", new IrLiteralExpression(1)),
+            new IrExpressionStatement(new IrIntrinsicCallExpression(
+                "println",
+                IntrinsicId.Println,
+                new IrExpression[]
+                {
+                    new IrIdentifierExpression("x")
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new ZshEmitter();
+        var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
+
+        Assert.Contains("#!/usr/bin/env zsh", script);
+        Assert.Contains("set -eu", script);
+        Assert.Contains("set -o pipefail", script);
+        Assert.Contains("setopt typesetsilent", script);
         Assert.Empty(diagnostics);
     }
 }

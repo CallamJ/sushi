@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/callamj/sushi/actions/workflows/ci.yml/badge.svg)](https://github.com/callamj/sushi/actions/workflows/ci.yml)
 
-Sushi is a shell scripting language that transpiles to Bash or PowerShell.
+Sushi is a shell scripting language that transpiles to Bash, Zsh, or PowerShell.
 The goal is to write one script and run it across environments without manually
-maintaining two shells.
+maintaining per-shell script variants.
 
 ## Current status
 
@@ -22,10 +22,20 @@ Milestone 3 runtime intrinsics are now available for:
 
 - .NET SDK 9.0+
 
+Default transpile target selection:
+
+- Windows: `Powershell7`
+- macOS: `Zsh`
+- Linux/WSL: `Bash`
+
 ### Run transpiled Bash scripts
 
 - Bash
-- `jq` (required for JSON/object plumbing in emitted runtime helpers)
+- `curl` (required for `std.http.get/post`)
+
+### Run transpiled Zsh scripts
+
+- Zsh
 - `curl` (required for `std.http.get/post`)
 
 ### Run transpiled PowerShell scripts
@@ -51,6 +61,13 @@ dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Ba
 bash examples/m3_verification.sh
 ```
 
+### Zsh target
+
+```zsh
+dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Zsh
+zsh examples/m3_verification.zsh
+```
+
 If your environment blocks outbound HTTP, set `SUSHI_SKIP_HTTP=1` before
 running verification.
 
@@ -59,7 +76,7 @@ running verification.
 See `docs/runtime-prereqs-and-portability.md` for:
 
 - runtime dependency details per target
-- behavior differences between Bash and PowerShell emitters
+- behavior differences between Bash, Zsh, and PowerShell emitters
 - current known limitations for M3 intrinsics
 
 ## CI
@@ -68,6 +85,7 @@ GitHub Actions now runs:
 
 - unit tests
 - M3 verification transpile + execution on Ubuntu (Bash target)
+- M3 verification transpile + execution on macOS (Zsh target)
 - M3 verification transpile + execution on Windows (PowerShell target)
 - NuGet package caching for faster runs
 

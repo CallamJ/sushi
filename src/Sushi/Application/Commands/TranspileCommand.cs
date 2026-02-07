@@ -10,9 +10,17 @@ static class TranspileCommand
 {
     public static TargetLanguage GetTarget()
     {
-        return RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? TargetLanguage.Powershell7
-            : TargetLanguage.Bash;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return TargetLanguage.Powershell7;
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            return TargetLanguage.Zsh;
+        }
+
+        return TargetLanguage.Bash;
     }
 
     public static Command Create()
@@ -117,7 +125,12 @@ static class TranspileCommand
 
     private static string GetOutputPath(string inputPath, TargetLanguage target)
     {
-        var extension = target == TargetLanguage.Bash ? ".sh" : ".ps1";
+        var extension = target switch
+        {
+            TargetLanguage.Bash => ".sh",
+            TargetLanguage.Zsh => ".zsh",
+            _ => ".ps1"
+        };
         var directory = Path.GetDirectoryName(inputPath) ?? ".";
         var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(inputPath);
         return Path.Combine(directory, fileNameWithoutExtension + extension);

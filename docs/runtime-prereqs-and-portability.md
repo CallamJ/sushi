@@ -1,9 +1,15 @@
 # Runtime Prerequisites and Portability (M3)
 
 This document defines what the generated scripts need at runtime, and where
-behavior differs between Bash and PowerShell targets.
+behavior differs between Bash, Zsh, and PowerShell targets.
 
 ## 1. Runtime prerequisites
+
+Default target selection:
+
+- Windows: `Powershell7`
+- macOS: `Zsh`
+- Linux/WSL: `Bash`
 
 ### 1.1 For transpiling `.sushi` source
 
@@ -12,11 +18,16 @@ behavior differs between Bash and PowerShell targets.
 ### 1.2 For running Bash output (`-t Bash`)
 
 - Bash
-- `jq`
 - `curl`
-- standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`)
+- standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`, `find`)
 
-### 1.3 For running PowerShell output (`-t Powershell7`)
+### 1.3 For running Zsh output (`-t Zsh`)
+
+- Zsh
+- `curl`
+- standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`, `find`)
+
+### 1.4 For running PowerShell output (`-t Powershell7`)
 
 - PowerShell 7+ (`pwsh`) recommended
 - .NET runtime available to PowerShell (for `System.Net.Http.HttpClient`)
@@ -49,7 +60,7 @@ Returns the same object shape as `std.process.run`, from the final stage.
 
 - `parse`: parses JSON text into dynamic object/array values.
 - invalid JSON returns a non-throwing fallback:
-  - Bash helper returns raw text
+  - Bash/Zsh helpers return raw text
   - PowerShell helper returns raw text
 - `stringify`: emits compact JSON by default.
 
@@ -86,6 +97,7 @@ Network/runtime failure contract:
 - `timeoutMs` parameter is accepted in process APIs but not enforced yet.
 - HTTP behavior can vary by host networking/TLS policy.
 - Glob output format is not fully normalized cross-target yet.
+- Bash/Zsh JSON operations are pure-shell in emitted scripts (no `jq`/`perl` dependency).
 
 ## 4. Verification commands
 
@@ -103,6 +115,13 @@ dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Ba
 bash examples/m3_verification.sh
 ```
 
-### 4.3 No-network environments
+### 4.3 Zsh target
+
+```zsh
+dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Zsh
+zsh examples/m3_verification.zsh
+```
+
+### 4.4 No-network environments
 
 Set `SUSHI_SKIP_HTTP=1` to skip HTTP assertions in verification scripts.

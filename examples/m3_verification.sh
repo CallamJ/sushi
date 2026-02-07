@@ -1,63 +1,697 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-__sushi_to_json() {
-  local value="${1-}"
-  if printf '%s' "$value" | jq -e . >/dev/null 2>&1; then
-    printf '%s' "$value"
-  else
-    jq -cn --arg v "$value" '$v'
+__sushi_j_reset() {
+  __sushi_j_src="${1-}"
+  __sushi_j_len=${#__sushi_j_src}
+  __sushi_j_pos=0
+  __sushi_j_err=''
+  __sushi_j_last=''
+}
+
+__sushi_j_char() {
+  if (( __sushi_j_pos >= __sushi_j_len )); then
+    printf ''
+    return
   fi
+  printf '%s' "${__sushi_j_src:$__sushi_j_pos:1}"
+}
+
+__sushi_j_skip_ws() {
+  while (( __sushi_j_pos < __sushi_j_len )); do
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
+    case "$c" in
+      ' '|$'\t'|$'\n'|$'\r') __sushi_j_pos=$((__sushi_j_pos + 1)) ;;
+      *) break ;;
+    esac
+  done
+}
+
+__sushi_j_fail() {
+  __sushi_j_err="${1-parse error}"
+  return 1
+}
+
+__sushi_j_is_digit() {
+  case "${1-}" in
+    [0-9]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+__sushi_j_is_integer() {
+  local s="${1-}"
+  [[ -z "$s" ]] && return 1
+  if [[ "${s:0:1}" == "-" ]]; then
+    s="${s:1}"
+  fi
+  [[ -z "$s" ]] && return 1
+  case "$s" in
+    *[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+__sushi_j_parse_string() {
+  local start=$__sushi_j_pos
+  [[ "$(__sushi_j_char)" == '"' ]] || __sushi_j_fail 'expected string'
+  __sushi_j_pos=$((__sushi_j_pos + 1))
+
+  while (( __sushi_j_pos < __sushi_j_len )); do
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
+    if [[ "$c" == '"' ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      __sushi_j_last="${__sushi_j_src:$start:$((__sushi_j_pos - start))}"
+      return 0
+    fi
+
+    if [[ "$c" == "\\" ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      (( __sushi_j_pos < __sushi_j_len )) || __sushi_j_fail 'unterminated escape'
+      local esc="${__sushi_j_src:$__sushi_j_pos:1}"
+      case "$esc" in
+        '"'|'\\'|'/'|'b'|'f'|'n'|'r'|'t')
+          __sushi_j_pos=$((__sushi_j_pos + 1))
+          ;;
+        'u')
+          __sushi_j_pos=$((__sushi_j_pos + 1))
+          local i
+          for i in 0 1 2 3; do
+            (( __sushi_j_pos + i < __sushi_j_len )) || __sushi_j_fail 'bad unicode escape'
+            local hex="${__sushi_j_src:$((__sushi_j_pos + i)):1}"
+            case "$hex" in
+              [0-9a-fA-F]) ;;
+              *) __sushi_j_fail 'bad unicode escape' ;;
+            esac
+          done
+          __sushi_j_pos=$((__sushi_j_pos + 4))
+          ;;
+        *)
+          __sushi_j_fail 'bad escape sequence'
+          ;;
+      esac
+    else
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+    fi
+  done
+
+  __sushi_j_fail 'unterminated string'
+}
+
+__sushi_j_parse_number() {
+  local start=$__sushi_j_pos
+  local c="${__sushi_j_src:$__sushi_j_pos:1}"
+
+  if [[ "$c" == "-" ]]; then
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+  fi
+
+  (( __sushi_j_pos < __sushi_j_len )) || __sushi_j_fail 'bad number'
+  c="${__sushi_j_src:$__sushi_j_pos:1}"
+  if [[ "$c" == "0" ]]; then
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+  else
+    __sushi_j_is_digit "$c" || __sushi_j_fail 'bad number'
+    while (( __sushi_j_pos < __sushi_j_len )); do
+      c="${__sushi_j_src:$__sushi_j_pos:1}"
+      __sushi_j_is_digit "$c" || break
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+    done
+  fi
+
+  if (( __sushi_j_pos < __sushi_j_len )) && [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "." ]]; then
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    (( __sushi_j_pos < __sushi_j_len )) || __sushi_j_fail 'bad number fraction'
+    c="${__sushi_j_src:$__sushi_j_pos:1}"
+    __sushi_j_is_digit "$c" || __sushi_j_fail 'bad number fraction'
+    while (( __sushi_j_pos < __sushi_j_len )); do
+      c="${__sushi_j_src:$__sushi_j_pos:1}"
+      __sushi_j_is_digit "$c" || break
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+    done
+  fi
+
+  if (( __sushi_j_pos < __sushi_j_len )); then
+    c="${__sushi_j_src:$__sushi_j_pos:1}"
+    if [[ "$c" == "e" || "$c" == "E" ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      if (( __sushi_j_pos < __sushi_j_len )); then
+        c="${__sushi_j_src:$__sushi_j_pos:1}"
+        if [[ "$c" == "+" || "$c" == "-" ]]; then
+          __sushi_j_pos=$((__sushi_j_pos + 1))
+        fi
+      fi
+      (( __sushi_j_pos < __sushi_j_len )) || __sushi_j_fail 'bad number exponent'
+      c="${__sushi_j_src:$__sushi_j_pos:1}"
+      __sushi_j_is_digit "$c" || __sushi_j_fail 'bad number exponent'
+      while (( __sushi_j_pos < __sushi_j_len )); do
+        c="${__sushi_j_src:$__sushi_j_pos:1}"
+        __sushi_j_is_digit "$c" || break
+        __sushi_j_pos=$((__sushi_j_pos + 1))
+      done
+    fi
+  fi
+
+  __sushi_j_last="${__sushi_j_src:$start:$((__sushi_j_pos - start))}"
+  return 0
+}
+
+__sushi_j_parse_literal() {
+  local expected="${1-}"
+  local n=${#expected}
+  local got="${__sushi_j_src:$__sushi_j_pos:$n}"
+  [[ "$got" == "$expected" ]] || __sushi_j_fail "expected $expected"
+  __sushi_j_pos=$((__sushi_j_pos + n))
+  __sushi_j_last="$expected"
+  return 0
+}
+
+__sushi_j_parse_array() {
+  [[ "$(__sushi_j_char)" == "[" ]] || __sushi_j_fail 'expected array'
+  __sushi_j_pos=$((__sushi_j_pos + 1))
+  __sushi_j_skip_ws
+  if [[ "$(__sushi_j_char)" == "]" ]]; then
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    __sushi_j_last='[]'
+    return 0
+  fi
+
+  local out='['
+  local first=true
+  while :; do
+    __sushi_j_skip_ws
+    __sushi_j_parse_value || return 1
+    if [[ "$first" == "true" ]]; then
+      first=false
+    else
+      out+=','
+    fi
+    out+="$__sushi_j_last"
+
+    __sushi_j_skip_ws
+    local c="$(__sushi_j_char)"
+    if [[ "$c" == "," ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      continue
+    fi
+    if [[ "$c" == "]" ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      out+=']'
+      __sushi_j_last="$out"
+      return 0
+    fi
+    __sushi_j_fail 'expected , or ]'
+  done
+}
+
+__sushi_j_parse_object() {
+  [[ "$(__sushi_j_char)" == "{" ]] || __sushi_j_fail 'expected object'
+  __sushi_j_pos=$((__sushi_j_pos + 1))
+  __sushi_j_skip_ws
+  if [[ "$(__sushi_j_char)" == "}" ]]; then
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    __sushi_j_last='{}'
+    return 0
+  fi
+
+  local out='{'
+  local first=true
+  while :; do
+    __sushi_j_skip_ws
+    __sushi_j_parse_string || return 1
+    local key_json="$__sushi_j_last"
+
+    __sushi_j_skip_ws
+    [[ "$(__sushi_j_char)" == ":" ]] || __sushi_j_fail 'expected :'
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+
+    __sushi_j_skip_ws
+    __sushi_j_parse_value || return 1
+    local value_json="$__sushi_j_last"
+
+    if [[ "$first" == "true" ]]; then
+      first=false
+    else
+      out+=','
+    fi
+    out+="$key_json:$value_json"
+
+    __sushi_j_skip_ws
+    local c="$(__sushi_j_char)"
+    if [[ "$c" == "," ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      continue
+    fi
+    if [[ "$c" == "}" ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      out+='}'
+      __sushi_j_last="$out"
+      return 0
+    fi
+    __sushi_j_fail 'expected , or }'
+  done
+}
+
+__sushi_j_parse_value() {
+  __sushi_j_skip_ws
+  local c="$(__sushi_j_char)"
+  case "$c" in
+    '"') __sushi_j_parse_string ;;
+    '{') __sushi_j_parse_object ;;
+    '[') __sushi_j_parse_array ;;
+    't') __sushi_j_parse_literal 'true' ;;
+    'f') __sushi_j_parse_literal 'false' ;;
+    'n') __sushi_j_parse_literal 'null' ;;
+    '-'|[0-9]) __sushi_j_parse_number ;;
+    *) __sushi_j_fail 'unexpected character' ;;
+  esac
+}
+
+__sushi_json_quote() {
+  local value="${1-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  value="${value//$'\f'/\\f}"
+  value="${value//$'\b'/\\b}"
+  printf '"%s"' "$value"
+}
+
+__sushi_json_try_compact() {
+  local text="${1-}"
+  __sushi_j_reset "$text"
+  __sushi_j_skip_ws
+  __sushi_j_parse_value || return 1
+  local compact="$__sushi_j_last"
+  __sushi_j_skip_ws
+  (( __sushi_j_pos == __sushi_j_len )) || return 1
+  printf '%s' "$compact"
+}
+
+__sushi_j_unescape_string() {
+  local json="${1-}"
+  local len=${#json}
+  if (( len < 2 )); then
+    printf ''
+    return
+  fi
+
+  local i=1
+  local out=''
+  while (( i < len - 1 )); do
+    local c="${json:$i:1}"
+    if [[ "$c" == "\\" ]]; then
+      i=$((i + 1))
+      (( i < len - 1 )) || break
+      local esc="${json:$i:1}"
+      case "$esc" in
+        '"') out+='"' ;;
+        '\\') out+='\\' ;;
+        '/') out+='/' ;;
+        'b') out+=$'\b' ;;
+        'f') out+=$'\f' ;;
+        'n') out+=$'\n' ;;
+        'r') out+=$'\r' ;;
+        't') out+=$'\t' ;;
+        'u')
+          if (( i + 4 < len )); then
+            local hex="${json:$((i + 1)):4}"
+            if [[ "$hex" == [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F] ]]; then
+              local code=$((16#$hex))
+              if (( code >= 32 && code <= 126 )); then
+                out+=$(printf "\\$(printf '%03o' "$code")")
+              else
+                out+="\\u$hex"
+              fi
+              i=$((i + 4))
+            else
+              out+='u'
+            fi
+          else
+            out+='u'
+          fi
+          ;;
+        *)
+          out+="\\$esc"
+          ;;
+      esac
+    else
+      out+="$c"
+    fi
+    i=$((i + 1))
+  done
+
+  printf '%s' "$out"
+}
+
+__sushi_json_value_to_raw() {
+  local value_json="${1-}"
+  if [[ -z "$value_json" ]]; then
+    printf ''
+    return
+  fi
+
+  case "$value_json" in
+    null) printf '' ;;
+    true|false) printf '%s' "$value_json" ;;
+    \{*|\[* ) printf '%s' "$value_json" ;;
+    \"*) __sushi_j_unescape_string "$value_json" ;;
+    *) printf '%s' "$value_json" ;;
+  esac
 }
 
 __sushi_json_array() {
-  if [[ "$#" -eq 0 ]]; then
-    jq -nc '[]'
-    return
-  fi
-  printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1] | map(. as $raw | try ($raw | fromjson) catch $raw)'
+  local out='['
+  local first=true
+  local raw compact
+  for raw in "$@"; do
+    if [[ "$first" == "true" ]]; then
+      first=false
+    else
+      out+=','
+    fi
+
+    if compact="$(__sushi_json_try_compact "$raw")"; then
+      out+="$compact"
+    else
+      out+="$(__sushi_json_quote "$raw")"
+    fi
+  done
+  out+=']'
+  printf '%s' "$out"
 }
 
 __sushi_json_object() {
-  local result='{}'
-  while [[ "$#" -gt 1 ]]; do
-    local key value
+  local out='{'
+  local first=true
+  local key raw value_json key_json
+  while (( "$#" > 1 )); do
     key="$1"
-    value="$2"
+    raw="$2"
     shift 2
-    result="$(printf '%s' "$result" | jq -c --arg k "$key" --arg v "$value" '. + {($k): (try ($v | fromjson) catch $v)}')"
+
+    if [[ "$first" == "true" ]]; then
+      first=false
+    else
+      out+=','
+    fi
+
+    key_json="$(__sushi_json_quote "$key")"
+    if value_json="$(__sushi_json_try_compact "$raw")"; then
+      :
+    else
+      value_json="$(__sushi_json_quote "$raw")"
+    fi
+    out+="$key_json:$value_json"
   done
-  printf '%s' "$result"
+  out+='}'
+  printf '%s' "$out"
+}
+
+__sushi_json_array_each_json() {
+  local json="${1-}"
+  __sushi_j_reset "$json"
+  __sushi_j_skip_ws
+  [[ "$(__sushi_j_char)" == "[" ]] || return 0
+  __sushi_j_pos=$((__sushi_j_pos + 1))
+  __sushi_j_skip_ws
+  if [[ "$(__sushi_j_char)" == "]" ]]; then
+    return 0
+  fi
+
+  while :; do
+    __sushi_j_parse_value || return 0
+    printf '%s\n' "$__sushi_j_last"
+    __sushi_j_skip_ws
+    local c="$(__sushi_j_char)"
+    if [[ "$c" == "," ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      __sushi_j_skip_ws
+      continue
+    fi
+    [[ "$c" == "]" ]] && return 0
+    return 0
+  done
+}
+
+__sushi_json_array_each_raw() {
+  local json="${1-}"
+  local item
+  while IFS= read -r item; do
+    __sushi_json_value_to_raw "$item"
+    printf '\n'
+  done < <(__sushi_json_array_each_json "$json")
+}
+
+__sushi_json_object_each_kv() {
+  local json="${1-}"
+  local compact
+  compact="$(__sushi_json_try_compact "$json")" || return 0
+
+  __sushi_j_reset "$compact"
+  __sushi_j_skip_ws
+  [[ "$(__sushi_j_char)" == "{" ]] || return 0
+  __sushi_j_pos=$((__sushi_j_pos + 1))
+  __sushi_j_skip_ws
+  if [[ "$(__sushi_j_char)" == "}" ]]; then
+    return 0
+  fi
+
+  while :; do
+    __sushi_j_parse_string || return 0
+    local key_json="$__sushi_j_last"
+    local key_raw="$(__sushi_j_unescape_string "$key_json")"
+
+    __sushi_j_skip_ws
+    [[ "$(__sushi_j_char)" == ":" ]] || return 0
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    __sushi_j_skip_ws
+
+    __sushi_j_parse_value || return 0
+    local value_json="$__sushi_j_last"
+    local value_raw="$(__sushi_json_value_to_raw "$value_json")"
+
+    key_raw="${key_raw//$'\t'/ }"
+    key_raw="${key_raw//$'\n'/ }"
+    value_raw="${value_raw//$'\t'/ }"
+    value_raw="${value_raw//$'\n'/ }"
+    printf '%s\t%s\n' "$key_raw" "$value_raw"
+
+    __sushi_j_skip_ws
+    local c="$(__sushi_j_char)"
+    if [[ "$c" == "," ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      __sushi_j_skip_ws
+      continue
+    fi
+    [[ "$c" == "}" ]] && return 0
+    return 0
+  done
 }
 
 __sushi_json_member() {
   local json="${1-}"
   local key="${2-}"
-  printf '%s' "$json" | jq -rc --arg key "$key" '.[$key]'
+  local target_json="$(__sushi_json_quote "$key")"
+  local compact
+  compact="$(__sushi_json_try_compact "$json")" || return 0
+
+  __sushi_j_reset "$compact"
+  __sushi_j_skip_ws
+  [[ "$(__sushi_j_char)" == "{" ]] || return 0
+  __sushi_j_pos=$((__sushi_j_pos + 1))
+  __sushi_j_skip_ws
+  if [[ "$(__sushi_j_char)" == "}" ]]; then
+    return 0
+  fi
+
+  while :; do
+    __sushi_j_parse_string || return 0
+    local key_json="$__sushi_j_last"
+    __sushi_j_skip_ws
+    [[ "$(__sushi_j_char)" == ":" ]] || return 0
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    __sushi_j_skip_ws
+    __sushi_j_parse_value || return 0
+    local value_json="$__sushi_j_last"
+
+    if [[ "$key_json" == "$target_json" ]]; then
+      __sushi_json_value_to_raw "$value_json"
+      return 0
+    fi
+
+    __sushi_j_skip_ws
+    local c="$(__sushi_j_char)"
+    if [[ "$c" == "," ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      __sushi_j_skip_ws
+      continue
+    fi
+    [[ "$c" == "}" ]] && return 0
+    return 0
+  done
 }
 
 __sushi_json_index() {
   local json="${1-}"
   local index="${2-}"
-  printf '%s' "$json" | jq -rc --arg idx "$index" 'if ($idx | test("^-?[0-9]+$")) then .[$idx | tonumber] else .[$idx] end'
+  local compact="$json"
+  __sushi_j_reset "$compact"
+  __sushi_j_skip_ws
+  local first_char="$(__sushi_j_char)"
+
+  if [[ "$first_char" == "{" ]]; then
+    __sushi_json_member "$compact" "$index"
+    return 0
+  fi
+
+  if [[ "$first_char" != "[" ]]; then
+    return 0
+  fi
+
+  __sushi_j_is_integer "$index" || return 0
+  local idx=$index
+  local count=0
+  while IFS= read -r _line; do
+    count=$((count + 1))
+  done < <(__sushi_json_array_each_json "$compact")
+
+  if (( idx < 0 )); then
+    idx=$((count + idx))
+  fi
+  (( idx >= 0 && idx < count )) || return 0
+
+  local i=0
+  local item
+  while IFS= read -r item; do
+    if (( i == idx )); then
+      __sushi_json_value_to_raw "$item"
+      return 0
+    fi
+    i=$((i + 1))
+  done < <(__sushi_json_array_each_json "$compact")
+}
+
+__sushi_j_indent() {
+  local count="${1-0}"
+  local out=''
+  local i=0
+  while (( i < count )); do
+    out+=' '
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
+__sushi_j_pretty_json() {
+  local compact="${1-}"
+  local indent="${2-2}"
+  local len=${#compact}
+  local i=0
+  local out=''
+  local in_string=false
+  local escaped=false
+  local depth=0
+
+  while (( i < len )); do
+    local c="${compact:$i:1}"
+
+    if [[ "$in_string" == "true" ]]; then
+      out+="$c"
+      if [[ "$escaped" == "true" ]]; then
+        escaped=false
+      elif [[ "$c" == "\\" ]]; then
+        escaped=true
+      elif [[ "$c" == '"' ]]; then
+        in_string=false
+      fi
+      i=$((i + 1))
+      continue
+    fi
+
+    case "$c" in
+      '"')
+        in_string=true
+        out+="$c"
+        ;;
+      '{'|'[')
+        out+="$c"
+        local next="${compact:$((i + 1)):1}"
+        if [[ "$next" != "}" && "$next" != "]" ]]; then
+          depth=$((depth + 1))
+          out+=$'\n'
+          out+="$(__sushi_j_indent $((depth * indent)))"
+        fi
+        ;;
+      '}'|']')
+        local prev="${compact:$((i - 1)):1}"
+        if [[ "$prev" != "{" && "$prev" != "[" ]]; then
+          out+=$'\n'
+          out+="$(__sushi_j_indent $(((depth - 1) * indent)))"
+        fi
+        depth=$((depth - 1))
+        (( depth < 0 )) && depth=0
+        out+="$c"
+        ;;
+      ',')
+        out+=","
+        out+=$'\n'
+        out+="$(__sushi_j_indent $((depth * indent)))"
+        ;;
+      ':')
+        out+=": "
+        ;;
+      *)
+        out+="$c"
+        ;;
+    esac
+
+    i=$((i + 1))
+  done
+
+  printf '%s' "$out"
 }
 
 __sushi_json_parse() {
   local text="${1-}"
-  printf '%s' "$text" | jq -c .
+  local compact
+  if compact="$(__sushi_json_try_compact "$text")"; then
+    printf '%s' "$compact"
+  else
+    printf '%s' "$text"
+  fi
+}
+
+__sushi_json_last_compact() {
+  local text="${1-}"
+  local line compact last=''
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if compact="$(__sushi_json_try_compact "$line")"; then
+      last="$compact"
+    fi
+  done <<< "$text"
+
+  if [[ -n "$last" ]]; then
+    printf '%s' "$last"
+  else
+    printf '%s' "$text"
+  fi
 }
 
 __sushi_json_stringify() {
   local value="${1-}"
   local indent="${2:-0}"
-  if printf '%s' "$value" | jq -e . >/dev/null 2>&1; then
-    if [[ "$indent" =~ ^[0-9]+$ ]] && [[ "$indent" -gt 0 ]]; then
-      printf '%s' "$value" | jq --indent "$indent" .
+  local compact
+  if compact="$(__sushi_json_try_compact "$value")"; then
+    if __sushi_j_is_integer "$indent" && (( indent > 0 )); then
+      __sushi_j_pretty_json "$compact" "$indent"
     else
-      printf '%s' "$value" | jq -c .
+      printf '%s' "$compact"
     fi
   else
-    jq -cn --arg v "$value" '$v'
+    __sushi_json_quote "$value"
   fi
 }
 
@@ -77,18 +711,19 @@ __sushi_process_run() {
   input_file="$(mktemp)"
   printf '%s' "$input_text" > "$input_file"
 
-  local -a argv env_pairs
-  argv=("$command")
+  local -a cmd_argv env_pairs
+  cmd_argv=("$command")
   if [[ -n "$args_json" ]] && [[ "$args_json" != "null" ]]; then
     while IFS= read -r arg; do
-      argv+=("$arg")
-    done < <(printf '%s' "$args_json" | jq -r '.[]?')
+      cmd_argv+=("$arg")
+    done < <(__sushi_json_array_each_raw "$args_json")
   fi
 
   if [[ -n "$env_json" ]] && [[ "$env_json" != "null" ]]; then
-    while IFS= read -r pair; do
-      env_pairs+=("$pair")
-    done < <(printf '%s' "$env_json" | jq -r 'to_entries[]? | "\(.key)=\(.value|tostring)"')
+    while IFS=$'\t' read -r key value; do
+      [[ -z "$key" ]] && continue
+      env_pairs+=("${key}=${value}")
+    done < <(__sushi_json_object_each_kv "$env_json")
   fi
 
   local exit_code timed_out=false
@@ -97,17 +732,17 @@ __sushi_process_run() {
     (
       cd -- "$cwd" || exit 1
       if [[ "$stream" == "true" ]]; then
-        env "${env_pairs[@]}" "${argv[@]}" < "$input_file" > >(tee "$stdout_file") 2> >(tee "$stderr_file" >&2)
+        env "${env_pairs[@]}" "${cmd_argv[@]}" < "$input_file" > >(tee "$stdout_file") 2> >(tee "$stderr_file" >&2)
       else
-        env "${env_pairs[@]}" "${argv[@]}" < "$input_file" > "$stdout_file" 2> "$stderr_file"
+        env "${env_pairs[@]}" "${cmd_argv[@]}" < "$input_file" > "$stdout_file" 2> "$stderr_file"
       fi
     )
     exit_code=$?
   else
     if [[ "$stream" == "true" ]]; then
-      env "${env_pairs[@]}" "${argv[@]}" < "$input_file" > >(tee "$stdout_file") 2> >(tee "$stderr_file" >&2)
+      env "${env_pairs[@]}" "${cmd_argv[@]}" < "$input_file" > >(tee "$stdout_file") 2> >(tee "$stderr_file" >&2)
     else
-      env "${env_pairs[@]}" "${argv[@]}" < "$input_file" > "$stdout_file" 2> "$stderr_file"
+      env "${env_pairs[@]}" "${cmd_argv[@]}" < "$input_file" > "$stdout_file" 2> "$stderr_file"
     fi
     exit_code=$?
   fi
@@ -116,22 +751,24 @@ __sushi_process_run() {
   local stdout_text stderr_text command_text ok_json
   stdout_text="$(cat -- "$stdout_file" 2>/dev/null || true)"
   stderr_text="$(cat -- "$stderr_file" 2>/dev/null || true)"
-  command_text="$(printf '%q ' "${argv[@]}")"
+  command_text="$(printf '%q ' "${cmd_argv[@]}")"
   command_text="${command_text% }"
   ok_json=false
   if [[ "$exit_code" -eq 0 ]]; then
     ok_json=true
   fi
 
-  local result_json
-  result_json="$(jq -cn \
-    --argjson code "$exit_code" \
-    --arg stdout "$stdout_text" \
-    --arg stderr "$stderr_text" \
-    --arg command "$command_text" \
-    --argjson ok "$ok_json" \
-    --argjson timedOut "$timed_out" \
-    '{ code: $code, stdout: $stdout, stderr: $stderr, ok: $ok, command: $command, timedOut: $timedOut }')"
+  local stdout_json stderr_json command_json result_json
+  stdout_json="$(__sushi_json_quote "$stdout_text")"
+  stderr_json="$(__sushi_json_quote "$stderr_text")"
+  command_json="$(__sushi_json_quote "$command_text")"
+  result_json="$(__sushi_json_object \
+    code "$exit_code" \
+    stdout "$stdout_json" \
+    stderr "$stderr_json" \
+    command "$command_json" \
+    ok "$ok_json" \
+    timedOut "$timed_out")"
 
   rm -f -- "$stdout_file" "$stderr_file" "$input_file"
 
@@ -160,20 +797,21 @@ __sushi_process_pipeline() {
 
   while IFS= read -r stage; do
     local stage_command stage_args stage_result stage_code stage_stderr
-    stage_command="$(printf '%s' "$stage" | jq -r '.command // empty')"
-    stage_args="$(printf '%s' "$stage" | jq -c '.args // []')"
+    stage_command="$(__sushi_json_member "$stage" "command")"
+    stage_args="$(__sushi_json_member "$stage" "args")"
     stage_result="$(__sushi_process_run "$stage_command" "$stage_args" "$cwd" "$env_json" "$next_input" "$timeout_ms" "true" "$stream")"
-    stage_code="$(printf '%s' "$stage_result" | jq -r '.code')"
+    stage_result="$(__sushi_json_last_compact "$stage_result")"
+    stage_code="$(__sushi_json_member "$stage_result" "code")"
     if [[ "$allow_failure" != "true" ]] && [[ "$stage_code" -ne 0 ]]; then
-      stage_stderr="$(printf '%s' "$stage_result" | jq -r '.stderr // ""')"
+      stage_stderr="$(__sushi_json_member "$stage_result" "stderr")"
       if [[ -n "$stage_stderr" ]]; then
         printf '%s\n' "$stage_stderr" >&2
       fi
       exit "$stage_code"
     fi
-    next_input="$(printf '%s' "$stage_result" | jq -r '.stdout // ""')"
+    next_input="$(__sushi_json_member "$stage_result" "stdout")"
     last_result="$stage_result"
-  done < <(printf '%s' "$stages_json" | jq -c '.[]?')
+  done < <(__sushi_json_array_each_json "$stages_json")
 
   printf '%s' "$last_result"
 }
@@ -181,7 +819,7 @@ __sushi_process_pipeline() {
 __sushi_process_fail() {
   local result="${1-}"
   local ok
-  ok="$(printf '%s' "$result" | jq -r '.ok // false')"
+  ok="$(__sushi_json_member "$result" "ok")"
   if [[ "$ok" == "true" ]]; then
     printf 'false'
   else
@@ -192,9 +830,9 @@ __sushi_process_fail() {
 __sushi_process_require_success() {
   local result="${1-}"
   local code stderr_text
-  code="$(printf '%s' "$result" | jq -r '.code // 0')"
+  code="$(__sushi_json_member "$result" "code")"
   if [[ "$code" -ne 0 ]]; then
-    stderr_text="$(printf '%s' "$result" | jq -r '.stderr // ""')"
+    stderr_text="$(__sushi_json_member "$result" "stderr")"
     if [[ -n "$stderr_text" ]]; then
       printf '%s\n' "$stderr_text" >&2
     fi
@@ -210,20 +848,17 @@ __sushi_fs_glob() {
 
   if [[ -n "$cwd" ]] && [[ "$cwd" != "null" ]]; then
     while IFS= read -r line; do
+      line="${line#./}"
       [[ -n "$line" ]] && results+=("$line")
-    done < <(cd -- "$cwd" 2>/dev/null && shopt -s globstar nullglob && compgen -G "$pattern" || true)
+    done < <(cd -- "$cwd" 2>/dev/null && find . -path "./$pattern" -print 2>/dev/null || true)
   else
     while IFS= read -r line; do
+      line="${line#./}"
       [[ -n "$line" ]] && results+=("$line")
-    done < <(shopt -s globstar nullglob && compgen -G "$pattern" || true)
+    done < <(find . -path "./$pattern" -print 2>/dev/null || true)
   fi
 
-  if [[ "${#results[@]}" -eq 0 ]]; then
-    jq -cn '[]'
-    return
-  fi
-
-  printf '%s\n' "${results[@]}" | jq -R -s -c 'split("\n")[:-1]'
+  __sushi_json_array "${results[@]}"
 }
 
 __sushi_http_request() {
@@ -239,9 +874,10 @@ __sushi_http_request() {
   curl_args=(-sS -L -D "$header_file" -o "$body_file" -X "$method")
 
   if [[ -n "$headers_json" ]] && [[ "$headers_json" != "null" ]]; then
-    while IFS= read -r header; do
-      curl_args+=(-H "$header")
-    done < <(printf '%s' "$headers_json" | jq -r 'to_entries[]? | "\(.key): \(.value|tostring)"')
+    while IFS=$'\t' read -r key value; do
+      [[ -z "$key" ]] && continue
+      curl_args+=(-H "$key: $value")
+    done < <(__sushi_json_object_each_kv "$headers_json")
   fi
 
   if [[ "$method" != "GET" ]]; then
@@ -256,20 +892,21 @@ __sushi_http_request() {
   local curl_code=$?
   set -e
 
-  local status
-  status="$(awk '/^HTTP\// { code = $2 } END { print code + 0 }' "$header_file")"
-  if [[ -z "$status" ]]; then
-    status=0
+  local http_status
+  http_status="$(awk '/^HTTP\// { code = $2 } END { print code + 0 }' "$header_file")"
+  if [[ -z "$http_status" ]]; then
+    http_status=0
   fi
 
-  local body_text headers_obj ok_json json_body
+  local body_text headers_obj ok_json json_body body_json url_json
+  local -a header_pairs
   body_text="$(cat -- "$body_file" 2>/dev/null || true)"
-  headers_obj='{}'
+  headers_obj="$(__sushi_json_object)"
   while IFS= read -r line; do
     line="${line%$'\r'}"
     [[ -z "$line" ]] && continue
     if [[ "$line" == HTTP/* ]]; then
-      headers_obj='{}'
+      header_pairs=()
       continue
     fi
     if [[ "$line" == *:* ]]; then
@@ -277,32 +914,39 @@ __sushi_http_request() {
       key="${line%%:*}"
       value="${line#*:}"
       value="${value#"${value%%[![:space:]]*}"}"
-      headers_obj="$(printf '%s' "$headers_obj" | jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}')"
+      header_pairs+=("$key" "$value")
     fi
   done < "$header_file"
+  if [[ "${#header_pairs[@]}" -gt 0 ]]; then
+    headers_obj="$(__sushi_json_object "${header_pairs[@]}")"
+  fi
 
   ok_json=false
-  if [[ "$status" -ge 200 ]] && [[ "$status" -lt 300 ]]; then
+  if [[ "$http_status" -ge 200 ]] && [[ "$http_status" -lt 300 ]]; then
     ok_json=true
   fi
 
-  if [[ "$curl_code" -ne 0 ]] && [[ "$status" -eq 0 ]]; then
+  if [[ "$curl_code" -ne 0 ]] && [[ "$http_status" -eq 0 ]]; then
     ok_json=false
   fi
 
   json_body='null'
-  if [[ -n "$body_text" ]] && printf '%s' "$body_text" | jq -e . >/dev/null 2>&1; then
-    json_body="$(printf '%s' "$body_text" | jq -c .)"
+  if [[ -n "$body_text" ]]; then
+    local compact_body
+    if compact_body="$(__sushi_json_try_compact "$body_text")"; then
+      json_body="$compact_body"
+    fi
   fi
 
-  jq -cn \
-    --argjson status "$status" \
-    --argjson ok "$ok_json" \
-    --argjson headers "$headers_obj" \
-    --arg body "$body_text" \
-    --argjson json "$json_body" \
-    --arg url "$url" \
-    '{ status: $status, ok: $ok, headers: $headers, body: $body, json: $json, url: $url }'
+  body_json="$(__sushi_json_quote "$body_text")"
+  url_json="$(__sushi_json_quote "$url")"
+  __sushi_json_object \
+    status "$http_status" \
+    ok "$ok_json" \
+    headers "$headers_obj" \
+    body "$body_json" \
+    json "$json_body" \
+    url "$url_json"
 
   rm -f -- "$body_file" "$header_file"
 }
@@ -310,7 +954,9 @@ __sushi_http_request() {
 __sushi_http_get() {
   local url="${1-}"
   local headers_json="${2-null}"
-  __sushi_http_request "GET" "$url" "" "$headers_json" "application/json"
+  local raw
+  raw="$(__sushi_http_request "GET" "$url" "" "$headers_json" "application/json")"
+  __sushi_json_last_compact "$raw"
 }
 
 __sushi_http_post() {
@@ -318,7 +964,9 @@ __sushi_http_post() {
   local body="${2-}"
   local headers_json="${3-null}"
   local content_type="${4-application/json}"
-  __sushi_http_request "POST" "$url" "$body" "$headers_json" "$content_type"
+  local raw
+  raw="$(__sushi_http_request "POST" "$url" "$body" "$headers_json" "$content_type")"
+  __sushi_json_last_compact "$raw"
 }
 
 failures=0
@@ -392,7 +1040,7 @@ else
     printf '%s\n' 'FAIL fs.glob'
     failures=$(( ${failures:-0} + 1 ))
 fi
-skipHttp=$(__sushi_env_name=$(printf '%s' 'SUSHI_SKIP_HTTP'); if [[ -n "${!__sushi_env_name+x}" ]]; then printf '%s' "${!__sushi_env_name}"; else printf '%s' '0'; fi)
+skipHttp=$(__sushi_env_name=$(printf '%s' 'SUSHI_SKIP_HTTP'); __sushi_env_value=$(printenv "$__sushi_env_name" 2>/dev/null || true); if printenv "$__sushi_env_name" >/dev/null 2>&1; then printf '%s' "$__sushi_env_value"; else printf '%s' '0'; fi)
 if [[ "${skipHttp:-}" == '1' ]]; then
     printf '%s\n' 'SKIP http (SUSHI_SKIP_HTTP=1)'
 else

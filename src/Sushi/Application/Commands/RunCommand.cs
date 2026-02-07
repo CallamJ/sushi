@@ -6,9 +6,17 @@ static class RunCommand
 {
     public static TargetLanguage GetTarget()
     {
-        return RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? TargetLanguage.Powershell7
-            : TargetLanguage.Bash;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return TargetLanguage.Powershell7;
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            return TargetLanguage.Zsh;
+        }
+
+        return TargetLanguage.Bash;
     }
 
     public static Command Create()
@@ -20,7 +28,7 @@ static class RunCommand
 
         Option<TargetLanguage> targetLanguageOption = new("-t", "--target")
         {
-            Description = "Language to transpile to (defaults to Powershell on Windows, Bash on Linux/macOS)",
+            Description = "Language to transpile to (defaults: Powershell on Windows, Zsh on macOS, Bash on Linux)",
             DefaultValueFactory = parseResult => GetTarget()
         };
 
