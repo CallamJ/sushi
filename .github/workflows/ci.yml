@@ -9,7 +9,7 @@ on:
         description: Run HTTP checks in M3 verification jobs
         required: false
         type: boolean
-        default: false
+        default: true
 
 env:
   SUSHI_SKIP_HTTP: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_http && '0' || '1' }}
