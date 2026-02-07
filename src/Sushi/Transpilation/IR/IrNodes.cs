@@ -92,6 +92,18 @@ public sealed class IrForStatement : IrStatement
     }
 }
 
+public sealed class IrDoWhileStatement : IrStatement
+{
+    public IrBlockStatement Body { get; }
+    public IrExpression Condition { get; }
+
+    public IrDoWhileStatement(IrBlockStatement body, IrExpression condition)
+    {
+        Body = body;
+        Condition = condition;
+    }
+}
+
 public enum IrTypeKind
 {
     Any,
@@ -301,6 +313,20 @@ public sealed class IrCallExpression : IrExpression
     }
 }
 
+public sealed class IrMethodCallExpression : IrExpression
+{
+    public IrExpression Target { get; }
+    public string MethodName { get; }
+    public List<IrCallArgument> Arguments { get; }
+
+    public IrMethodCallExpression(IrExpression target, string methodName, IEnumerable<IrCallArgument> arguments)
+    {
+        Target = target;
+        MethodName = methodName;
+        Arguments = arguments.ToList();
+    }
+}
+
 public sealed class IrIntrinsicCallExpression : IrExpression
 {
     public string CanonicalName { get; }
@@ -315,6 +341,20 @@ public sealed class IrIntrinsicCallExpression : IrExpression
         CanonicalName = canonicalName;
         Id = id;
         Arguments = arguments.ToList();
+    }
+}
+
+public sealed class IrConditionalExpression : IrExpression
+{
+    public IrExpression Condition { get; }
+    public IrExpression TrueExpression { get; }
+    public IrExpression FalseExpression { get; }
+
+    public IrConditionalExpression(IrExpression condition, IrExpression trueExpression, IrExpression falseExpression)
+    {
+        Condition = condition;
+        TrueExpression = trueExpression;
+        FalseExpression = falseExpression;
     }
 }
 

@@ -28,7 +28,7 @@ public class AstToIrLowererTests
     }
 
     [Fact]
-    public void Lower_ClassDeclaration_ReportsUnsupportedSyntax()
+    public void Lower_ClassDeclaration_IsSupported()
     {
         const string source = """
             class Person {
@@ -38,9 +38,10 @@ public class AstToIrLowererTests
 
         var program = Parse(source);
         var lowerer = new AstToIrLowerer();
-        _ = lowerer.Lower(program, "test.sushi");
+        var ir = lowerer.Lower(program, "test.sushi");
 
-        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1001");
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Code == "SUSHI1001");
+        Assert.NotEmpty(ir.Statements);
     }
 
     [Fact]

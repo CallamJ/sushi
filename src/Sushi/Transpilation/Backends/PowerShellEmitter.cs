@@ -54,7 +54,12 @@ function __sushi_index {
     param($target, $index)
     if ($null -eq $target) { return $null }
     if ($target -is [System.Collections.IDictionary]) { return $target[[string]$index] }
-    if ($target -is [System.Collections.IList]) { return $target[[int]$index] }
+    if ($target -is [System.Collections.IList]) {
+        $i = [int]$index
+        if ($i -lt 0) { $i = $target.Count + $i }
+        if ($i -lt 0 -or $i -ge $target.Count) { return $null }
+        return $target[$i]
+    }
     $prop = $target.PSObject.Properties[[string]$index]
     if ($null -ne $prop) { return $prop.Value }
     return $null
@@ -369,8 +374,8 @@ function __sushi_detect_type {
     param($value)
     if ($null -eq $value) { return 'null' }
     if ($value -is [bool]) { return 'bool' }
-    if ($value -is [sbyte] -or $value -is [byte] -or $value -is [short] -or $value -is [ushort] -or
-        $value -is [int] -or $value -is [uint] -or $value -is [long] -or $value -is [ulong]) { return 'int' }
+    if ($value -is [sbyte] -or $value -is [byte] -or $value -is [int16] -or $value -is [uint16] -or
+        $value -is [int] -or $value -is [uint32] -or $value -is [long] -or $value -is [uint64]) { return 'int' }
     if ($value -is [float] -or $value -is [double] -or $value -is [decimal]) { return 'float' }
     if ($value -is [System.Collections.IList] -and $value -isnot [string]) { return 'array' }
     if ($value -is [System.Collections.IDictionary]) { return 'object' }
@@ -390,6 +395,22 @@ function __sushi_detect_type {
     }
     if ($value.PSObject -ne $null) { return 'object' }
     return 'unknown'
+}
+
+function __sushi_add {
+    param($left, $right)
+    $leftType = __sushi_detect_type $left
+    $rightType = __sushi_detect_type $right
+    $leftNumeric = ($leftType -eq 'int' -or $leftType -eq 'float')
+    $rightNumeric = ($rightType -eq 'int' -or $rightType -eq 'float')
+    if ($leftNumeric -and $rightNumeric) {
+        if ($leftType -eq 'int' -and $rightType -eq 'int') {
+            return ([int64]$left + [int64]$right)
+        }
+        return ([double]$left + [double]$right)
+    }
+
+    return ([string]$left + [string]$right)
 }
 
 function __sushi_type_check {
@@ -470,6 +491,109 @@ function __sushi_struct_check {
     return $true
 }
 """);
+
+        _builder.AppendLine(
+"""
+function __sushi_json_length {
+    param($value)
+    if ($null -eq $value) { return 0 }
+    if ($value -is [string]) { return $value.Length }
+    if ($value -is [System.Collections.IDictionary]) { return $value.Count }
+    if ($value -is [System.Collections.IEnumerable]) { return @($value).Count }
+    return 0
+}
+
+function __sushi_slice {
+    param($target, $start = $null, $end = $null)
+    $items = @(__sushi_to_array $target)
+    $len = $items.Count
+    $s = if ($null -eq $start -or [string]::IsNullOrWhiteSpace([string]$start)) { 0 } else { [int]$start }
+    $e = if ($null -eq $end -or [string]::IsNullOrWhiteSpace([string]$end)) { $len } else { [int]$end }
+    if ($s -lt 0) { $s = $len + $s }
+    if ($e -lt 0) { $e = $len + $e }
+    if ($s -lt 0) { $s = 0 }
+    if ($e -lt 0) { $e = 0 }
+    if ($s -gt $len) { $s = $len }
+    if ($e -gt $len) { $e = $len }
+    if ($e -le $s) { return @() }
+    return @($items[$s..($e - 1)])
+}
+
+function __sushi_array_push {
+    param($target, $values)
+    $items = @(__sushi_to_array $target)
+    $items += @(__sushi_to_array $values)
+    return ,$items
+}
+
+function __sushi_call_callable {
+    param($fn, $argValues)
+    $argsList = @(__sushi_to_array $argValues)
+    if ($null -eq $fn) { return $null }
+    if ($fn -is [scriptblock]) { return (& $fn @argsList) }
+    $name = [string]$fn
+    if ([string]::IsNullOrWhiteSpace($name)) { return $null }
+    return (& $name @argsList)
+}
+
+function __sushi_method_map {
+    param($target, $fn)
+    $out = @()
+    foreach ($item in @(__sushi_to_array $target)) {
+        $out += ,(__sushi_call_callable $fn @($item))
+    }
+    return ,$out
+}
+
+function __sushi_method_filter {
+    param($target, $fn)
+    $out = @()
+    foreach ($item in @(__sushi_to_array $target)) {
+        $keep = __sushi_call_callable $fn @($item)
+        if ([bool]$keep) {
+            $out += ,$item
+        }
+    }
+    return ,$out
+}
+
+function __sushi_method_reduce {
+    param($target, $fn, $hasInitial = $false, $initial = $null)
+    $items = @(__sushi_to_array $target)
+    if ($items.Count -eq 0 -and -not $hasInitial) { return $null }
+    $acc = if ($hasInitial) { $initial } else { $items[0] }
+    $start = if ($hasInitial) { 0 } else { 1 }
+    for ($i = $start; $i -lt $items.Count; $i++) {
+        $acc = __sushi_call_callable $fn @($acc, $items[$i])
+    }
+    return $acc
+}
+
+function __sushi_call_method {
+    param($target, [string]$method, $argValues = $null)
+    $argsList = @(__sushi_to_array $argValues)
+    switch ($method) {
+        'name' { return (__sushi_member $target '__sushi_enum_name') }
+        'ordinal' { return (__sushi_member $target '__sushi_enum_ordinal') }
+        'value' { return (__sushi_member $target '__sushi_enum_value') }
+        'length' { return (__sushi_json_length $target) }
+        'push' { return (__sushi_array_push $target $argsList) }
+        'map' { return (__sushi_method_map $target $argsList[0]) }
+        'filter' { return (__sushi_method_filter $target $argsList[0]) }
+        'reduce' {
+            if ($argsList.Count -gt 1) { return (__sushi_method_reduce $target $argsList[0] $true $argsList[1]) }
+            return (__sushi_method_reduce $target $argsList[0] $false $null)
+        }
+    }
+
+    $fn = __sushi_member $target ("__sushi_method_" + $method)
+    if ($null -eq $fn -or [string]::IsNullOrWhiteSpace([string]$fn)) {
+        return $null
+    }
+
+    return (& ([string]$fn) $target @argsList)
+}
+""");
     }
 
     private void EmitStatement(IrStatement statement)
@@ -501,6 +625,10 @@ function __sushi_struct_check {
 
             case IrForStatement forStatement:
                 EmitForStatement(forStatement);
+                break;
+
+            case IrDoWhileStatement doWhileStatement:
+                EmitDoWhileStatement(doWhileStatement);
                 break;
 
             case IrFunctionDeclarationStatement function:
@@ -589,6 +717,15 @@ function __sushi_struct_check {
         WriteLine("}");
     }
 
+    private void EmitDoWhileStatement(IrDoWhileStatement statement)
+    {
+        WriteLine("do {");
+        _indent++;
+        EmitStatement(statement.Body);
+        _indent--;
+        WriteLine($"}} while ({EmitConditionExpression(statement.Condition)})");
+    }
+
     private void EmitFunction(IrFunctionDeclarationStatement statement)
     {
         WriteLine($"function {SanitizeName(statement.Name)} {{");
@@ -613,7 +750,21 @@ function __sushi_struct_check {
 
         if (varargsParameter != null)
         {
-            WriteLine($"${SanitizeName(varargsParameter.Name)} = @($args)");
+            var varargName = SanitizeName(varargsParameter.Name);
+            WriteLine($"${varargName} = @()");
+            WriteLine("foreach ($__sushi_vararg in @($args)) {");
+            _indent++;
+            WriteLine("if ($__sushi_vararg -is [System.Collections.IList] -and -not ($__sushi_vararg -is [string])) {");
+            _indent++;
+            WriteLine($"${varargName} += @($__sushi_vararg)");
+            _indent--;
+            WriteLine("} else {");
+            _indent++;
+            WriteLine($"${varargName} += ,$__sushi_vararg");
+            _indent--;
+            WriteLine("}");
+            _indent--;
+            WriteLine("}");
         }
 
         foreach (var parameter in statement.Parameters)
@@ -675,6 +826,17 @@ function __sushi_struct_check {
                     return;
                 }
                 break;
+
+            case IrMethodCallExpression methodCall:
+                if (methodCall.MethodName == "push" && methodCall.Target is IrIdentifierExpression targetIdentifier)
+                {
+                    var targetName = SanitizeName(targetIdentifier.Name);
+                    WriteLine($"${targetName} = {EmitMethodCallExpression(methodCall)}");
+                    return;
+                }
+
+                WriteLine($"$null = {EmitMethodCallExpression(methodCall)}");
+                return;
         }
 
         _context.Error(UnsupportedEmitCode, $"Unsupported expression statement in PowerShell emitter: {expression.GetType().Name}");
@@ -701,6 +863,13 @@ function __sushi_struct_check {
         return arguments.Count > 0
             ? $"{callee} {string.Join(" ", arguments)}"
             : callee;
+    }
+
+    private string EmitMethodCallExpression(IrMethodCallExpression call)
+    {
+        var values = string.Join(", ", call.Arguments.Select(argument => EmitValueExpression(argument.Value)));
+        var argArray = call.Arguments.Count > 0 ? $"@({values})" : "@()";
+        return $"(__sushi_call_method -target {EmitValueExpression(call.Target)} -method {Escape.PowerShellSingleQuoted(call.MethodName)} -argValues {argArray})";
     }
 
     private string EmitConditionExpression(IrExpression expression)
@@ -738,12 +907,18 @@ function __sushi_struct_check {
                 $"(-not {EmitValueExpression(unary.Operand)})",
             IrUnaryExpression unary when unary.Operator is "-" or "+" =>
                 $"({unary.Operator}{EmitValueExpression(unary.Operand)})",
+            IrConditionalExpression conditional =>
+                $"$(if ({EmitConditionExpression(conditional.Condition)}) {{ {EmitValueExpression(conditional.TrueExpression)} }} else {{ {EmitValueExpression(conditional.FalseExpression)} }})",
+            IrBinaryExpression binary when binary.Operator == "+" =>
+                $"(__sushi_add {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})",
             IrBinaryExpression binary =>
                 $"({EmitValueExpression(binary.Left)} {MapBinaryOperator(binary.Operator)} {EmitValueExpression(binary.Right)})",
             IrIntrinsicCallExpression intrinsicCall =>
                 EmitIntrinsicValue(intrinsicCall),
             IrCallExpression call =>
                 $"({EmitCallCommand(call)})",
+            IrMethodCallExpression methodCall =>
+                EmitMethodCallExpression(methodCall),
             IrAssignmentExpression assignment =>
                 $"({EmitAssignmentExpression(assignment)}; ${SanitizeName(assignment.Target.Name)})",
             _ => "$null"

@@ -1273,6 +1273,217 @@ __sushi_require_integer() {
   exit 2
 }
 """);
+
+        AppendRuntimeBlock(
+"""
+__sushi_is_json_array() {
+  local compact
+  compact="$(__sushi_json_try_compact "${1-}")" || return 1
+  [[ "${compact:0:1}" == "[" ]]
+}
+
+__sushi_json_length() {
+  local value="${1-}"
+  local compact
+  compact="$(__sushi_json_try_compact "$value")" || {
+    printf '%s' "${#value}"
+    return 0
+  }
+
+  local first="${compact:0:1}"
+  if [[ "$first" == "[" ]]; then
+    local count=0
+    while IFS= read -r _item; do
+      count=$((count + 1))
+    done < <(__sushi_json_array_each_json "$compact")
+    printf '%s' "$count"
+    return 0
+  fi
+
+  if [[ "$first" == "{" ]]; then
+    local count=0
+    while IFS= read -r _item; do
+      count=$((count + 1))
+    done < <(__sushi_json_object_each_kv "$compact")
+    printf '%s' "$count"
+    return 0
+  fi
+
+  local raw
+  raw="$(__sushi_json_value_to_raw "$compact")"
+  printf '%s' "${#raw}"
+}
+
+__sushi_slice() {
+  local array_json="${1-[]}"
+  local start_raw="${2-}"
+  local end_raw="${3-}"
+  local compact
+  compact="$(__sushi_json_try_compact "$array_json")" || {
+    printf '[]'
+    return 0
+  }
+  [[ "${compact:0:1}" == "[" ]] || {
+    printf '[]'
+    return 0
+  }
+
+  local len
+  len="$(__sushi_json_length "$compact")"
+  local start=0
+  local end="$len"
+
+  if [[ -n "$start_raw" ]]; then
+    start="$start_raw"
+  fi
+  if [[ -n "$end_raw" ]]; then
+    end="$end_raw"
+  fi
+
+  if (( start < 0 )); then start=$((len + start)); fi
+  if (( end < 0 )); then end=$((len + end)); fi
+  if (( start < 0 )); then start=0; fi
+  if (( end < 0 )); then end=0; fi
+  if (( start > len )); then start=$len; fi
+  if (( end > len )); then end=$len; fi
+  if (( end < start )); then
+    printf '[]'
+    return 0
+  fi
+
+  local idx=0
+  local -a out=()
+  local item
+  while IFS= read -r item; do
+    if (( idx >= start && idx < end )); then
+      out+=("$item")
+    fi
+    idx=$((idx + 1))
+  done < <(__sushi_json_array_each_raw "$compact")
+
+  __sushi_json_array "${out[@]}"
+}
+
+__sushi_array_push() {
+  local array_json="${1-[]}"
+  shift
+  local -a out=()
+  local item
+  while IFS= read -r item; do
+    out+=("$item")
+  done < <(__sushi_json_array_each_raw "$array_json")
+
+  local arg
+  for arg in "$@"; do
+    out+=("$arg")
+  done
+
+  __sushi_json_array "${out[@]}"
+}
+
+__sushi_call_callable() {
+  local fn="${1-}"
+  shift
+  if [[ -z "$fn" ]]; then
+    printf ''
+    return 0
+  fi
+
+  "$fn" "$@"
+}
+
+__sushi_method_map() {
+  local target="${1-[]}"
+  local fn="${2-}"
+  local -a out=()
+  local item mapped
+  while IFS= read -r item; do
+    mapped="$(__sushi_call_callable "$fn" "$item")"
+    out+=("$mapped")
+  done < <(__sushi_json_array_each_raw "$target")
+  __sushi_json_array "${out[@]}"
+}
+
+__sushi_method_filter() {
+  local target="${1-[]}"
+  local fn="${2-}"
+  local -a out=()
+  local item keep
+  while IFS= read -r item; do
+    keep="$(__sushi_call_callable "$fn" "$item")"
+    case "$keep" in
+      true|TRUE|True|1) out+=("$item") ;;
+    esac
+  done < <(__sushi_json_array_each_raw "$target")
+  __sushi_json_array "${out[@]}"
+}
+
+__sushi_method_reduce() {
+  local target="${1-[]}"
+  local fn="${2-}"
+  local has_init="${3-0}"
+  local acc="${4-}"
+  local started=0
+  local item
+  while IFS= read -r item; do
+    if (( started == 0 )) && (( has_init == 0 )); then
+      acc="$item"
+      started=1
+      continue
+    fi
+    if (( started == 0 )); then
+      started=1
+    fi
+    acc="$(__sushi_call_callable "$fn" "$acc" "$item")"
+  done < <(__sushi_json_array_each_raw "$target")
+  printf '%s' "$acc"
+}
+
+__sushi_call_method() {
+  local target="${1-}"
+  local method="${2-}"
+  shift 2
+
+  case "$method" in
+    name) __sushi_json_member "$target" "__sushi_enum_name"; return 0 ;;
+    ordinal) __sushi_json_member "$target" "__sushi_enum_ordinal"; return 0 ;;
+    value) __sushi_json_member "$target" "__sushi_enum_value"; return 0 ;;
+    length) __sushi_json_length "$target"; return 0 ;;
+    push) __sushi_array_push "$target" "$@"; return 0 ;;
+    map) __sushi_method_map "$target" "${1-}"; return 0 ;;
+    filter) __sushi_method_filter "$target" "${1-}"; return 0 ;;
+    reduce)
+      local fn="${1-}"
+      if (( $# >= 2 )); then
+        __sushi_method_reduce "$target" "$fn" 1 "${2-}"
+      else
+        __sushi_method_reduce "$target" "$fn" 0 ""
+      fi
+      return 0
+      ;;
+  esac
+
+  local fn
+  fn="$(__sushi_json_member "$target" "__sushi_method_${method}")"
+  if [[ -z "$fn" ]]; then
+    printf ''
+    return 0
+  fi
+
+  __sushi_call_callable "$fn" "$target" "$@"
+}
+
+__sushi_add() {
+  local left="${1-}"
+  local right="${2-}"
+  if __sushi_j_is_integer "$left" && __sushi_j_is_integer "$right"; then
+    printf '%s' $((left + right))
+    return 0
+  fi
+
+  printf '%s' "${left}${right}"
+}
+""");
     }
 
     private void AppendRuntimeBlock(string text)
@@ -1313,6 +1524,10 @@ __sushi_require_integer() {
 
             case IrForStatement forStatement:
                 EmitForStatement(forStatement, inFunction);
+                break;
+
+            case IrDoWhileStatement doWhileStatement:
+                EmitDoWhileStatement(doWhileStatement, inFunction);
                 break;
 
             case IrFunctionDeclarationStatement function:
@@ -1386,6 +1601,20 @@ __sushi_require_integer() {
         WriteLine("done");
     }
 
+    private void EmitDoWhileStatement(IrDoWhileStatement statement, bool inFunction)
+    {
+        WriteLine("while true; do");
+        _indent++;
+        EmitStatement(statement.Body, inFunction);
+        WriteLine($"if ! {EmitConditionCommand(statement.Condition)}; then");
+        _indent++;
+        WriteLine("break");
+        _indent--;
+        WriteLine("fi");
+        _indent--;
+        WriteLine("done");
+    }
+
     private void EmitFunctionDeclaration(IrFunctionDeclarationStatement statement)
     {
         WriteLine($"{SanitizeName(statement.Name)}() {{");
@@ -1403,8 +1632,29 @@ __sushi_require_integer() {
             if (parameter.IsVarargs)
             {
                 var varargsArray = $"__sushi_varargs_{param}";
+                var flatVarargsArray = $"__sushi_flat_varargs_{param}";
                 WriteLine($"local -a {varargsArray}=(\"${{@:{argIndex}}}\")");
-                WriteLine($"local {param}=\"$(__sushi_json_array \"${{{varargsArray}[@]}}\")\"");
+                WriteLine($"local -a {flatVarargsArray}=()");
+                WriteLine("local __sushi_vararg_candidate");
+                WriteLine($"for __sushi_vararg_candidate in \"${{{varargsArray}[@]}}\"; do");
+                _indent++;
+                WriteLine("if __sushi_is_json_array \"$__sushi_vararg_candidate\"; then");
+                _indent++;
+                WriteLine("local __sushi_vararg_expanded");
+                WriteLine("while IFS= read -r __sushi_vararg_expanded; do");
+                _indent++;
+                WriteLine($"{flatVarargsArray}+=(\"$__sushi_vararg_expanded\")");
+                _indent--;
+                WriteLine("done < <(__sushi_json_array_each_raw \"$__sushi_vararg_candidate\")");
+                _indent--;
+                WriteLine("else");
+                _indent++;
+                WriteLine($"{flatVarargsArray}+=(\"$__sushi_vararg_candidate\")");
+                _indent--;
+                WriteLine("fi");
+                _indent--;
+                WriteLine("done");
+                WriteLine($"local {param}=\"$(__sushi_json_array \"${{{flatVarargsArray}[@]}}\")\"");
                 EmitVarargsContractCheck(parameter, param, statement.Name);
             }
             else
@@ -1473,6 +1723,17 @@ __sushi_require_integer() {
                     return;
                 }
                 break;
+
+            case IrMethodCallExpression methodCall:
+                if (methodCall.MethodName == "push" && methodCall.Target is IrIdentifierExpression targetIdentifier)
+                {
+                    var targetName = SanitizeName(targetIdentifier.Name);
+                    WriteLine($"{targetName}=\"$({EmitMethodCallCommand(methodCall)})\"");
+                    return;
+                }
+
+                WriteLine($"{EmitMethodCallCommand(methodCall)} >/dev/null");
+                return;
         }
 
         _context.Error(UnsupportedEmitCode, $"Unsupported expression statement in Bash emitter: {expression.GetType().Name}");
@@ -1498,6 +1759,18 @@ __sushi_require_integer() {
         return arguments.Count > 0
             ? $"{callee} {string.Join(" ", arguments)}"
             : callee;
+    }
+
+    private string EmitMethodCallCommand(IrMethodCallExpression call)
+    {
+        var arguments = call.Arguments.Select(argument => EmitValueExpression(argument.Value)).ToList();
+        var allArguments = new List<string>
+        {
+            EmitValueExpression(call.Target),
+            Escape.BashSingleQuoted(call.MethodName)
+        };
+        allArguments.AddRange(arguments);
+        return $"__sushi_call_method {string.Join(" ", allArguments)}";
     }
 
     private string EmitConditionCommand(IrExpression expression)
@@ -1557,10 +1830,15 @@ __sushi_require_integer() {
             IrIndexExpression index => $"\"$(__sushi_json_index {EmitValueExpression(index.Target)} {EmitValueExpression(index.Index)})\"",
             IrUnaryExpression unary when unary.Operator is "-" or "+" =>
                 $"$(( {unary.Operator}{EmitArithmeticExpression(unary.Operand)} ))",
-            IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
+            IrBinaryExpression binary when binary.Operator is "+" =>
+                $"\"$(__sushi_add {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})\"",
+            IrBinaryExpression binary when binary.Operator is "-" or "*" or "/" or "%" =>
                 $"$(( {EmitArithmeticExpression(binary)} ))",
+            IrConditionalExpression conditional =>
+                $"\"$(if {EmitConditionCommand(conditional.Condition)}; then printf '%s' {EmitValueExpression(conditional.TrueExpression)}; else printf '%s' {EmitValueExpression(conditional.FalseExpression)}; fi)\"",
             IrIntrinsicCallExpression intrinsicCall => EmitIntrinsicValue(intrinsicCall),
             IrCallExpression call => $"$({EmitCallCommand(call)})",
+            IrMethodCallExpression methodCall => $"\"$({EmitMethodCallCommand(methodCall)})\"",
             IrAssignmentExpression assignment => $"$({EmitAssignmentExpression(assignment)}; printf '%s' \"${{{SanitizeName(assignment.Target.Name)}:-}}\")",
             _ => "''"
         };

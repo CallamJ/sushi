@@ -21,10 +21,15 @@ public sealed class AstToIrLowerer
     private readonly List<Diagnostic> _diagnostics = new();
     private readonly IntrinsicRegistry _intrinsicRegistry = IntrinsicRegistry.CreateDefault();
     private readonly Dictionary<string, IrFunctionSignature> _functionSignatures = new();
+    private readonly Dictionary<string, ClassDeclarationNode> _classes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, EnumDeclarationNode> _enums = new(StringComparer.Ordinal);
+    private readonly List<IrFunctionDeclarationStatement> _liftedFunctions = new();
 
     private string _sourcePath = "";
     private string? _currentFunctionName;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
+    private int _tempId;
+    private int _lambdaId;
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
@@ -32,6 +37,12 @@ public sealed class AstToIrLowerer
     {
         _sourcePath = sourcePath;
         _functionSignatures.Clear();
+        _classes.Clear();
+        _enums.Clear();
+        _liftedFunctions.Clear();
+        _tempId = 0;
+        _lambdaId = 0;
+        CollectTypes(program);
         CollectFunctionSignatures(program);
 
         var output = new IrProgram();
@@ -45,6 +56,11 @@ public sealed class AstToIrLowerer
             }
         }
 
+        foreach (var lifted in _liftedFunctions)
+        {
+            output.Statements.Insert(0, lifted);
+        }
+
         return output;
     }
 
@@ -55,6 +71,8 @@ public sealed class AstToIrLowerer
             BoxDeclarationNode => null,
             UseDeclarationNode => null,
             FunctionDeclarationNode function => LowerFunction(function),
+            ClassDeclarationNode classDeclaration => LowerClass(classDeclaration),
+            EnumDeclarationNode enumDeclaration => LowerEnum(enumDeclaration),
             StatementNode statement => LowerStatement(statement),
             _ => UnsupportedStatement(node, "Top-level declaration is not yet supported in transpilation")
         };
@@ -139,6 +157,23 @@ public sealed class AstToIrLowerer
                     forStatement.Increment != null ? LowerExpression(forStatement.Increment) : null,
                     StatementToBlock(forStatement.Body));
 
+            case DoWhileStatementNode doWhile:
+                return new IrDoWhileStatement(
+                    StatementToBlock(doWhile.Body),
+                    LowerExpression(doWhile.Condition));
+
+            case ForRangeStatementNode forRange:
+                return LowerForRangeStatement(forRange);
+
+            case ForEachStatementNode forEach:
+                return LowerForEachStatement(forEach);
+
+            case ArrayDestructuringStatementNode destructuring:
+                return LowerArrayDestructuringStatement(destructuring);
+
+            case SwitchStatementNode switchStatement:
+                return LowerSwitchStatement(switchStatement);
+
             case ReturnStatementNode returnStatement:
             {
                 var expression = returnStatement.Expression != null ? LowerExpression(returnStatement.Expression) : null;
@@ -178,20 +213,222 @@ public sealed class AstToIrLowerer
         return new IrBlockStatement(new[] { lowered });
     }
 
+    private IrStatement LowerForRangeStatement(ForRangeStatementNode node)
+    {
+        var stepExpression = node.Step != null
+            ? LowerExpression(node.Step)
+            : new IrLiteralExpression(1);
+        var iterator = new IrIdentifierExpression(node.Variable);
+        var comparisonOperator = node.IsInclusive ? "<=" : "<";
+
+        return new IrForStatement(
+            new IrVariableDeclarationStatement(node.Variable, LowerExpression(node.Start)),
+            new IrBinaryExpression(
+                iterator,
+                comparisonOperator,
+                LowerExpression(node.End)),
+            new IrAssignmentExpression(
+                iterator,
+                "+=",
+                stepExpression),
+            StatementToBlock(node.Body));
+    }
+
+    private IrStatement LowerForEachStatement(ForEachStatementNode node)
+    {
+        var collectionTemp = CreateTempName("each_collection");
+        var indexTemp = CreateTempName("each_index");
+        var itemValue = new IrIndexExpression(
+            new IrIdentifierExpression(collectionTemp),
+            new IrIdentifierExpression(indexTemp));
+        var lengthCall = new IrCallExpression(
+            "__sushi_json_length",
+            new IrExpression[] { new IrIdentifierExpression(collectionTemp) });
+
+        var loopBodyStatements = new List<IrStatement>();
+        if (node.IndexVariable != null)
+        {
+            loopBodyStatements.Add(
+                new IrVariableDeclarationStatement(node.IndexVariable, new IrIdentifierExpression(indexTemp)));
+        }
+
+        loopBodyStatements.Add(
+            new IrVariableDeclarationStatement(node.ItemVariable, itemValue));
+
+        loopBodyStatements.AddRange(StatementToBlock(node.Body).Statements);
+
+        return new IrBlockStatement(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement(collectionTemp, LowerExpression(node.Collection)),
+            new IrVariableDeclarationStatement(indexTemp, new IrLiteralExpression(0)),
+            new IrWhileStatement(
+                new IrBinaryExpression(
+                    new IrIdentifierExpression(indexTemp),
+                    "<",
+                    lengthCall),
+                new IrBlockStatement(loopBodyStatements.Append<IrStatement>(
+                    new IrExpressionStatement(
+                        new IrAssignmentExpression(
+                            new IrIdentifierExpression(indexTemp),
+                            "+=",
+                            new IrLiteralExpression(1))))))
+        });
+    }
+
+    private IrStatement LowerArrayDestructuringStatement(ArrayDestructuringStatementNode node)
+    {
+        var valueTemp = CreateTempName("destructure_value");
+        var statements = new List<IrStatement>
+        {
+            new IrVariableDeclarationStatement(valueTemp, LowerExpression(node.Value))
+        };
+
+        LowerDestructuringPatterns(
+            node.Patterns,
+            new IrIdentifierExpression(valueTemp),
+            statements,
+            0);
+
+        return new IrBlockStatement(statements);
+    }
+
+    private int LowerDestructuringPatterns(
+        IReadOnlyList<DestructuringPatternNode> patterns,
+        IrExpression source,
+        List<IrStatement> output,
+        int startIndex)
+    {
+        var index = startIndex;
+        foreach (var pattern in patterns)
+        {
+            if (pattern.IsRest && pattern.Name != null)
+            {
+                output.Add(new IrVariableDeclarationStatement(
+                    pattern.Name,
+                    new IrCallExpression(
+                        "__sushi_slice",
+                        new IrExpression[]
+                        {
+                            source,
+                            new IrLiteralExpression(index),
+                            new IrLiteralExpression(null)
+                        })));
+                continue;
+            }
+
+            var currentValue = (IrExpression)new IrIndexExpression(source, new IrLiteralExpression(index));
+            if (pattern.DefaultValue != null)
+            {
+                currentValue = new IrConditionalExpression(
+                    new IrBinaryExpression(
+                        currentValue,
+                        "==",
+                        new IrLiteralExpression("")),
+                    LowerExpression(pattern.DefaultValue),
+                    currentValue);
+            }
+
+            if (pattern.NestedPatterns != null && pattern.NestedPatterns.Count > 0)
+            {
+                var nestedTemp = CreateTempName("destructure_nested");
+                output.Add(new IrVariableDeclarationStatement(nestedTemp, currentValue));
+                _ = LowerDestructuringPatterns(
+                    pattern.NestedPatterns,
+                    new IrIdentifierExpression(nestedTemp),
+                    output,
+                    0);
+            }
+            else if (pattern.Name != null)
+            {
+                output.Add(new IrVariableDeclarationStatement(pattern.Name, currentValue));
+            }
+
+            index++;
+        }
+
+        return index;
+    }
+
+    private IrStatement LowerSwitchStatement(SwitchStatementNode node)
+    {
+        var switchTemp = CreateTempName("switch_value");
+        var loweredCases = node.Cases
+            .Select(c => (Case: c, Match: LowerCaseMatchExpression(new IrIdentifierExpression(switchTemp), c)))
+            .ToList();
+
+        IrBlockStatement? nextElse = node.DefaultCase != null ? LowerBlock(node.DefaultCase) : null;
+        for (var i = loweredCases.Count - 1; i >= 0; i--)
+        {
+            var current = loweredCases[i];
+            nextElse = new IrBlockStatement(new IrStatement[]
+            {
+                new IrIfStatement(
+                    current.Match,
+                    LowerBlock(current.Case.Body),
+                    nextElse)
+            });
+        }
+
+        var statements = new List<IrStatement>
+        {
+            new IrVariableDeclarationStatement(switchTemp, LowerExpression(node.Value))
+        };
+
+        if (nextElse != null)
+        {
+            statements.AddRange(nextElse.Statements);
+        }
+
+        return new IrBlockStatement(statements);
+    }
+
+    private IrExpression LowerCaseMatchExpression(IrExpression switchValue, SwitchCaseNode @case)
+    {
+        IrExpression? result = null;
+        foreach (var match in @case.MatchValues)
+        {
+            var equals = new IrBinaryExpression(switchValue, "==", LowerExpression(match));
+            result = result == null ? equals : new IrBinaryExpression(result, "||", equals);
+        }
+
+        return result ?? new IrLiteralExpression(false);
+    }
+
+    private string CreateTempName(string prefix)
+    {
+        _tempId++;
+        return $"__sushi_{prefix}_{_tempId}";
+    }
+
     private IrExpression LowerExpression(ExpressionNode node)
     {
         return node switch
         {
             LiteralExpressionNode literal => new IrLiteralExpression(literal.Value),
             IdentifierExpressionNode identifier => new IrIdentifierExpression(identifier.Name),
+            ThisExpressionNode => new IrIdentifierExpression("this"),
             ParenthesizedExpressionNode parenthesized => LowerExpression(parenthesized.Expression),
             UnaryExpressionNode unary => new IrUnaryExpression(unary.Operator, LowerExpression(unary.Operand), unary.IsPrefix),
             BinaryExpressionNode binary => LowerBinary(binary),
+            ConditionalExpressionNode conditional => new IrConditionalExpression(
+                LowerExpression(conditional.Condition),
+                LowerExpression(conditional.TrueExpression),
+                LowerExpression(conditional.FalseExpression)),
             ArrayLiteralExpressionNode array => new IrArrayLiteralExpression(array.Elements.Select(LowerExpression)),
             ObjectLiteralExpressionNode obj => LowerObjectLiteral(obj),
             MemberAccessExpressionNode member => new IrMemberAccessExpression(LowerExpression(member.Object), member.MemberName),
             IndexExpressionNode index => new IrIndexExpression(LowerExpression(index.Array), LowerExpression(index.Index)),
+            SliceExpressionNode slice => new IrCallExpression(
+                "__sushi_slice",
+                new IrExpression[]
+                {
+                    LowerExpression(slice.Array),
+                    slice.Start != null ? LowerExpression(slice.Start) : new IrLiteralExpression(null),
+                    slice.End != null ? LowerExpression(slice.End) : new IrLiteralExpression(null)
+                }),
             CallExpressionNode call => LowerCall(call),
+            NewExpressionNode @new => LowerNewExpression(@new),
+            LambdaExpressionNode lambda => LowerLambdaExpression(lambda),
             _ => UnsupportedExpression(node)
         };
     }
@@ -233,10 +470,18 @@ public sealed class AstToIrLowerer
 
     private IrExpression LowerCall(CallExpressionNode node)
     {
-        var intrinsicArguments = node.Arguments
-            .Select(argument => new IntrinsicCallArgument(
+        var loweredArguments = node.Arguments
+            .Select(argument => new IrCallArgument(
                 argument.Name,
                 LowerExpression(argument.Value),
+                argument.Line,
+                argument.Column))
+            .ToList();
+
+        var intrinsicArguments = loweredArguments
+            .Select(argument => new IntrinsicCallArgument(
+                argument.Name,
+                argument.Value,
                 argument.Line,
                 argument.Column))
             .ToList();
@@ -279,23 +524,33 @@ public sealed class AstToIrLowerer
             }
         }
 
+        if (node.Callee is MemberAccessExpressionNode memberCallee)
+        {
+            if (loweredArguments.Any(argument => argument.Name != null))
+            {
+                AddDiagnostic(
+                    UnresolvedNamedCallCode,
+                    $"Named arguments are not supported for method call '{memberCallee.MemberName}'.",
+                    node.Line,
+                    node.Column);
+                return new IrLiteralExpression(null);
+            }
+
+            return new IrMethodCallExpression(
+                LowerExpression(memberCallee.Object),
+                memberCallee.MemberName,
+                loweredArguments);
+        }
+
         if (node.Callee is not IdentifierExpressionNode callee)
         {
             AddDiagnostic(
                 UnsupportedCallCode,
-                "Only identifier-based function calls are supported in Milestone 1 transpilation",
+                "Unsupported call target in transpilation",
                 node.Line,
                 node.Column);
             return new IrLiteralExpression(null);
         }
-
-        var loweredArguments = node.Arguments
-            .Select(argument => new IrCallArgument(
-                argument.Name,
-                LowerExpression(argument.Value),
-                argument.Line,
-                argument.Column))
-            .ToList();
 
         if (_functionSignatures.TryGetValue(callee.Name, out var functionSignature))
         {
@@ -334,17 +589,355 @@ public sealed class AstToIrLowerer
         return new IrCallExpression(callee.Name, loweredArguments);
     }
 
+    private IrExpression LowerNewExpression(NewExpressionNode node)
+    {
+        var constructorName = $"__sushi_new_{node.TypeName}";
+        var loweredArguments = node.Arguments
+            .Select(argument => new IrCallArgument(
+                argument.Name,
+                LowerExpression(argument.Value),
+                argument.Line,
+                argument.Column))
+            .ToList();
+
+        if (_functionSignatures.TryGetValue(constructorName, out var signature))
+        {
+            var binding = FunctionCallBinder.Bind(
+                constructorName,
+                signature.Parameters,
+                loweredArguments,
+                _sourcePath,
+                node.Line,
+                node.Column);
+
+            foreach (var diagnostic in binding.Diagnostics)
+            {
+                _diagnostics.Add(diagnostic);
+            }
+
+            if (!binding.Success)
+            {
+                return new IrLiteralExpression(null);
+            }
+
+            ValidateCallTypes(constructorName, signature.Parameters, binding.OrderedArguments);
+            return new IrCallExpression(constructorName, binding.OrderedArguments);
+        }
+
+        if (loweredArguments.Any(argument => argument.Name != null))
+        {
+            AddDiagnostic(
+                UnresolvedNamedCallCode,
+                $"Named constructor arguments require a known class declaration. Could not resolve '{node.TypeName}'.",
+                node.Line,
+                node.Column);
+            return new IrLiteralExpression(null);
+        }
+
+        return new IrCallExpression(constructorName, loweredArguments);
+    }
+
+    private IrExpression LowerLambdaExpression(LambdaExpressionNode node)
+    {
+        var lambdaName = $"__sushi_lambda_{++_lambdaId}";
+        var parameters = node.Parameters
+            .Select(parameter => new IrFunctionParameter(
+                parameter.Name,
+                parameter.IsVarargs,
+                parameter.DefaultValue != null ? LowerExpression(parameter.DefaultValue) : null,
+                LowerParameterType(parameter, lambdaName)))
+            .ToList();
+
+        IrBlockStatement body;
+        if (node.IsBlock)
+        {
+            body = node.Body is BlockStatementNode block
+                ? LowerBlock(block)
+                : new IrBlockStatement();
+        }
+        else if (node.Body is ExpressionNode expressionNode)
+        {
+            body = new IrBlockStatement(new IrStatement[]
+            {
+                new IrReturnStatement(LowerExpression(expressionNode))
+            });
+        }
+        else
+        {
+            body = new IrBlockStatement();
+        }
+
+        var lifted = new IrFunctionDeclarationStatement(
+            lambdaName,
+            parameters,
+            body,
+            IrTypeRef.Any);
+        _liftedFunctions.Add(lifted);
+        _functionSignatures[lambdaName] = new IrFunctionSignature(IrTypeRef.Any, parameters);
+
+        return new IrLiteralExpression(lambdaName);
+    }
+
     private void CollectFunctionSignatures(ProgramNode program)
     {
         foreach (var declaration in program.Declarations)
         {
-            if (declaration is not FunctionDeclarationNode function)
+            if (declaration is FunctionDeclarationNode function)
             {
-                continue;
+                _functionSignatures[function.Name] = BuildFunctionSignature(function);
+            }
+        }
+
+        foreach (var classDeclaration in _classes.Values)
+        {
+            var ctorName = $"__sushi_new_{classDeclaration.Name}";
+            var ctorParameters = classDeclaration.Constructor?.Parameters
+                ?? classDeclaration.Fields
+                    .Select(field => new ParameterNode(
+                        field.Type,
+                        structuralType: null,
+                        field.Name,
+                        isVarargs: false,
+                        field.Initializer,
+                        classDeclaration.Line,
+                        classDeclaration.Column))
+                    .ToList();
+
+            _functionSignatures[ctorName] = new IrFunctionSignature(
+                IrTypeRef.Primitive("object"),
+                BuildParameterList(ctorParameters, ctorName));
+
+            foreach (var method in classDeclaration.Methods)
+            {
+                var methodName = $"__sushi_method_{classDeclaration.Name}_{method.Name}";
+                var methodParameters = new List<IrFunctionParameter>
+                {
+                    new("this", false, null, IrTypeRef.Primitive("object"))
+                };
+                methodParameters.AddRange(BuildParameterList(method.Parameters, methodName));
+                _functionSignatures[methodName] = new IrFunctionSignature(IrTypeRef.Any, methodParameters);
+            }
+        }
+
+        foreach (var enumDeclaration in _enums.Values)
+        {
+            foreach (var method in enumDeclaration.Methods)
+            {
+                var methodName = $"__sushi_method_{enumDeclaration.Name}_{method.Name}";
+                var methodParameters = new List<IrFunctionParameter>
+                {
+                    new("this", false, null, IrTypeRef.Primitive("object"))
+                };
+                methodParameters.AddRange(BuildParameterList(method.Parameters, methodName));
+                _functionSignatures[methodName] = new IrFunctionSignature(IrTypeRef.Any, methodParameters);
+            }
+        }
+    }
+
+    private void CollectTypes(ProgramNode program)
+    {
+        foreach (var declaration in program.Declarations)
+        {
+            switch (declaration)
+            {
+                case ClassDeclarationNode classDeclaration:
+                    _classes[classDeclaration.Name] = classDeclaration;
+                    break;
+                case EnumDeclarationNode enumDeclaration:
+                    _enums[enumDeclaration.Name] = enumDeclaration;
+                    break;
+            }
+        }
+    }
+
+    private List<IrFunctionParameter> BuildParameterList(IEnumerable<ParameterNode> parameters, string functionName)
+    {
+        var parameterList = parameters.ToList();
+        var output = new List<IrFunctionParameter>();
+        for (var i = 0; i < parameterList.Count; i++)
+        {
+            var parameter = parameterList[i];
+            if (parameter.IsVarargs && i != parameterList.Count - 1)
+            {
+                AddDiagnostic(
+                    FunctionCallBinder.InvalidVarargsDeclarationCode,
+                    $"Function '{functionName}' has an invalid varargs declaration. Varargs must be the final parameter.",
+                    parameter.Line,
+                    parameter.Column);
             }
 
-            _functionSignatures[function.Name] = BuildFunctionSignature(function);
+            output.Add(new IrFunctionParameter(
+                parameter.Name,
+                parameter.IsVarargs,
+                parameter.DefaultValue != null ? LowerExpression(parameter.DefaultValue) : null,
+                LowerParameterType(parameter, functionName)));
         }
+
+        return output;
+    }
+
+    private IrStatement LowerClass(ClassDeclarationNode node)
+    {
+        var statements = new List<IrStatement>();
+
+        foreach (var method in node.Methods)
+        {
+            var methodName = $"__sushi_method_{node.Name}_{method.Name}";
+            var parameters = new List<IrFunctionParameter>
+            {
+                new("this", false, null, IrTypeRef.Primitive("object"))
+            };
+            parameters.AddRange(BuildParameterList(method.Parameters, methodName));
+            var body = method.Body is StatementNode statementBody
+                ? StatementToBlock(statementBody)
+                : new IrBlockStatement();
+
+            statements.Add(new IrFunctionDeclarationStatement(
+                methodName,
+                parameters,
+                body,
+                IrTypeRef.Any));
+        }
+
+        var constructorName = $"__sushi_new_{node.Name}";
+        var ctorParameters = node.Constructor?.Parameters
+            ?? node.Fields.Select(field => new ParameterNode(
+                field.Type,
+                structuralType: null,
+                field.Name,
+                isVarargs: false,
+                field.Initializer,
+                field.Line,
+                field.Column)).ToList();
+
+        var ctorSignature = _functionSignatures.TryGetValue(constructorName, out var signature)
+            ? signature
+            : new IrFunctionSignature(IrTypeRef.Primitive("object"), BuildParameterList(ctorParameters, constructorName));
+
+        var objectProperties = new List<IrObjectProperty>
+        {
+            new("__sushi_type", new IrLiteralExpression(node.Name))
+        };
+
+        foreach (var method in node.Methods)
+        {
+            objectProperties.Add(new IrObjectProperty(
+                $"__sushi_method_{method.Name}",
+                new IrLiteralExpression($"__sushi_method_{node.Name}_{method.Name}")));
+        }
+
+        foreach (var field in node.Fields)
+        {
+            var matchingCtorParameter = ctorSignature.Parameters.FirstOrDefault(p => p.Name == field.Name);
+            if (matchingCtorParameter != null)
+            {
+                objectProperties.Add(new IrObjectProperty(field.Name, new IrIdentifierExpression(field.Name)));
+            }
+            else if (field.Initializer != null)
+            {
+                objectProperties.Add(new IrObjectProperty(field.Name, LowerExpression(field.Initializer)));
+            }
+            else
+            {
+                objectProperties.Add(new IrObjectProperty(field.Name, new IrLiteralExpression(null)));
+            }
+        }
+
+        var ctorBody = new IrBlockStatement(new IrStatement[]
+        {
+            new IrReturnStatement(new IrObjectLiteralExpression(objectProperties))
+        });
+
+        statements.Add(new IrFunctionDeclarationStatement(
+            constructorName,
+            ctorSignature.Parameters,
+            ctorBody,
+            IrTypeRef.Primitive("object")));
+
+        return new IrBlockStatement(statements);
+    }
+
+    private IrStatement LowerEnum(EnumDeclarationNode node)
+    {
+        var statements = new List<IrStatement>();
+        var containerProperties = new List<IrObjectProperty>();
+        var ordinal = 0;
+        foreach (var value in node.Values)
+        {
+            var valueProperties = new List<IrObjectProperty>
+            {
+                new("__sushi_type", new IrLiteralExpression(node.Name)),
+                new("__sushi_enum_name", new IrLiteralExpression(value.Name)),
+                new("__sushi_enum_ordinal", new IrLiteralExpression(ordinal))
+            };
+
+            IrExpression enumValueExpression;
+            if (value.DirectValue != null)
+            {
+                enumValueExpression = LowerExpression(value.DirectValue);
+            }
+            else
+            {
+                enumValueExpression = new IrLiteralExpression(ordinal);
+            }
+
+            valueProperties.Add(new IrObjectProperty("__sushi_enum_value", enumValueExpression));
+
+            if (value.Properties != null)
+            {
+                foreach (var property in value.Properties)
+                {
+                    valueProperties.Add(new IrObjectProperty(property.Key, LowerExpression(property.Value)));
+                }
+            }
+
+            if (node.RecordParameters != null &&
+                value.ConstructorArgs != null)
+            {
+                for (var i = 0; i < node.RecordParameters.Count && i < value.ConstructorArgs.Count; i++)
+                {
+                    valueProperties.Add(new IrObjectProperty(
+                        node.RecordParameters[i].Name,
+                        LowerExpression(value.ConstructorArgs[i])));
+                }
+            }
+
+            foreach (var method in node.Methods)
+            {
+                valueProperties.Add(new IrObjectProperty(
+                    $"__sushi_method_{method.Name}",
+                    new IrLiteralExpression($"__sushi_method_{node.Name}_{method.Name}")));
+            }
+
+            var valueObject = new IrObjectLiteralExpression(valueProperties);
+            containerProperties.Add(new IrObjectProperty(value.Name, valueObject));
+            ordinal++;
+        }
+
+        foreach (var method in node.Methods)
+        {
+            var methodName = $"__sushi_method_{node.Name}_{method.Name}";
+            var parameters = new List<IrFunctionParameter>
+            {
+                new("this", false, null, IrTypeRef.Primitive("object"))
+            };
+            parameters.AddRange(BuildParameterList(method.Parameters, methodName));
+            var body = method.Body is StatementNode statementBody
+                ? StatementToBlock(statementBody)
+                : new IrBlockStatement();
+
+            statements.Add(new IrFunctionDeclarationStatement(
+                methodName,
+                parameters,
+                body,
+                IrTypeRef.Any));
+        }
+
+        statements.Add(new IrVariableDeclarationStatement(
+            node.Name,
+            new IrObjectLiteralExpression(containerProperties)));
+
+        return new IrBlockStatement(statements);
     }
 
     private IrFunctionSignature BuildFunctionSignature(FunctionDeclarationNode function)
@@ -512,6 +1105,13 @@ public sealed class AstToIrLowerer
                 for (var argumentIndex = Math.Max(i, 0); argumentIndex < orderedArguments.Count; argumentIndex++)
                 {
                     var argument = orderedArguments[argumentIndex];
+                    if (TryInferStaticType(argument.Value, out var actualVarargType) &&
+                        actualVarargType.Kind == IrTypeKind.Primitive &&
+                        string.Equals(actualVarargType.Name, "array", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     ValidateExpressionAgainstType(
                         argument.Value,
                         parameter.DeclaredType,
@@ -699,6 +1299,18 @@ public sealed class AstToIrLowerer
             case IrObjectLiteralExpression:
                 type = IrTypeRef.Primitive("object");
                 return true;
+
+            case IrConditionalExpression conditional:
+                if (TryInferStaticType(conditional.TrueExpression, out var trueType) &&
+                    TryInferStaticType(conditional.FalseExpression, out var falseType) &&
+                    IsTypeAssignable(trueType, falseType))
+                {
+                    type = trueType;
+                    return true;
+                }
+
+                type = IrTypeRef.Unknown;
+                return false;
 
             default:
                 type = IrTypeRef.Unknown;

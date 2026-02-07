@@ -364,7 +364,8 @@ public class EmitterTests
         var script = emitter.Emit(program, new EmitContext("varargs.sushi", diagnostics));
 
         Assert.Contains("param($head)", script);
-        Assert.Contains("$rest = @($args)", script);
+        Assert.Contains("$rest = @()", script);
+        Assert.Contains("foreach ($__sushi_vararg in @($args))", script);
         Assert.Empty(diagnostics);
     }
 

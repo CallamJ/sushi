@@ -73,7 +73,7 @@ public class TranspilerTests
     }
 
     [Fact]
-    public void Transpile_UnsupportedFeature_FailsWithDiagnostic()
+    public void Transpile_ClassDeclaration_Succeeds()
     {
         const string source = """
             class Person {
@@ -89,8 +89,8 @@ public class TranspilerTests
             TargetLanguage = TargetLanguage.Bash
         });
 
-        Assert.False(result.Success);
-        Assert.Contains(result.Diagnostics, d => d.Code == "SUSHI1001");
+        Assert.True(result.Success);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Code == "SUSHI1001");
     }
 
     [Fact]
