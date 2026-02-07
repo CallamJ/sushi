@@ -92,11 +92,33 @@ Network/runtime failure contract:
 - helpers return `status = 0` and `ok = false` instead of throwing through Sushi
   script code.
 
+### 2.6 Function type contracts (M4 Phase 3)
+
+Sushi now emits type contract checks for typed user functions:
+
+- primitive parameter types: `string`, `int`, `float`, `bool`, `array`, `object`
+- structural parameter types: `object { ... }`
+- function return type contracts
+
+Contract mismatch behavior:
+
+- compile-time diagnostics are emitted for statically-provable mismatches
+- runtime mismatches print a contract violation message and exit with code `2`
+
+### 2.7 Arithmetic numeric strictness
+
+For Bash/Zsh and PowerShell outputs, numeric arithmetic is strict:
+
+- no implicit fallback coercion to `0` for non-numeric operands
+- index/member/call expression operands used in arithmetic are runtime-validated
+- non-numeric arithmetic operands fail with contract violation and exit code `2`
+
 ## 3. Known M3 limitations
 
 - HTTP behavior can vary by host networking/TLS policy.
 - Glob output format is not fully normalized cross-target yet.
 - Bash/Zsh JSON operations are pure-shell in emitted scripts (no `jq`/`perl` dependency).
+- structural field typing currently targets flat field contracts (no deep nested structural field contracts).
 
 ## 4. Verification commands
 

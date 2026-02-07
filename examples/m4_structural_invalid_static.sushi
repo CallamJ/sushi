@@ -1,0 +1,6 @@
+process(object { string name, int age } user) {
+    return user.name
+}
+
+var output = process({ name: "alice", age: "not-an-int" })
+println(output)

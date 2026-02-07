@@ -92,17 +92,70 @@ public sealed class IrForStatement : IrStatement
     }
 }
 
+public enum IrTypeKind
+{
+    Any,
+    Unknown,
+    Primitive,
+    Structural
+}
+
+public sealed class IrStructuralField
+{
+    public string Name { get; }
+    public IrTypeRef Type { get; }
+    public bool Optional { get; }
+
+    public IrStructuralField(string name, IrTypeRef type, bool optional)
+    {
+        Name = name;
+        Type = type;
+        Optional = optional;
+    }
+}
+
+public sealed class IrTypeRef
+{
+    public IrTypeKind Kind { get; }
+    public string? Name { get; }
+    public List<IrStructuralField> StructuralFields { get; }
+
+    public bool IsAnyOrUnknown => Kind is IrTypeKind.Any or IrTypeKind.Unknown;
+
+    private IrTypeRef(IrTypeKind kind, string? name, IEnumerable<IrStructuralField>? structuralFields)
+    {
+        Kind = kind;
+        Name = name;
+        StructuralFields = structuralFields?.ToList() ?? new List<IrStructuralField>();
+    }
+
+    public static IrTypeRef Any { get; } = new(IrTypeKind.Any, null, null);
+    public static IrTypeRef Unknown { get; } = new(IrTypeKind.Unknown, null, null);
+
+    public static IrTypeRef Primitive(string name)
+    {
+        return new IrTypeRef(IrTypeKind.Primitive, name, null);
+    }
+
+    public static IrTypeRef Structural(IEnumerable<IrStructuralField> fields)
+    {
+        return new IrTypeRef(IrTypeKind.Structural, "object", fields);
+    }
+}
+
 public sealed class IrFunctionParameter
 {
     public string Name { get; }
     public bool IsVarargs { get; }
     public IrExpression? DefaultValue { get; }
+    public IrTypeRef DeclaredType { get; }
 
-    public IrFunctionParameter(string name, bool isVarargs, IrExpression? defaultValue)
+    public IrFunctionParameter(string name, bool isVarargs, IrExpression? defaultValue, IrTypeRef? declaredType = null)
     {
         Name = name;
         IsVarargs = isVarargs;
         DefaultValue = defaultValue;
+        DeclaredType = declaredType ?? IrTypeRef.Any;
     }
 }
 
@@ -111,19 +164,26 @@ public sealed class IrFunctionDeclarationStatement : IrStatement
     public string Name { get; }
     public List<IrFunctionParameter> Parameters { get; }
     public IrBlockStatement Body { get; }
+    public IrTypeRef ReturnType { get; }
 
-    public IrFunctionDeclarationStatement(string name, IEnumerable<IrFunctionParameter> parameters, IrBlockStatement body)
+    public IrFunctionDeclarationStatement(
+        string name,
+        IEnumerable<IrFunctionParameter> parameters,
+        IrBlockStatement body,
+        IrTypeRef? returnType = null)
     {
         Name = name;
         Parameters = parameters.ToList();
         Body = body;
+        ReturnType = returnType ?? IrTypeRef.Any;
     }
 
     public IrFunctionDeclarationStatement(string name, IEnumerable<string> parameters, IrBlockStatement body)
         : this(
             name,
-            parameters.Select(parameter => new IrFunctionParameter(parameter, isVarargs: false, defaultValue: null)),
-            body)
+            parameters.Select(parameter => new IrFunctionParameter(parameter, isVarargs: false, defaultValue: null, IrTypeRef.Any)),
+            body,
+            IrTypeRef.Any)
     {
     }
 }

@@ -367,4 +367,102 @@ public class EmitterTests
         Assert.Contains("$rest = @($args)", script);
         Assert.Empty(diagnostics);
     }
+
+    [Fact]
+    public void BashEmitter_EmitsFunctionTypeContracts()
+    {
+        var structuralType = IrTypeRef.Structural(new[]
+        {
+            new IrStructuralField("name", IrTypeRef.Primitive("string"), optional: false),
+            new IrStructuralField("age", IrTypeRef.Primitive("int"), optional: false)
+        });
+
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrFunctionDeclarationStatement(
+                "checkUser",
+                new[]
+                {
+                    new IrFunctionParameter("user", isVarargs: false, defaultValue: null, structuralType),
+                    new IrFunctionParameter("count", isVarargs: false, defaultValue: null, IrTypeRef.Primitive("int"))
+                },
+                new IrBlockStatement(new IrStatement[]
+                {
+                    new IrReturnStatement(new IrIdentifierExpression("count"))
+                }),
+                IrTypeRef.Primitive("int"))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new BashEmitter();
+        var script = emitter.Emit(program, new EmitContext("contracts.sushi", diagnostics));
+
+        Assert.Contains("__sushi_type_check", script);
+        Assert.Contains("__sushi_struct_check", script);
+        Assert.Contains("__sushi_type_check \"${count:-}\"", script);
+        Assert.Contains("local __sushi_return_value=", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void PowerShellEmitter_EmitsFunctionTypeContracts()
+    {
+        var structuralType = IrTypeRef.Structural(new[]
+        {
+            new IrStructuralField("name", IrTypeRef.Primitive("string"), optional: false)
+        });
+
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrFunctionDeclarationStatement(
+                "checkUser",
+                new[]
+                {
+                    new IrFunctionParameter("user", isVarargs: false, defaultValue: null, structuralType),
+                    new IrFunctionParameter("count", isVarargs: false, defaultValue: null, IrTypeRef.Primitive("int"))
+                },
+                new IrBlockStatement(new IrStatement[]
+                {
+                    new IrReturnStatement(new IrIdentifierExpression("count"))
+                }),
+                IrTypeRef.Primitive("int"))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new PowerShellEmitter();
+        var script = emitter.Emit(program, new EmitContext("contracts.sushi", diagnostics));
+
+        Assert.Contains("function __sushi_type_check", script);
+        Assert.Contains("function __sushi_struct_check", script);
+        Assert.Contains("__sushi_type_check -value $count", script);
+        Assert.Contains("__sushi_struct_check -value $user", script);
+        Assert.Contains("$__sushi_return_value =", script);
+        Assert.Contains("__sushi_type_check -value $__sushi_return_value", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void BashEmitter_ArithmeticIndexExpression_UsesStrictNumericCheck()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("total", new IrLiteralExpression(0)),
+            new IrExpressionStatement(
+                new IrAssignmentExpression(
+                    new IrIdentifierExpression("total"),
+                    "+=",
+                    new IrIndexExpression(
+                        new IrIdentifierExpression("values"),
+                        new IrIdentifierExpression("i"))))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new BashEmitter();
+        var script = emitter.Emit(program, new EmitContext("arith.sushi", diagnostics));
+
+        Assert.Contains("__sushi_require_integer", script);
+        Assert.Contains("__sushi_json_index", script);
+        Assert.DoesNotContain("${total:-0}", script);
+        Assert.Empty(diagnostics);
+    }
 }

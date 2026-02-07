@@ -133,6 +133,77 @@ public class AstToIrLowererTests
         Assert.IsType<IrIndexExpression>(firstDecl.Initializer);
     }
 
+    [Fact]
+    public void Lower_StructuralParameter_ProducesStructuralTypeContract()
+    {
+        const string source = """
+            process(object { string name, int age } user) {
+                return user.name
+            }
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(program, "test.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Code == "SUSHI1002");
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        var function = Assert.IsType<IrFunctionDeclarationStatement>(ir.Statements[0]);
+        Assert.Single(function.Parameters);
+        Assert.Equal(IrTypeKind.Structural, function.Parameters[0].DeclaredType.Kind);
+        Assert.Equal(2, function.Parameters[0].DeclaredType.StructuralFields.Count);
+    }
+
+    [Fact]
+    public void Lower_StaticCallTypeMismatch_ReportsParameterDiagnostic()
+    {
+        const string source = """
+            square(int x) {
+                return x * x
+            }
+            var bad = square("nope")
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(program, "test.sushi");
+
+        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1021");
+    }
+
+    [Fact]
+    public void Lower_StaticReturnTypeMismatch_ReportsDiagnostic()
+    {
+        const string source = """
+            int id() {
+                return "abc"
+            }
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(program, "test.sushi");
+
+        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1024");
+    }
+
+    [Fact]
+    public void Lower_StaticStructuralFieldMismatch_ReportsDiagnostic()
+    {
+        const string source = """
+            send(object { string name, int age } user) {
+                return user.name
+            }
+            var u = send({ name: "n", age: "bad" })
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(program, "test.sushi");
+
+        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1023");
+    }
+
     private static ProgramNode Parse(string source)
     {
         var tokenizer = new Tokenizer(source);

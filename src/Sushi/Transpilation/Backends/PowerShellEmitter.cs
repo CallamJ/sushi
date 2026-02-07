@@ -13,12 +13,16 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private readonly StringBuilder _builder = new();
     private EmitContext _context = null!;
     private int _indent;
+    private string? _currentFunctionName;
+    private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
 
     public string Emit(IrProgram program, EmitContext context)
     {
         _builder.Clear();
         _context = context;
         _indent = 0;
+        _currentFunctionName = null;
+        _currentFunctionReturnType = IrTypeRef.Any;
 
         WriteLine("Set-StrictMode -Version Latest");
         WriteLine("");
@@ -358,6 +362,114 @@ function __sushi_http_post {
     return (__sushi_http_request -method 'POST' -url $url -body $body -headers $headers -contentType $contentType)
 }
 """);
+
+        _builder.AppendLine(
+"""
+function __sushi_detect_type {
+    param($value)
+    if ($null -eq $value) { return 'null' }
+    if ($value -is [bool]) { return 'bool' }
+    if ($value -is [sbyte] -or $value -is [byte] -or $value -is [short] -or $value -is [ushort] -or
+        $value -is [int] -or $value -is [uint] -or $value -is [long] -or $value -is [ulong]) { return 'int' }
+    if ($value -is [float] -or $value -is [double] -or $value -is [decimal]) { return 'float' }
+    if ($value -is [System.Collections.IList] -and $value -isnot [string]) { return 'array' }
+    if ($value -is [System.Collections.IDictionary]) { return 'object' }
+    if ($value -is [string]) {
+        if ($value -eq 'true' -or $value -eq 'false') { return 'bool' }
+        if ($value -match '^-?\d+$') { return 'int' }
+        if ($value -match '^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$') { return 'float' }
+        $trimmed = $value.Trim()
+        if ($trimmed.StartsWith('{') -or $trimmed.StartsWith('[')) {
+            try {
+                $parsed = $trimmed | ConvertFrom-Json
+                if ($parsed -is [System.Collections.IList]) { return 'array' }
+                if ($parsed -is [System.Collections.IDictionary] -or $parsed.PSObject -ne $null) { return 'object' }
+            } catch { }
+        }
+        return 'string'
+    }
+    if ($value.PSObject -ne $null) { return 'object' }
+    return 'unknown'
+}
+
+function __sushi_type_check {
+    param(
+        $value,
+        [string]$type = 'any',
+        [string]$context = 'value'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($type) -or $type -eq 'any' -or $type -eq 'unknown') {
+        return $true
+    }
+
+    $actual = __sushi_detect_type $value
+    $ok = $false
+    switch ($type) {
+        'string' { $ok = ($actual -eq 'string') }
+        'int' { $ok = ($actual -eq 'int') }
+        'float' { $ok = ($actual -eq 'float' -or $actual -eq 'int') }
+        'bool' { $ok = ($actual -eq 'bool') }
+        'array' { $ok = ($actual -eq 'array') }
+        'object' { $ok = ($actual -eq 'object') }
+        default { $ok = $true }
+    }
+
+    if ($ok) { return $true }
+
+    [Console]::Error.WriteLine("Type contract violation: $context expected $type, got $actual")
+    return $false
+}
+
+function __sushi_has_member {
+    param($target, [string]$name)
+    if ($null -eq $target) { return $false }
+    if ($target -is [System.Collections.IDictionary]) { return $target.Contains($name) }
+    $prop = $target.PSObject.Properties[$name]
+    return ($null -ne $prop)
+}
+
+function __sushi_struct_check {
+    param(
+        $value,
+        [string]$spec,
+        [string]$context = 'value'
+    )
+
+    if (-not (__sushi_type_check -value $value -type 'object' -context $context)) {
+        return $false
+    }
+
+    if ([string]::IsNullOrWhiteSpace($spec)) {
+        return $true
+    }
+
+    $parts = @($spec -split ',')
+    foreach ($part in $parts) {
+        if ([string]::IsNullOrWhiteSpace($part)) { continue }
+        $segments = @($part -split ':')
+        if ($segments.Count -lt 3) { continue }
+        $fieldName = [string]$segments[0]
+        $fieldType = [string]$segments[1]
+        $fieldRequired = [string]$segments[2]
+
+        if (-not (__sushi_has_member -target $value -name $fieldName)) {
+            if ($fieldRequired -eq 'req') {
+                [Console]::Error.WriteLine("Type contract violation: $context missing required field $fieldName")
+                return $false
+            }
+            continue
+        }
+
+        $fieldValue = __sushi_member $value $fieldName
+        if (-not (__sushi_type_check -value $fieldValue -type $fieldType -context "$context.$fieldName")) {
+            return $false
+        }
+    }
+
+    return $true
+}
+""");
     }
 
     private void EmitStatement(IrStatement statement)
@@ -396,7 +508,16 @@ function __sushi_http_post {
                 break;
 
             case IrReturnStatement returnStatement:
-                if (returnStatement.Expression != null)
+                if (returnStatement.Expression != null && _currentFunctionName != null && !_currentFunctionReturnType.IsAnyOrUnknown)
+                {
+                    WriteLine($"$__sushi_return_value = {EmitValueExpression(returnStatement.Expression)}");
+                    EmitContractCheckForValue(
+                        _currentFunctionReturnType,
+                        "$__sushi_return_value",
+                        $"return value of function '{_currentFunctionName}'");
+                    WriteLine("return $__sushi_return_value");
+                }
+                else if (returnStatement.Expression != null)
                 {
                     WriteLine($"return {EmitValueExpression(returnStatement.Expression)}");
                 }
@@ -473,6 +594,11 @@ function __sushi_http_post {
         WriteLine($"function {SanitizeName(statement.Name)} {{");
         _indent++;
 
+        var previousFunctionName = _currentFunctionName;
+        var previousReturnType = _currentFunctionReturnType;
+        _currentFunctionName = statement.Name;
+        _currentFunctionReturnType = statement.ReturnType;
+
         var regularParameters = statement.Parameters
             .Where(parameter => !parameter.IsVarargs)
             .Select(parameter => $"${SanitizeName(parameter.Name)}")
@@ -490,7 +616,36 @@ function __sushi_http_post {
             WriteLine($"${SanitizeName(varargsParameter.Name)} = @($args)");
         }
 
+        foreach (var parameter in statement.Parameters)
+        {
+            var paramName = SanitizeName(parameter.Name);
+            if (parameter.IsVarargs)
+            {
+                if (parameter.DeclaredType.IsAnyOrUnknown)
+                {
+                    continue;
+                }
+
+                WriteLine($"foreach ($__sushi_vararg_item in @(${paramName})) {{");
+                _indent++;
+                EmitContractCheckForValue(
+                    parameter.DeclaredType,
+                    "$__sushi_vararg_item",
+                    $"varargs parameter '{parameter.Name}' of function '{statement.Name}'");
+                _indent--;
+                WriteLine("}");
+                continue;
+            }
+
+            EmitContractCheckForValue(
+                parameter.DeclaredType,
+                $"${paramName}",
+                $"parameter '{parameter.Name}' of function '{statement.Name}'");
+        }
+
         EmitStatement(statement.Body);
+        _currentFunctionName = previousFunctionName;
+        _currentFunctionReturnType = previousReturnType;
         _indent--;
         WriteLine("}");
     }
@@ -616,6 +771,48 @@ function __sushi_http_post {
         var properties = string.Join("; ", expression.Properties.Select(property =>
             $"{Escape.PowerShellSingleQuoted(property.Name)} = {EmitValueExpression(property.Value)}"));
         return $"([PSCustomObject]@{{ {properties} }})";
+    }
+
+    private void EmitContractCheckForValue(IrTypeRef type, string valueExpression, string context)
+    {
+        if (type.IsAnyOrUnknown)
+        {
+            return;
+        }
+
+        var contextLiteral = Escape.PowerShellSingleQuoted(context);
+        if (type.Kind == IrTypeKind.Structural)
+        {
+            var specLiteral = Escape.PowerShellSingleQuoted(EncodeStructuralSpec(type));
+            WriteLine($"if (-not (__sushi_struct_check -value {valueExpression} -spec {specLiteral} -context {contextLiteral})) {{ exit 2 }}");
+            return;
+        }
+
+        var typeLiteral = Escape.PowerShellSingleQuoted(EncodeRuntimeType(type));
+        WriteLine($"if (-not (__sushi_type_check -value {valueExpression} -type {typeLiteral} -context {contextLiteral})) {{ exit 2 }}");
+    }
+
+    private static string EncodeRuntimeType(IrTypeRef type)
+    {
+        if (type.Kind == IrTypeKind.Structural)
+        {
+            return "object";
+        }
+
+        return type.Name ?? "any";
+    }
+
+    private static string EncodeStructuralSpec(IrTypeRef type)
+    {
+        if (type.Kind != IrTypeKind.Structural || type.StructuralFields.Count == 0)
+        {
+            return "";
+        }
+
+        return string.Join(
+            ",",
+            type.StructuralFields.Select(field =>
+                $"{field.Name}:{EncodeRuntimeType(field.Type)}:{(field.Optional ? "opt" : "req")}"));
     }
 
     private static string MapBinaryOperator(string op)

@@ -22,6 +22,13 @@ Milestone 4 CLI workflow commands are available:
 - `sushi run` to transpile and execute in one step
 - `sushi watch` to continuously transpile (and optionally run)
 
+Milestone 4 Phase 3 function contracts are now available:
+
+- typed function parameters (e.g. `int`, `string`, `bool`, `array`, `object`)
+- structural object parameters (e.g. `object { string name, int age } user`)
+- compile-time mismatch diagnostics for provable literal mismatches
+- runtime contract checks in emitted Bash/Zsh/PowerShell scripts (exit code `2`)
+
 ## Prerequisites
 
 ### Build/transpile Sushi
@@ -83,6 +90,14 @@ running verification.
 dotnet run --project src/Sushi -- check examples/m3_verification.sushi
 dotnet run --project src/Sushi -- run examples/m3_verification.sushi
 dotnet run --project src/Sushi -- watch examples/m3_verification.sushi --run
+```
+
+## Quickstart (M4 Phase 3 contracts)
+
+```powershell
+dotnet run --project src/Sushi -- check examples/m4_structural_valid.sushi -t Bash
+dotnet run --project src/Sushi -- check examples/m4_typed_return.sushi -t Powershell7
+dotnet run --project src/Sushi -- check examples/m4_structural_invalid_static.sushi -t Zsh
 ```
 
 ## Portability and runtime behavior

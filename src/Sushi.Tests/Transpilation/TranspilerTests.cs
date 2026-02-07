@@ -350,4 +350,126 @@ public class TranspilerTests
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1017");
     }
+
+    [Fact]
+    public void Transpile_StructuralParameterScript_Succeeds()
+    {
+        const string source = """
+            process(object { string name, int age } user) {
+                return user.name
+            }
+
+            var value = process({ name: "alice", age: 32 })
+            println(value)
+            """;
+
+        var transpiler = new Transpiler();
+        var result = transpiler.Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "m4_phase3_structural_ok.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.EmittedCode);
+        Assert.Contains("__sushi_struct_check", result.EmittedCode);
+    }
+
+    [Fact]
+    public void Transpile_StaticStructuralFieldMismatch_Fails()
+    {
+        const string source = """
+            process(object { string name, int age } user) {
+                return user.name
+            }
+
+            var value = process({ name: "alice", age: "bad" })
+            """;
+
+        var transpiler = new Transpiler();
+        var result = transpiler.Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "m4_phase3_structural_bad.sushi",
+            TargetLanguage = TargetLanguage.Zsh
+        });
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1023");
+    }
+
+    [Fact]
+    public void Transpile_StaticReturnTypeMismatch_Fails()
+    {
+        const string source = """
+            int value() {
+                return "hello"
+            }
+            """;
+
+        var transpiler = new Transpiler();
+        var result = transpiler.Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "m4_phase3_return_bad.sushi",
+            TargetLanguage = TargetLanguage.Powershell7
+        });
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1024");
+    }
+
+    [Fact]
+    public void Transpile_StaticArgumentTypeMismatch_Fails()
+    {
+        const string source = """
+            int parse(int x) {
+                return x
+            }
+
+            var value = parse("x")
+            """;
+
+        var transpiler = new Transpiler();
+        var result = transpiler.Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "m4_phase3_argument_bad.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1021");
+    }
+
+    [Fact]
+    public void Transpile_Bash_ArithmeticIndexExpression_EmitsStrictNumericCheck()
+    {
+        const string source = """
+            sum(int... values) {
+                var total = 0
+                var i = 0
+                while (i < 2) {
+                    total = total + values[i]
+                    i = i + 1
+                }
+                return total
+            }
+            println(sum(1, 2))
+            """;
+
+        var transpiler = new Transpiler();
+        var result = transpiler.Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "m4_numeric_index_math.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.EmittedCode);
+        Assert.Contains("__sushi_require_integer", result.EmittedCode);
+        Assert.Contains("__sushi_json_index", result.EmittedCode);
+    }
 }
