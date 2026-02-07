@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using Sushi.Build;
 using Sushi.Build.SyntaxTree;
 
@@ -9,7 +5,7 @@ namespace Sushi.Tests
 {
     class Program
     {
-        static void Main(string[] args)
+        static void RunParserDemo(string[] args)
         {
             Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
             Console.WriteLine("║  Sushi Language Parser - Comprehensive Feature Test         ║");
@@ -48,7 +44,7 @@ namespace Sushi.Tests
                 List<ClassifiedToken> classifiedTokens = lexer.Lex().ToList();
                 int classifiedCount = classifiedTokens.Count;
                 Console.WriteLine("  ✓ Classified " + classifiedCount + " tokens");
-                Console.WriteLine(classifiedTokens.Select(t => (t.Value?.ToString() ?? (t.Text.Equals("") ? t.Kind.ToString() : t.Text)).ReplaceLineEndings("\\n")).Aggregate((a, b) => a + ", " + b));
+                //Console.WriteLine(classifiedTokens.Select(t => (t.Value?.ToString() ?? (t.Text.Equals("") ? t.Kind.ToString() : t.Text)).ReplaceLineEndings("\\n")).Aggregate((a, b) => a + ", " + b));
                 Console.WriteLine();
                 
                 // Phase 3: Parsing

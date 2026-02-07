@@ -2,6 +2,8 @@ namespace Sushi.Application.Commands;
 
 using System.Runtime.InteropServices;
 using System.CommandLine;
+using Sushi.Application.Console;
+using Sushi.Transpilation;
 
 
 static class TranspileCommand
@@ -17,7 +19,7 @@ static class TranspileCommand
     {
         Argument<string> fileArgument = new("file")
         {
-            Description = "Path to the .sushi file to run"
+            Description = "Path to the .sushi file to transpile"
         };
 
         Option<TargetLanguage> targetLanguageOption = new("-t", "--target")
@@ -26,9 +28,9 @@ static class TranspileCommand
             DefaultValueFactory = parseResult => GetTarget()
         };
 
-        Option<bool> discardCommentsOption = new("-v", "--verbose")
+        Option<bool> verboseOption = new("-v", "--verbose")
         {
-            Description = "Should discard comments?",
+            Description = "Print additional diagnostic details",
             DefaultValueFactory = parseResult => false
         };
 
@@ -40,7 +42,7 @@ static class TranspileCommand
                 result.AddError("File path cannot be empty.");
                 return;
             }
-            if (!value.EndsWith(".sushi"))
+            if (!value.EndsWith(".sushi", StringComparison.OrdinalIgnoreCase))
             {
                 result.AddError("File must have a .sushi extension.");
             }
@@ -50,14 +52,74 @@ static class TranspileCommand
         {
             fileArgument,
             targetLanguageOption,
-            discardCommentsOption,
+            verboseOption,
         };
 
         command.SetAction(parseResult =>
         {
-            // TODO: Implement
+            var filePath = parseResult.GetValue(fileArgument) ?? "";
+            var target = parseResult.GetValue(targetLanguageOption);
+            var verbose = parseResult.GetValue(verboseOption);
+
+            if (!File.Exists(filePath))
+            {
+                System.Console.Error.WriteLine($"Input file not found: {filePath}");
+                return 1;
+            }
+
+            string source;
+            try
+            {
+                source = File.ReadAllText(filePath);
+            }
+            catch (Exception ex)
+            {
+                System.Console.Error.WriteLine($"Failed to read input file: {ex.Message}");
+                return 1;
+            }
+
+            var transpiler = new Transpiler();
+            var result = transpiler.Transpile(new TranspileRequest
+            {
+                SourceText = source,
+                SourcePath = filePath,
+                TargetLanguage = target
+            });
+
+            if (!result.Success || result.EmittedCode == null)
+            {
+                DiagnosticPrinter.Print(result.Diagnostics, includeWarnings: verbose);
+                return 1;
+            }
+
+            var outputPath = GetOutputPath(filePath, target);
+            try
+            {
+                File.WriteAllText(outputPath, result.EmittedCode);
+            }
+            catch (Exception ex)
+            {
+                System.Console.Error.WriteLine($"Failed to write output file: {ex.Message}");
+                return 1;
+            }
+
+            if (verbose && result.Diagnostics.Count > 0)
+            {
+                DiagnosticPrinter.Print(result.Diagnostics, includeWarnings: true);
+            }
+
+            System.Console.WriteLine($"Transpiled {filePath} -> {outputPath}");
+            return 0;
         });
 
         return command;
+    }
+
+    private static string GetOutputPath(string inputPath, TargetLanguage target)
+    {
+        var extension = target == TargetLanguage.Bash ? ".sh" : ".ps1";
+        var directory = Path.GetDirectoryName(inputPath) ?? ".";
+        var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(inputPath);
+        return Path.Combine(directory, fileNameWithoutExtension + extension);
     }
 }
