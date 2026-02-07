@@ -12,7 +12,7 @@ on:
         default: true
 
 env:
-  SUSHI_SKIP_HTTP: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_http && '0' || '1' }}
+  SUSHI_SKIP_HTTP: ${{inputs.allow_http && '0' || '1' }}
 
 jobs:
   unit-tests:
