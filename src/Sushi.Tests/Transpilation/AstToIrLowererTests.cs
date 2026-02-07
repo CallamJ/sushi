@@ -57,6 +57,61 @@ public class AstToIrLowererTests
         Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1003");
     }
 
+    [Fact]
+    public void Lower_StdIntrinsicCall_ProducesIntrinsicIr()
+    {
+        const string source = """
+            var exists = std.io.exists("a.txt")
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(program, "test.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        var declaration = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements[0]);
+        Assert.IsType<IrIntrinsicCallExpression>(declaration.Initializer);
+    }
+
+    [Fact]
+    public void Lower_UnknownStdIntrinsic_ReportsDiagnostic()
+    {
+        const string source = """
+            var x = std.io.unknown("a.txt")
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(program, "test.sushi");
+
+        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1301");
+    }
+
+    [Fact]
+    public void Lower_ObjectAndMemberExpressions_ProduceExpectedIrShapes()
+    {
+        const string source = """
+            var payload = { hello: "world", count: 2 }
+            var name = payload.hello
+            var first = ["a", "b"][0]
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(program, "test.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+
+        var payloadDecl = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements[0]);
+        Assert.IsType<IrObjectLiteralExpression>(payloadDecl.Initializer);
+
+        var nameDecl = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements[1]);
+        Assert.IsType<IrMemberAccessExpression>(nameDecl.Initializer);
+
+        var firstDecl = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements[2]);
+        Assert.IsType<IrIndexExpression>(firstDecl.Initializer);
+    }
+
     private static ProgramNode Parse(string source)
     {
         var tokenizer = new Tokenizer(source);

@@ -16,4 +16,10 @@ public sealed class EmitContext
     {
         _diagnostics.Add(Diagnostic.Error(code, message, new SourceSpan(SourcePath, line, column)));
     }
+
+    public string ErrorAndReturn(string code, string message, string fallback = "''", int line = 1, int column = 1)
+    {
+        Error(code, message, line, column);
+        return fallback;
+    }
 }

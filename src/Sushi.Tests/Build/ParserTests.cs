@@ -2706,5 +2706,31 @@ namespace Sushi.Tests
             var firstNested = destructure.Patterns[0].NestedPatterns!;
             Assert.NotNull(firstNested[0].DefaultValue);
         }
+
+        [Fact]
+        public void TestTopLevelMemberCallExpressionStatement()
+        {
+            var ast = Parse(@"
+                std.io.exists(""file.txt"")
+            ");
+            Assert.Single(ast.Declarations);
+            Assert.IsType<ExpressionStatementNode>(ast.Declarations[0]);
+            var exprStmt = (ExpressionStatementNode)ast.Declarations[0];
+            Assert.IsType<CallExpressionNode>(exprStmt.Expression);
+            var call = (CallExpressionNode)exprStmt.Expression;
+            Assert.IsType<MemberAccessExpressionNode>(call.Callee);
+        }
+
+        [Fact]
+        public void TestTopLevelMemberCallFollowedByVariable()
+        {
+            var ast = Parse(@"
+                std.io.exists(""file.txt"")
+                var x = 42
+            ");
+            Assert.Equal(2, ast.Declarations.Count);
+            Assert.IsType<ExpressionStatementNode>(ast.Declarations[0]);
+            Assert.IsType<VariableDeclarationStatementNode>(ast.Declarations[1]);
+        }
     }
 }

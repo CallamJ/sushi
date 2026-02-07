@@ -195,3 +195,76 @@ public sealed class IrCallExpression : IrExpression
         Arguments = arguments.ToList();
     }
 }
+
+public sealed class IrIntrinsicCallExpression : IrExpression
+{
+    public string CanonicalName { get; }
+    public Sushi.Transpilation.Intrinsics.IntrinsicId Id { get; }
+    public List<IrExpression> Arguments { get; }
+
+    public IrIntrinsicCallExpression(
+        string canonicalName,
+        Sushi.Transpilation.Intrinsics.IntrinsicId id,
+        IEnumerable<IrExpression> arguments)
+    {
+        CanonicalName = canonicalName;
+        Id = id;
+        Arguments = arguments.ToList();
+    }
+}
+
+public sealed class IrArrayLiteralExpression : IrExpression
+{
+    public List<IrExpression> Elements { get; }
+
+    public IrArrayLiteralExpression(IEnumerable<IrExpression> elements)
+    {
+        Elements = elements.ToList();
+    }
+}
+
+public sealed class IrObjectProperty
+{
+    public string Name { get; }
+    public IrExpression Value { get; }
+
+    public IrObjectProperty(string name, IrExpression value)
+    {
+        Name = name;
+        Value = value;
+    }
+}
+
+public sealed class IrObjectLiteralExpression : IrExpression
+{
+    public List<IrObjectProperty> Properties { get; }
+
+    public IrObjectLiteralExpression(IEnumerable<IrObjectProperty> properties)
+    {
+        Properties = properties.ToList();
+    }
+}
+
+public sealed class IrMemberAccessExpression : IrExpression
+{
+    public IrExpression Target { get; }
+    public string MemberName { get; }
+
+    public IrMemberAccessExpression(IrExpression target, string memberName)
+    {
+        Target = target;
+        MemberName = memberName;
+    }
+}
+
+public sealed class IrIndexExpression : IrExpression
+{
+    public IrExpression Target { get; }
+    public IrExpression Index { get; }
+
+    public IrIndexExpression(IrExpression target, IrExpression index)
+    {
+        Target = target;
+        Index = index;
+    }
+}

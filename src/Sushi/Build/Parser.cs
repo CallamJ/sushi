@@ -451,6 +451,7 @@ public class Parser
         
         if (Check(ClassifiedTokenKind.Identifier))
         {
+            var declarationStart = _position;
             var firstToken = Advance();
             
             if (Check(ClassifiedTokenKind.LeftParen))
@@ -512,6 +513,14 @@ public class Parser
             else
             {
                 // Pattern: name = ... → variable without type
+                if (!CheckOperator("="))
+                {
+                    _position = declarationStart;
+                    var expr = ParseExpression();
+                    ExpectSemicolon();
+                    return new ExpressionStatementNode(expr, expr.Line, expr.Column);
+                }
+
                 name = firstToken.Text;
                 type = null;
             }

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Run test suite
+        run: dotnet run --project src/Sushi.Tests/Sushi.Tests.csproj --framework net9.0
+
+  m3-verification-bash:
+    name: M3 Verification (Bash)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    env:
+      SUSHI_SKIP_HTTP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Install Bash runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Transpile M3 verification to Bash
+        run: dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Bash
+
+      - name: Execute Bash verification
+        run: bash examples/m3_verification.sh
+
+  m3-verification-powershell:
+    name: M3 Verification (PowerShell)
+    runs-on: windows-latest
+    needs: unit-tests
+    env:
+      SUSHI_SKIP_HTTP: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Transpile M3 verification to PowerShell
+        run: dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Powershell7
+
+      - name: Execute PowerShell verification
+        shell: pwsh
+        run: |
+          ./examples/m3_verification.ps1

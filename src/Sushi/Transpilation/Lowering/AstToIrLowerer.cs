@@ -2,6 +2,7 @@ namespace Sushi.Transpilation.Lowering;
 
 using Sushi.Build.SyntaxTree;
 using Sushi.Transpilation.IR;
+using Sushi.Transpilation.Intrinsics;
 
 public sealed class AstToIrLowerer
 {
@@ -11,6 +12,7 @@ public sealed class AstToIrLowerer
     private const string InvalidAssignmentTargetCode = "SUSHI1004";
 
     private readonly List<Diagnostic> _diagnostics = new();
+    private readonly IntrinsicRegistry _intrinsicRegistry = IntrinsicRegistry.CreateDefault();
     private string _sourcePath = "";
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
@@ -153,9 +155,22 @@ public sealed class AstToIrLowerer
             ParenthesizedExpressionNode parenthesized => LowerExpression(parenthesized.Expression),
             UnaryExpressionNode unary => new IrUnaryExpression(unary.Operator, LowerExpression(unary.Operand), unary.IsPrefix),
             BinaryExpressionNode binary => LowerBinary(binary),
+            ArrayLiteralExpressionNode array => new IrArrayLiteralExpression(array.Elements.Select(LowerExpression)),
+            ObjectLiteralExpressionNode obj => LowerObjectLiteral(obj),
+            MemberAccessExpressionNode member => new IrMemberAccessExpression(LowerExpression(member.Object), member.MemberName),
+            IndexExpressionNode index => new IrIndexExpression(LowerExpression(index.Array), LowerExpression(index.Index)),
             CallExpressionNode call => LowerCall(call),
             _ => UnsupportedExpression(node)
         };
+    }
+
+    private IrExpression LowerObjectLiteral(ObjectLiteralExpressionNode node)
+    {
+        var properties = node.Properties
+            .Select(property => new IrObjectProperty(property.Name, LowerExpression(property.Value)))
+            .ToList();
+
+        return new IrObjectLiteralExpression(properties);
     }
 
     private IrExpression LowerBinary(BinaryExpressionNode node)
@@ -186,6 +201,52 @@ public sealed class AstToIrLowerer
 
     private IrExpression LowerCall(CallExpressionNode node)
     {
+        var loweredArguments = node.Arguments
+            .Select(argument => new IntrinsicCallArgument(
+                argument.Name,
+                LowerExpression(argument.Value),
+                argument.Line,
+                argument.Column))
+            .ToList();
+
+        if (TryGetCalleePath(node.Callee, out var calleePath))
+        {
+            if (_intrinsicRegistry.TryResolve(calleePath, out var signature))
+            {
+                var binding = IntrinsicCallBinder.Bind(
+                    signature,
+                    loweredArguments,
+                    _sourcePath,
+                    node.Line,
+                    node.Column);
+
+                foreach (var diagnostic in binding.Diagnostics)
+                {
+                    _diagnostics.Add(diagnostic);
+                }
+
+                if (!binding.Success)
+                {
+                    return new IrLiteralExpression(null);
+                }
+
+                return new IrIntrinsicCallExpression(
+                    signature.CanonicalName,
+                    signature.Id,
+                    binding.OrderedArguments);
+            }
+
+            if (calleePath.StartsWith("std.", StringComparison.Ordinal))
+            {
+                AddDiagnostic(
+                    IntrinsicDiagnosticCodes.UnknownIntrinsic,
+                    $"Unknown intrinsic '{calleePath}'",
+                    node.Line,
+                    node.Column);
+                return new IrLiteralExpression(null);
+            }
+        }
+
         if (node.Callee is not IdentifierExpressionNode callee)
         {
             AddDiagnostic(
@@ -197,7 +258,7 @@ public sealed class AstToIrLowerer
         }
 
         var arguments = new List<IrExpression>();
-        foreach (var argument in node.Arguments)
+        foreach (var argument in loweredArguments)
         {
             if (argument.Name != null)
             {
@@ -208,10 +269,34 @@ public sealed class AstToIrLowerer
                     argument.Column);
             }
 
-            arguments.Add(LowerExpression(argument.Value));
+            arguments.Add(argument.Value);
         }
 
         return new IrCallExpression(callee.Name, arguments);
+    }
+
+    private static bool TryGetCalleePath(ExpressionNode callee, out string path)
+    {
+        switch (callee)
+        {
+            case IdentifierExpressionNode identifier:
+                path = identifier.Name;
+                return true;
+
+            case MemberAccessExpressionNode memberAccess:
+                if (!TryGetCalleePath(memberAccess.Object, out var objectPath))
+                {
+                    path = "";
+                    return false;
+                }
+
+                path = $"{objectPath}.{memberAccess.MemberName}";
+                return true;
+
+            default:
+                path = "";
+                return false;
+        }
     }
 
     private IrExpression UnsupportedExpression(AstNode node)
