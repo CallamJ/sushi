@@ -92,17 +92,39 @@ public sealed class IrForStatement : IrStatement
     }
 }
 
+public sealed class IrFunctionParameter
+{
+    public string Name { get; }
+    public bool IsVarargs { get; }
+    public IrExpression? DefaultValue { get; }
+
+    public IrFunctionParameter(string name, bool isVarargs, IrExpression? defaultValue)
+    {
+        Name = name;
+        IsVarargs = isVarargs;
+        DefaultValue = defaultValue;
+    }
+}
+
 public sealed class IrFunctionDeclarationStatement : IrStatement
 {
     public string Name { get; }
-    public List<string> Parameters { get; }
+    public List<IrFunctionParameter> Parameters { get; }
     public IrBlockStatement Body { get; }
 
-    public IrFunctionDeclarationStatement(string name, IEnumerable<string> parameters, IrBlockStatement body)
+    public IrFunctionDeclarationStatement(string name, IEnumerable<IrFunctionParameter> parameters, IrBlockStatement body)
     {
         Name = name;
         Parameters = parameters.ToList();
         Body = body;
+    }
+
+    public IrFunctionDeclarationStatement(string name, IEnumerable<string> parameters, IrBlockStatement body)
+        : this(
+            name,
+            parameters.Select(parameter => new IrFunctionParameter(parameter, isVarargs: false, defaultValue: null)),
+            body)
+    {
     }
 }
 
@@ -184,15 +206,38 @@ public sealed class IrAssignmentExpression : IrExpression
     }
 }
 
+public sealed class IrCallArgument
+{
+    public string? Name { get; }
+    public IrExpression Value { get; }
+    public int Line { get; }
+    public int Column { get; }
+
+    public IrCallArgument(string? name, IrExpression value, int line, int column)
+    {
+        Name = name;
+        Value = value;
+        Line = line;
+        Column = column;
+    }
+}
+
 public sealed class IrCallExpression : IrExpression
 {
     public string Callee { get; }
-    public List<IrExpression> Arguments { get; }
+    public List<IrCallArgument> Arguments { get; }
 
-    public IrCallExpression(string callee, IEnumerable<IrExpression> arguments)
+    public IrCallExpression(string callee, IEnumerable<IrCallArgument> arguments)
     {
         Callee = callee;
         Arguments = arguments.ToList();
+    }
+
+    public IrCallExpression(string callee, IEnumerable<IrExpression> arguments)
+        : this(
+            callee,
+            arguments.Select(argument => new IrCallArgument(name: null, argument, line: 1, column: 1)))
+    {
     }
 }
 

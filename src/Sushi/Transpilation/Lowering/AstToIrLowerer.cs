@@ -10,9 +10,11 @@ public sealed class AstToIrLowerer
     private const string UnsupportedParameterCode = "SUSHI1002";
     private const string UnsupportedCallCode = "SUSHI1003";
     private const string InvalidAssignmentTargetCode = "SUSHI1004";
+    private const string UnresolvedNamedCallCode = "SUSHI1017";
 
     private readonly List<Diagnostic> _diagnostics = new();
     private readonly IntrinsicRegistry _intrinsicRegistry = IntrinsicRegistry.CreateDefault();
+    private readonly Dictionary<string, List<IrFunctionParameter>> _functionSignatures = new();
     private string _sourcePath = "";
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
@@ -20,6 +22,9 @@ public sealed class AstToIrLowerer
     public IrProgram Lower(ProgramNode program, string sourcePath)
     {
         _sourcePath = sourcePath;
+        _functionSignatures.Clear();
+        CollectFunctionSignatures(program);
+
         var output = new IrProgram();
 
         foreach (var declaration in program.Declarations)
@@ -48,20 +53,41 @@ public sealed class AstToIrLowerer
 
     private IrFunctionDeclarationStatement? LowerFunction(FunctionDeclarationNode node)
     {
-        var parameterNames = new List<string>();
+        var parameters = _functionSignatures.TryGetValue(node.Name, out var signature)
+            ? signature.Select(parameter => new IrFunctionParameter(parameter.Name, parameter.IsVarargs, parameter.DefaultValue)).ToList()
+            : new List<IrFunctionParameter>();
 
-        foreach (var parameter in node.Parameters)
+        for (var i = 0; i < node.Parameters.Count; i++)
         {
-            if (parameter.StructuralType != null || parameter.IsVarargs || parameter.DefaultValue != null)
+            var parameter = node.Parameters[i];
+            if (parameter.StructuralType != null)
             {
                 AddDiagnostic(
                     UnsupportedParameterCode,
-                    "Structural parameters, varargs, and default values are not supported in Milestone 1 transpilation",
+                    "Structural parameters are not yet supported in transpilation",
                     parameter.Line,
                     parameter.Column);
             }
 
-            parameterNames.Add(parameter.Name);
+            if (parameter.IsVarargs && i != node.Parameters.Count - 1)
+            {
+                AddDiagnostic(
+                    FunctionCallBinder.InvalidVarargsDeclarationCode,
+                    $"Function '{node.Name}' has an invalid varargs declaration. Varargs must be the final parameter.",
+                    parameter.Line,
+                    parameter.Column);
+            }
+        }
+
+        if (parameters.Count == 0)
+        {
+            foreach (var parameter in node.Parameters)
+            {
+                parameters.Add(new IrFunctionParameter(
+                    parameter.Name,
+                    parameter.IsVarargs,
+                    parameter.DefaultValue != null ? LowerExpression(parameter.DefaultValue) : null));
+            }
         }
 
         var body = node.Body switch
@@ -77,7 +103,7 @@ public sealed class AstToIrLowerer
             return null;
         }
 
-        return new IrFunctionDeclarationStatement(node.Name, parameterNames, body);
+        return new IrFunctionDeclarationStatement(node.Name, parameters, body);
     }
 
     private IrBlockStatement LowerBlock(BlockStatementNode block)
@@ -201,7 +227,7 @@ public sealed class AstToIrLowerer
 
     private IrExpression LowerCall(CallExpressionNode node)
     {
-        var loweredArguments = node.Arguments
+        var intrinsicArguments = node.Arguments
             .Select(argument => new IntrinsicCallArgument(
                 argument.Name,
                 LowerExpression(argument.Value),
@@ -215,7 +241,7 @@ public sealed class AstToIrLowerer
             {
                 var binding = IntrinsicCallBinder.Bind(
                     signature,
-                    loweredArguments,
+                    intrinsicArguments,
                     _sourcePath,
                     node.Line,
                     node.Column);
@@ -257,22 +283,70 @@ public sealed class AstToIrLowerer
             return new IrLiteralExpression(null);
         }
 
-        var arguments = new List<IrExpression>();
-        foreach (var argument in loweredArguments)
+        var loweredArguments = node.Arguments
+            .Select(argument => new IrCallArgument(
+                argument.Name,
+                LowerExpression(argument.Value),
+                argument.Line,
+                argument.Column))
+            .ToList();
+
+        if (_functionSignatures.TryGetValue(callee.Name, out var functionParameters))
         {
-            if (argument.Name != null)
+            var binding = FunctionCallBinder.Bind(
+                callee.Name,
+                functionParameters,
+                loweredArguments,
+                _sourcePath,
+                node.Line,
+                node.Column);
+
+            foreach (var diagnostic in binding.Diagnostics)
             {
-                AddDiagnostic(
-                    UnsupportedCallCode,
-                    "Named arguments are not supported in Milestone 1 transpilation",
-                    argument.Line,
-                    argument.Column);
+                _diagnostics.Add(diagnostic);
             }
 
-            arguments.Add(argument.Value);
+            if (!binding.Success)
+            {
+                return new IrLiteralExpression(null);
+            }
+
+            return new IrCallExpression(callee.Name, binding.OrderedArguments);
         }
 
-        return new IrCallExpression(callee.Name, arguments);
+        if (loweredArguments.Any(argument => argument.Name != null))
+        {
+            AddDiagnostic(
+                UnresolvedNamedCallCode,
+                $"Named arguments require a known Sushi function signature. Could not resolve '{callee.Name}'.",
+                node.Line,
+                node.Column);
+            return new IrLiteralExpression(null);
+        }
+
+        return new IrCallExpression(callee.Name, loweredArguments);
+    }
+
+    private void CollectFunctionSignatures(ProgramNode program)
+    {
+        foreach (var declaration in program.Declarations)
+        {
+            if (declaration is not FunctionDeclarationNode function)
+            {
+                continue;
+            }
+
+            var parameters = new List<IrFunctionParameter>();
+            foreach (var parameter in function.Parameters)
+            {
+                parameters.Add(new IrFunctionParameter(
+                    parameter.Name,
+                    parameter.IsVarargs,
+                    parameter.DefaultValue != null ? LowerExpression(parameter.DefaultValue) : null));
+            }
+
+            _functionSignatures[function.Name] = parameters;
+        }
     }
 
     private static bool TryGetCalleePath(ExpressionNode callee, out string path)

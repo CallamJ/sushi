@@ -1197,10 +1197,21 @@ __sushi_http_post() {
         WriteLine($"{SanitizeName(statement.Name)}() {{");
         _indent++;
 
-        for (var i = 0; i < statement.Parameters.Count; i++)
+        var argIndex = 1;
+        foreach (var parameter in statement.Parameters)
         {
-            var param = SanitizeName(statement.Parameters[i]);
-            WriteLine($"local {param}=\"${i + 1}\"");
+            var param = SanitizeName(parameter.Name);
+            if (parameter.IsVarargs)
+            {
+                var varargsArray = $"__sushi_varargs_{param}";
+                WriteLine($"local -a {varargsArray}=(\"${{@:{argIndex}}}\")");
+                WriteLine($"local {param}=\"$(__sushi_json_array \"${{{varargsArray}[@]}}\")\"");
+            }
+            else
+            {
+                WriteLine($"local {param}=\"${argIndex}\"");
+                argIndex++;
+            }
         }
 
         EmitStatement(statement.Body, inFunction: true);
@@ -1263,7 +1274,7 @@ __sushi_http_post() {
     private string EmitCallCommand(IrCallExpression call)
     {
         var callee = SanitizeName(call.Callee);
-        var arguments = call.Arguments.Select(EmitValueExpression).ToList();
+        var arguments = call.Arguments.Select(argument => EmitValueExpression(argument.Value)).ToList();
         return arguments.Count > 0
             ? $"{callee} {string.Join(" ", arguments)}"
             : callee;

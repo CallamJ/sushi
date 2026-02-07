@@ -44,7 +44,7 @@ public class AstToIrLowererTests
     }
 
     [Fact]
-    public void Lower_NamedArgumentCall_ReportsUnsupportedCallShape()
+    public void Lower_UnresolvedNamedArgumentCall_ReportsDiagnostic()
     {
         const string source = """
             greet(name: "Alice")
@@ -54,7 +54,28 @@ public class AstToIrLowererTests
         var lowerer = new AstToIrLowerer();
         _ = lowerer.Lower(program, "test.sushi");
 
-        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1003");
+        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1017");
+    }
+
+    [Fact]
+    public void Lower_KnownFunctionNamedArgumentCall_BindsToCallIr()
+    {
+        const string source = """
+            greet(name, punctuation = "!") {
+                return name
+            }
+            var value = greet(name: "Alice")
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(program, "test.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        var declaration = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements.Last());
+        var call = Assert.IsType<IrCallExpression>(declaration.Initializer);
+        Assert.Equal(2, call.Arguments.Count);
+        Assert.All(call.Arguments, argument => Assert.Null(argument.Name));
     }
 
     [Fact]

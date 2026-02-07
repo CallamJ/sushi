@@ -473,10 +473,21 @@ function __sushi_http_post {
         WriteLine($"function {SanitizeName(statement.Name)} {{");
         _indent++;
 
-        if (statement.Parameters.Count > 0)
+        var regularParameters = statement.Parameters
+            .Where(parameter => !parameter.IsVarargs)
+            .Select(parameter => $"${SanitizeName(parameter.Name)}")
+            .ToList();
+        var varargsParameter = statement.Parameters.FirstOrDefault(parameter => parameter.IsVarargs);
+
+        if (regularParameters.Count > 0)
         {
-            var parameterList = string.Join(", ", statement.Parameters.Select(p => $"${SanitizeName(p)}"));
+            var parameterList = string.Join(", ", regularParameters);
             WriteLine($"param({parameterList})");
+        }
+
+        if (varargsParameter != null)
+        {
+            WriteLine($"${SanitizeName(varargsParameter.Name)} = @($args)");
         }
 
         EmitStatement(statement.Body);
@@ -531,7 +542,7 @@ function __sushi_http_post {
     private string EmitCallCommand(IrCallExpression call)
     {
         var callee = SanitizeName(call.Callee);
-        var arguments = call.Arguments.Select(EmitValueExpression).ToList();
+        var arguments = call.Arguments.Select(argument => EmitValueExpression(argument.Value)).ToList();
         return arguments.Count > 0
             ? $"{callee} {string.Join(" ", arguments)}"
             : callee;

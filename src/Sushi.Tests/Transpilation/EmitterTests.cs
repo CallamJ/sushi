@@ -312,4 +312,59 @@ public class EmitterTests
         Assert.Contains("$timedOut = $true", script);
         Assert.Empty(diagnostics);
     }
+
+    [Fact]
+    public void BashEmitter_EmitsVarargsFunctionBinding()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrFunctionDeclarationStatement(
+                "collect",
+                new[]
+                {
+                    new IrFunctionParameter("head", isVarargs: false, defaultValue: null),
+                    new IrFunctionParameter("rest", isVarargs: true, defaultValue: null)
+                },
+                new IrBlockStatement(new IrStatement[]
+                {
+                    new IrReturnStatement(new IrIdentifierExpression("rest"))
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new BashEmitter();
+        var script = emitter.Emit(program, new EmitContext("varargs.sushi", diagnostics));
+
+        Assert.Contains("local head=\"$1\"", script);
+        Assert.Contains("local -a __sushi_varargs_rest=(\"${@:2}\")", script);
+        Assert.Contains("local rest=\"$(__sushi_json_array", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void PowerShellEmitter_EmitsVarargsFunctionBinding()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrFunctionDeclarationStatement(
+                "collect",
+                new[]
+                {
+                    new IrFunctionParameter("head", isVarargs: false, defaultValue: null),
+                    new IrFunctionParameter("rest", isVarargs: true, defaultValue: null)
+                },
+                new IrBlockStatement(new IrStatement[]
+                {
+                    new IrReturnStatement(new IrIdentifierExpression("rest"))
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new PowerShellEmitter();
+        var script = emitter.Emit(program, new EmitContext("varargs.sushi", diagnostics));
+
+        Assert.Contains("param($head)", script);
+        Assert.Contains("$rest = @($args)", script);
+        Assert.Empty(diagnostics);
+    }
 }
