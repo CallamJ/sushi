@@ -1,5 +1,7 @@
 # Sushi
 
+[![CI](https://github.com/callamj/sushi/actions/workflows/ci.yml/badge.svg)](https://github.com/callamj/sushi/actions/workflows/ci.yml)
+
 Sushi is a shell scripting language that transpiles to Bash or PowerShell.
 The goal is to write one script and run it across environments without manually
 maintaining two shells.
@@ -67,3 +69,7 @@ GitHub Actions now runs:
 - unit tests
 - M3 verification transpile + execution on Ubuntu (Bash target)
 - M3 verification transpile + execution on Windows (PowerShell target)
+- NuGet package caching for faster runs
+
+HTTP checks are skipped by default in CI to reduce flakiness. To allow HTTP
+checks, run the workflow manually and set `allow_http=true`.
