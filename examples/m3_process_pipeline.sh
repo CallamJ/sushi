@@ -727,8 +727,61 @@ __sushi_process_run() {
   fi
 
   local exit_code timed_out=false
+  local timeout_enabled=false
+  if __sushi_j_is_integer "$timeout_ms" && (( timeout_ms > 0 )); then
+    timeout_enabled=true
+  fi
+
   set +e
-  if [[ -n "$cwd" ]] && [[ "$cwd" != "null" ]]; then
+  if [[ "$timeout_enabled" == "true" ]]; then
+    local timeout_flag timeout_pid command_pid timeout_seconds
+    timeout_flag="$(mktemp)"
+    rm -f -- "$timeout_flag"
+    timeout_seconds="$(awk -v ms="$timeout_ms" 'BEGIN { if (ms <= 0) { print "0" } else { printf "%.3f", ms / 1000 } }')"
+
+    if [[ -n "$cwd" ]] && [[ "$cwd" != "null" ]]; then
+      (
+        cd -- "$cwd" || exit 1
+        if [[ "$stream" == "true" ]]; then
+          env "${env_pairs[@]}" "${cmd_argv[@]}" < "$input_file" > >(tee "$stdout_file") 2> >(tee "$stderr_file" >&2)
+        else
+          env "${env_pairs[@]}" "${cmd_argv[@]}" < "$input_file" > "$stdout_file" 2> "$stderr_file"
+        fi
+      ) &
+    else
+      (
+        if [[ "$stream" == "true" ]]; then
+          env "${env_pairs[@]}" "${cmd_argv[@]}" < "$input_file" > >(tee "$stdout_file") 2> >(tee "$stderr_file" >&2)
+        else
+          env "${env_pairs[@]}" "${cmd_argv[@]}" < "$input_file" > "$stdout_file" 2> "$stderr_file"
+        fi
+      ) &
+    fi
+
+    command_pid=$!
+    (
+      sleep "$timeout_seconds"
+      if kill -0 "$command_pid" 2>/dev/null; then
+        printf '1' > "$timeout_flag"
+        kill -TERM "$command_pid" 2>/dev/null || true
+        sleep 1
+        kill -KILL "$command_pid" 2>/dev/null || true
+      fi
+    ) &
+    timeout_pid=$!
+
+    wait "$command_pid"
+    exit_code=$?
+    kill "$timeout_pid" 2>/dev/null || true
+    wait "$timeout_pid" 2>/dev/null || true
+
+    if [[ -s "$timeout_flag" ]]; then
+      timed_out=true
+      exit_code=124
+    fi
+
+    rm -f -- "$timeout_flag"
+  elif [[ -n "$cwd" ]] && [[ "$cwd" != "null" ]]; then
     (
       cd -- "$cwd" || exit 1
       if [[ "$stream" == "true" ]]; then

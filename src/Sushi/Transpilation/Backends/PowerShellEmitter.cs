@@ -109,15 +109,62 @@ function __sushi_process_run {
             Set-Location -LiteralPath $cwd
         }
 
-        if ($null -ne $inputText) {
-            $stdinFile = [System.IO.Path]::GetTempFileName()
-            Set-Content -LiteralPath $stdinFile -Value ([string]$inputText) -NoNewline
-            Get-Content -Raw -LiteralPath $stdinFile | & $command @argList > $stdoutFile 2> $stderrFile
-        } else {
-            & $command @argList > $stdoutFile 2> $stderrFile
-        }
+        if ($timeoutMs -gt 0) {
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $command
+            $startInfo.UseShellExecute = $false
+            $startInfo.RedirectStandardInput = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            if (-not [string]::IsNullOrWhiteSpace($cwd)) {
+                $startInfo.WorkingDirectory = (Get-Location).Path
+            }
 
-        $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+            $quotedArgs = @($argList | ForEach-Object {
+                $arg = [string]$_
+                if ($arg.Length -eq 0) { return '""' }
+                $arg = $arg.Replace('"', '\"')
+                if ($arg -match '\s') { return '"' + $arg + '"' }
+                return $arg
+            })
+            $startInfo.Arguments = ($quotedArgs -join ' ')
+
+            $process = [System.Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            $null = $process.Start()
+
+            if ($null -ne $inputText) {
+                $process.StandardInput.Write([string]$inputText)
+            }
+            $process.StandardInput.Close()
+
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+
+            if (-not $process.WaitForExit($timeoutMs)) {
+                $timedOut = $true
+                try { $process.Kill($true) } catch { try { $process.Kill() } catch { } }
+            }
+
+            $process.WaitForExit()
+            $stdout = $stdoutTask.GetAwaiter().GetResult()
+            $stderr = $stderrTask.GetAwaiter().GetResult()
+            Set-Content -LiteralPath $stdoutFile -Value $stdout -NoNewline
+            Set-Content -LiteralPath $stderrFile -Value $stderr -NoNewline
+
+            $exitCode = if ($timedOut) { 124 } else { [int]$process.ExitCode }
+            $process.Dispose()
+        } else {
+            if ($null -ne $inputText) {
+                $stdinFile = [System.IO.Path]::GetTempFileName()
+                Set-Content -LiteralPath $stdinFile -Value ([string]$inputText) -NoNewline
+                Get-Content -Raw -LiteralPath $stdinFile | & $command @argList > $stdoutFile 2> $stderrFile
+            } else {
+                & $command @argList > $stdoutFile 2> $stderrFile
+            }
+
+            $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+        }
     } catch {
         $exitCode = 1
         $_ | Out-String | Set-Content -LiteralPath $stderrFile

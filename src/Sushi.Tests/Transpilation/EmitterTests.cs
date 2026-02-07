@@ -250,4 +250,66 @@ public class EmitterTests
         Assert.Contains("setopt typesetsilent", script);
         Assert.Empty(diagnostics);
     }
+
+    [Fact]
+    public void BashEmitter_EmitsTimeoutHandlingInProcessRun()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("result", new IrIntrinsicCallExpression(
+                "std.process.run",
+                IntrinsicId.ProcessRun,
+                new IrExpression[]
+                {
+                    new IrLiteralExpression("echo"),
+                    new IrArrayLiteralExpression(new IrExpression[] { new IrLiteralExpression("hi") }),
+                    new IrLiteralExpression(null),
+                    new IrLiteralExpression(null),
+                    new IrLiteralExpression(null),
+                    new IrLiteralExpression(250),
+                    new IrLiteralExpression(true),
+                    new IrLiteralExpression(false)
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new BashEmitter();
+        var script = emitter.Emit(program, new EmitContext("timeout.sushi", diagnostics));
+
+        Assert.Contains("timeout_enabled=true", script);
+        Assert.Contains("sleep \"$timeout_seconds\"", script);
+        Assert.Contains("exit_code=124", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void PowerShellEmitter_EmitsTimeoutHandlingInProcessRun()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("result", new IrIntrinsicCallExpression(
+                "std.process.run",
+                IntrinsicId.ProcessRun,
+                new IrExpression[]
+                {
+                    new IrLiteralExpression("echo"),
+                    new IrArrayLiteralExpression(new IrExpression[] { new IrLiteralExpression("hi") }),
+                    new IrLiteralExpression(null),
+                    new IrLiteralExpression(null),
+                    new IrLiteralExpression(null),
+                    new IrLiteralExpression(250),
+                    new IrLiteralExpression(true),
+                    new IrLiteralExpression(false)
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new PowerShellEmitter();
+        var script = emitter.Emit(program, new EmitContext("timeout.sushi", diagnostics));
+
+        Assert.Contains("if ($timeoutMs -gt 0)", script);
+        Assert.Contains("WaitForExit($timeoutMs)", script);
+        Assert.Contains("$timedOut = $true", script);
+        Assert.Empty(diagnostics);
+    }
 }

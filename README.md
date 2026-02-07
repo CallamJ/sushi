@@ -16,6 +16,12 @@ Milestone 3 runtime intrinsics are now available for:
 - file globbing
 - HTTP GET/POST
 
+Milestone 4 CLI workflow commands are available:
+
+- `sushi check` to validate/transpile without writing output
+- `sushi run` to transpile and execute in one step
+- `sushi watch` to continuously transpile (and optionally run)
+
 ## Prerequisites
 
 ### Build/transpile Sushi
@@ -70,6 +76,14 @@ zsh examples/m3_verification.zsh
 
 If your environment blocks outbound HTTP, set `SUSHI_SKIP_HTTP=1` before
 running verification.
+
+## Quickstart (M4 workflow)
+
+```powershell
+dotnet run --project src/Sushi -- check examples/m3_verification.sushi
+dotnet run --project src/Sushi -- run examples/m3_verification.sushi
+dotnet run --project src/Sushi -- watch examples/m3_verification.sushi --run
+```
 
 ## Portability and runtime behavior
 

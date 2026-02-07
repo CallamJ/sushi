@@ -43,7 +43,7 @@ Returns an object with fields:
 - `stderr` (string)
 - `ok` (bool)
 - `command` (string)
-- `timedOut` (bool; currently always `false`)
+- `timedOut` (bool)
 
 Notes:
 
@@ -94,7 +94,6 @@ Network/runtime failure contract:
 
 ## 3. Known M3 limitations
 
-- `timeoutMs` parameter is accepted in process APIs but not enforced yet.
 - HTTP behavior can vary by host networking/TLS policy.
 - Glob output format is not fully normalized cross-target yet.
 - Bash/Zsh JSON operations are pure-shell in emitted scripts (no `jq`/`perl` dependency).
