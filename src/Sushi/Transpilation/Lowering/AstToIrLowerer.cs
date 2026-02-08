@@ -17,6 +17,19 @@ public sealed class AstToIrLowerer
     private const string ReturnTypeMismatchCode = "SUSHI1024";
     private const string InvalidStructuralDeclarationCode = "SUSHI1025";
     private const string UnsupportedStructuralConstructCode = "SUSHI1026";
+    private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
+    {
+        ["trim"] = "std.string.trim",
+        ["lower"] = "std.string.lower",
+        ["upper"] = "std.string.upper",
+        ["split"] = "std.string.split",
+        ["contains"] = "std.string.contains",
+        ["startsWith"] = "std.string.startsWith",
+        ["endsWith"] = "std.string.endsWith",
+        ["replace"] = "std.string.replace",
+        ["isMatch"] = "std.string.isMatch",
+        ["match"] = "std.string.match"
+    };
 
     private readonly List<Diagnostic> _diagnostics = new();
     private readonly IntrinsicRegistry _intrinsicRegistry = IntrinsicRegistry.CreateDefault();
@@ -528,6 +541,38 @@ public sealed class AstToIrLowerer
 
         if (node.Callee is MemberAccessExpressionNode memberCallee)
         {
+            if (StringMethodIntrinsicMap.TryGetValue(memberCallee.MemberName, out var canonicalStringIntrinsic) &&
+                _intrinsicRegistry.TryResolve(canonicalStringIntrinsic, out var stringSignature))
+            {
+                var stringIntrinsicArguments = new List<IntrinsicCallArgument>
+                {
+                    new(null, LowerExpression(memberCallee.Object), memberCallee.Line, memberCallee.Column)
+                };
+                stringIntrinsicArguments.AddRange(intrinsicArguments);
+
+                var binding = IntrinsicCallBinder.Bind(
+                    stringSignature,
+                    stringIntrinsicArguments,
+                    _sourcePath,
+                    node.Line,
+                    node.Column);
+
+                foreach (var diagnostic in binding.Diagnostics)
+                {
+                    _diagnostics.Add(diagnostic);
+                }
+
+                if (!binding.Success)
+                {
+                    return new IrLiteralExpression(null);
+                }
+
+                return new IrIntrinsicCallExpression(
+                    stringSignature.CanonicalName,
+                    stringSignature.Id,
+                    binding.OrderedArguments);
+            }
+
             if (loweredArguments.Any(argument => argument.Name != null))
             {
                 AddDiagnostic(

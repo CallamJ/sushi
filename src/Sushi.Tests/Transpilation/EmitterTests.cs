@@ -98,6 +98,74 @@ public class EmitterTests
     }
 
     [Fact]
+    public void PowerShellEmitter_EmitsStringIntrinsicHelpers()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("matched", new IrIntrinsicCallExpression(
+                "std.string.match",
+                IntrinsicId.StringMatch,
+                new IrExpression[]
+                {
+                    new IrLiteralExpression("abc123"),
+                    new IrLiteralExpression("\\d+")
+                })),
+            new IrVariableDeclarationStatement("parts", new IrIntrinsicCallExpression(
+                "std.string.split",
+                IntrinsicId.StringSplit,
+                new IrExpression[]
+                {
+                    new IrLiteralExpression("a,b,c"),
+                    new IrLiteralExpression(","),
+                    new IrLiteralExpression(2)
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new PowerShellEmitter();
+        var script = emitter.Emit(program, new EmitContext("strings.sushi", diagnostics));
+
+        Assert.Contains("function __sushi_require_string_receiver", script);
+        Assert.Contains("function __sushi_string_match", script);
+        Assert.Contains("__sushi_string_match -value", script);
+        Assert.Contains("__sushi_string_split -value", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void BashEmitter_EmitsStringIntrinsicHelpers()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("ok", new IrIntrinsicCallExpression(
+                "std.string.contains",
+                IntrinsicId.StringContains,
+                new IrExpression[]
+                {
+                    new IrLiteralExpression("hello"),
+                    new IrLiteralExpression("ell")
+                })),
+            new IrVariableDeclarationStatement("match", new IrIntrinsicCallExpression(
+                "std.string.match",
+                IntrinsicId.StringMatch,
+                new IrExpression[]
+                {
+                    new IrLiteralExpression("abc123"),
+                    new IrLiteralExpression("[0-9]+")
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new BashEmitter();
+        var script = emitter.Emit(program, new EmitContext("strings.sushi", diagnostics));
+
+        Assert.Contains("__sushi_string_contains", script);
+        Assert.Contains("__sushi_string_match", script);
+        Assert.Contains("__sushi_require_string_receiver", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
     public void PowerShellEmitter_WriteText_CreatesParentDirectory()
     {
         var program = new IrProgram(new IrStatement[]

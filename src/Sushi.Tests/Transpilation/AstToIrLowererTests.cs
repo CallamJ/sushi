@@ -5,6 +5,7 @@ using Sushi.Build;
 using Sushi.Build.SyntaxTree;
 using Sushi.Transpilation;
 using Sushi.Transpilation.IR;
+using Sushi.Transpilation.Intrinsics;
 using Sushi.Transpilation.Lowering;
 using Xunit;
 
@@ -93,6 +94,30 @@ public class AstToIrLowererTests
         Assert.DoesNotContain(lowerer.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
         var declaration = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements[0]);
         Assert.IsType<IrIntrinsicCallExpression>(declaration.Initializer);
+    }
+
+    [Fact]
+    public void Lower_StringMethodSugar_ProducesStringIntrinsicIr()
+    {
+        const string source = """
+            var text = "  Hello  "
+            var lowered = text.trim().lower()
+            var parts = lowered.split("e", limit: 2)
+            """;
+
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(program, "test.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        var loweredDeclaration = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements[1]);
+        var loweredCall = Assert.IsType<IrIntrinsicCallExpression>(loweredDeclaration.Initializer);
+        Assert.Equal(IntrinsicId.StringLower, loweredCall.Id);
+
+        var partsDeclaration = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements[2]);
+        var partsCall = Assert.IsType<IrIntrinsicCallExpression>(partsDeclaration.Initializer);
+        Assert.Equal(IntrinsicId.StringSplit, partsCall.Id);
+        Assert.Equal(3, partsCall.Arguments.Count);
     }
 
     [Fact]

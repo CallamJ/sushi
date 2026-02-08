@@ -1498,6 +1498,176 @@ __sushi_add() {
   printf '%s' "${left}${right}"
 }
 
+__sushi_require_string_receiver() {
+  local value="${1-}"
+  local method="${2-string method}"
+  if [[ "$value" == "__sushi_null__" ]]; then
+    printf 'Type contract violation: string receiver for %s expected non-null value\n' "$method" >&2
+    exit 2
+  fi
+  printf '%s' "$value"
+}
+
+__sushi_string_trim() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "trim")"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+__sushi_string_lower() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "lower")"
+  printf '%s' "$value" | tr '[:upper:]' '[:lower:]'
+}
+
+__sushi_string_upper() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "upper")"
+  printf '%s' "$value" | tr '[:lower:]' '[:upper:]'
+}
+
+__sushi_string_split() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "split")"
+  local sep="${2-}"
+  local limit="${3-0}"
+  if ! __sushi_j_is_integer "$limit"; then
+    limit=0
+  fi
+
+  local -a out=()
+  if [[ -z "$sep" ]]; then
+    local len=${#value}
+    if (( limit > 0 )); then
+      if (( limit == 1 )); then
+        __sushi_json_array "$value"
+        return 0
+      fi
+
+      local i=0
+      while (( i < len )) && (( ${#out[@]} < limit - 1 )); do
+        out+=("${value:$i:1}")
+        i=$((i + 1))
+      done
+      out+=("${value:$i}")
+      __sushi_json_array "${out[@]}"
+      return 0
+    fi
+
+    local i=0
+    while (( i < len )); do
+      out+=("${value:$i:1}")
+      i=$((i + 1))
+    done
+    __sushi_json_array "${out[@]}"
+    return 0
+  fi
+
+  local remaining="$value"
+  local part
+  if (( limit > 0 )); then
+    if (( limit == 1 )); then
+      __sushi_json_array "$remaining"
+      return 0
+    fi
+
+    while [[ "$remaining" == *"$sep"* ]] && (( ${#out[@]} < limit - 1 )); do
+      part="${remaining%%"$sep"*}"
+      out+=("$part")
+      remaining="${remaining#*"$sep"}"
+    done
+    out+=("$remaining")
+    __sushi_json_array "${out[@]}"
+    return 0
+  fi
+
+  while [[ "$remaining" == *"$sep"* ]]; do
+    part="${remaining%%"$sep"*}"
+    out+=("$part")
+    remaining="${remaining#*"$sep"}"
+  done
+  out+=("$remaining")
+  __sushi_json_array "${out[@]}"
+}
+
+__sushi_string_contains() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "contains")"
+  local needle="${2-}"
+  if [[ "$value" == *"$needle"* ]]; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+__sushi_string_starts_with() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "startsWith")"
+  local prefix="${2-}"
+  if [[ "$value" == "$prefix"* ]]; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+__sushi_string_ends_with() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "endsWith")"
+  local suffix="${2-}"
+  if [[ "$value" == *"$suffix" ]]; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+__sushi_string_replace() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "replace")"
+  local old="${2-}"
+  local new="${3-}"
+  if [[ -z "$old" ]]; then
+    printf '%s' "$value"
+    return 0
+  fi
+
+  local replaced="${value//"$old"/"$new"}"
+  printf '%s' "$replaced"
+}
+
+__sushi_string_is_match() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "isMatch")"
+  local pattern="${2-}"
+  if printf '%s\n' "$value" | grep -E -q -- "$pattern"; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+__sushi_string_match() {
+  local value
+  value="$(__sushi_require_string_receiver "${1-}" "match")"
+  local pattern="${2-}"
+  local matched
+  matched="$(printf '%s\n' "$value" | grep -E -o -- "$pattern" | head -n 1 || true)"
+  if [[ -z "$matched" ]]; then
+    __sushi_json_object "ok" "false" "value" "" "index" "-1" "groups" "[]"
+    return 0
+  fi
+
+  local prefix="${value%%"$matched"*}"
+  local index=${#prefix}
+  local groups_json
+  groups_json="$(__sushi_json_array "$matched")"
+  __sushi_json_object "ok" "true" "value" "$matched" "index" "$index" "groups" "$groups_json"
+}
+
 __sushi_truthy() {
   local value="${1-}"
   case "$value" in
@@ -2039,6 +2209,16 @@ __sushi_truthy() {
         {
             IntrinsicId.Print => EmitPrint(call.Arguments, newline: false),
             IntrinsicId.Println => EmitPrint(call.Arguments, newline: true),
+            IntrinsicId.StringTrim => $"{EmitStringTrimInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringLower => $"{EmitStringLowerInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringUpper => $"{EmitStringUpperInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringSplit => $"{EmitStringSplitInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringContains => $"{EmitStringContainsInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringStartsWith => $"{EmitStringStartsWithInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringEndsWith => $"{EmitStringEndsWithInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringReplace => $"{EmitStringReplaceInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringIsMatch => $"{EmitStringIsMatchInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringMatch => $"{EmitStringMatchInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.IoWriteText => EmitIoWriteText(call.Arguments),
             IntrinsicId.EnvSet => EmitEnvSet(call.Arguments),
             IntrinsicId.ProcessExit => EmitProcessExit(call.Arguments),
@@ -2062,6 +2242,16 @@ __sushi_truthy() {
         {
             IntrinsicId.Print => $"$({EmitPrint(call.Arguments, newline: false)})",
             IntrinsicId.Println => $"$({EmitPrint(call.Arguments, newline: true)})",
+            IntrinsicId.StringTrim => $"\"$({EmitStringTrimInvocation(call.Arguments)})\"",
+            IntrinsicId.StringLower => $"\"$({EmitStringLowerInvocation(call.Arguments)})\"",
+            IntrinsicId.StringUpper => $"\"$({EmitStringUpperInvocation(call.Arguments)})\"",
+            IntrinsicId.StringSplit => $"\"$({EmitStringSplitInvocation(call.Arguments)})\"",
+            IntrinsicId.StringContains => $"\"$({EmitStringContainsInvocation(call.Arguments)})\"",
+            IntrinsicId.StringStartsWith => $"\"$({EmitStringStartsWithInvocation(call.Arguments)})\"",
+            IntrinsicId.StringEndsWith => $"\"$({EmitStringEndsWithInvocation(call.Arguments)})\"",
+            IntrinsicId.StringReplace => $"\"$({EmitStringReplaceInvocation(call.Arguments)})\"",
+            IntrinsicId.StringIsMatch => $"\"$({EmitStringIsMatchInvocation(call.Arguments)})\"",
+            IntrinsicId.StringMatch => $"\"$({EmitStringMatchInvocation(call.Arguments)})\"",
             IntrinsicId.IoReadText => $"$(cat -- {Arg(call.Arguments, 0)})",
             IntrinsicId.IoExists => $"$([[ -e {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
             IntrinsicId.PathJoin => EmitPathJoin(call.Arguments),
@@ -2093,6 +2283,56 @@ __sushi_truthy() {
         return newline
             ? $"printf '%s\\n' {value}"
             : $"printf '%s' {value}";
+    }
+
+    private string EmitStringTrimInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_trim {Arg(arguments, 0)}";
+    }
+
+    private string EmitStringLowerInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_lower {Arg(arguments, 0)}";
+    }
+
+    private string EmitStringUpperInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_upper {Arg(arguments, 0)}";
+    }
+
+    private string EmitStringSplitInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_split {Arg(arguments, 0)} {Arg(arguments, 1)} {Arg(arguments, 2)}";
+    }
+
+    private string EmitStringContainsInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_contains {Arg(arguments, 0)} {Arg(arguments, 1)}";
+    }
+
+    private string EmitStringStartsWithInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_starts_with {Arg(arguments, 0)} {Arg(arguments, 1)}";
+    }
+
+    private string EmitStringEndsWithInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_ends_with {Arg(arguments, 0)} {Arg(arguments, 1)}";
+    }
+
+    private string EmitStringReplaceInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_replace {Arg(arguments, 0)} {Arg(arguments, 1)} {Arg(arguments, 2)}";
+    }
+
+    private string EmitStringIsMatchInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_is_match {Arg(arguments, 0)} {Arg(arguments, 1)}";
+    }
+
+    private string EmitStringMatchInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"__sushi_string_match {Arg(arguments, 0)} {Arg(arguments, 1)}";
     }
 
     private string EmitIoWriteText(IReadOnlyList<IrExpression> arguments)

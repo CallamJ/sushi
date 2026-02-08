@@ -22,6 +22,12 @@ Milestone 4 CLI workflow commands are available:
 - `sushi run` to transpile and execute in one step
 - `sushi watch` to continuously transpile (and optionally run)
 
+String runtime intrinsics and instance-method sugar are available:
+
+- `std.string.trim/lower/upper/split/contains/startsWith/endsWith/replace`
+- `std.string.isMatch` and `std.string.match`
+- method sugar lowering (for example: `text.trim().lower()`)
+
 Milestone 4 Phase 3 function contracts are now available:
 
 - typed function parameters (e.g. `int`, `string`, `bool`, `array`, `object`)

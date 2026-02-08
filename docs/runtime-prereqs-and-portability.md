@@ -113,6 +113,37 @@ For Bash/Zsh and PowerShell outputs, numeric arithmetic is strict:
 - index/member/call expression operands used in arithmetic are runtime-validated
 - non-numeric arithmetic operands fail with contract violation and exit code `2`
 
+### 2.8 `std.string.*` and string method sugar
+
+Available string intrinsics:
+
+- `std.string.trim(value)`
+- `std.string.lower(value)`
+- `std.string.upper(value)`
+- `std.string.split(value, sep, limit=0)`
+- `std.string.contains(value, needle)`
+- `std.string.startsWith(value, prefix)`
+- `std.string.endsWith(value, suffix)`
+- `std.string.replace(value, old, new)` (literal/global replace)
+- `std.string.isMatch(value, pattern)`
+- `std.string.match(value, pattern)`
+
+Method sugar lowers to these intrinsics:
+
+- `text.trim().lower()` -> `std.string.trim(text)` then `std.string.lower(...)`
+
+`match` return shape:
+
+- `ok` (bool)
+- `value` (string)
+- `index` (number, `-1` when no match)
+- `groups` (array)
+
+Regex contract:
+
+- PowerShell target uses .NET regex directly.
+- Bash/Zsh targets approximate .NET regex behavior using shell tooling.
+
 ## 3. Known M3 limitations
 
 - HTTP behavior can vary by host networking/TLS policy.

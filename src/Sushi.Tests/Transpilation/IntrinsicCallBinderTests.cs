@@ -82,4 +82,31 @@ public class IntrinsicCallBinderTests
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, d => d.Code == IntrinsicDiagnosticCodes.UnknownNamedArgument);
     }
+
+    [Fact]
+    public void Bind_StringSplit_DefaultLimit_IsInjected()
+    {
+        var signature = new IntrinsicSignature(
+            "std.string.split",
+            IntrinsicId.StringSplit,
+            new[]
+            {
+                new IntrinsicParameter("value"),
+                new IntrinsicParameter("sep"),
+                new IntrinsicParameter("limit", hasDefaultValue: true, defaultValue: 0)
+            });
+
+        var arguments = new[]
+        {
+            new IntrinsicCallArgument(null, new IrLiteralExpression("a:b"), 1, 1),
+            new IntrinsicCallArgument(null, new IrLiteralExpression(":"), 1, 10)
+        };
+
+        var result = IntrinsicCallBinder.Bind(signature, arguments, "test.sushi", 1, 1);
+
+        Assert.True(result.Success);
+        Assert.Equal(3, result.OrderedArguments.Count);
+        var defaultArg = Assert.IsType<IrLiteralExpression>(result.OrderedArguments[2]);
+        Assert.Equal(0, defaultArg.Value);
+    }
 }

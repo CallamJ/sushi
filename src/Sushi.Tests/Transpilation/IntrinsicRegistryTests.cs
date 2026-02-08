@@ -42,4 +42,18 @@ public class IntrinsicRegistryTests
         Assert.Equal(IntrinsicId.FsGlob, fsGlob.Id);
         Assert.Equal(IntrinsicId.HttpGet, httpGet.Id);
     }
+
+    [Fact]
+    public void Resolve_StringIntrinsics_Succeed()
+    {
+        var registry = IntrinsicRegistry.CreateDefault();
+
+        Assert.True(registry.TryResolve("std.string.trim", out var trim));
+        Assert.True(registry.TryResolve("std.string.split", out var split));
+        Assert.True(registry.TryResolve("std.string.match", out var match));
+
+        Assert.Equal(IntrinsicId.StringTrim, trim.Id);
+        Assert.Equal(IntrinsicId.StringSplit, split.Id);
+        Assert.Equal(IntrinsicId.StringMatch, match.Id);
+    }
 }

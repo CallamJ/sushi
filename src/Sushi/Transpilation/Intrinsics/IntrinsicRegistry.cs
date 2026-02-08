@@ -22,6 +22,76 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.Println,
                 new[] { new IntrinsicParameter("value", hasDefaultValue: true, defaultValue: "") }),
             new IntrinsicSignature(
+                "std.string.trim",
+                IntrinsicId.StringTrim,
+                new[] { new IntrinsicParameter("value") }),
+            new IntrinsicSignature(
+                "std.string.lower",
+                IntrinsicId.StringLower,
+                new[] { new IntrinsicParameter("value") }),
+            new IntrinsicSignature(
+                "std.string.upper",
+                IntrinsicId.StringUpper,
+                new[] { new IntrinsicParameter("value") }),
+            new IntrinsicSignature(
+                "std.string.split",
+                IntrinsicId.StringSplit,
+                new[]
+                {
+                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("sep"),
+                    new IntrinsicParameter("limit", hasDefaultValue: true, defaultValue: 0)
+                }),
+            new IntrinsicSignature(
+                "std.string.contains",
+                IntrinsicId.StringContains,
+                new[]
+                {
+                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("needle")
+                }),
+            new IntrinsicSignature(
+                "std.string.startsWith",
+                IntrinsicId.StringStartsWith,
+                new[]
+                {
+                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("prefix")
+                }),
+            new IntrinsicSignature(
+                "std.string.endsWith",
+                IntrinsicId.StringEndsWith,
+                new[]
+                {
+                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("suffix")
+                }),
+            new IntrinsicSignature(
+                "std.string.replace",
+                IntrinsicId.StringReplace,
+                new[]
+                {
+                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("old"),
+                    new IntrinsicParameter("new")
+                }),
+            new IntrinsicSignature(
+                "std.string.isMatch",
+                IntrinsicId.StringIsMatch,
+                new[]
+                {
+                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("pattern")
+                }),
+            new IntrinsicSignature(
+                "std.string.match",
+                IntrinsicId.StringMatch,
+                new[]
+                {
+                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("pattern")
+                }),
+            new IntrinsicSignature(
                 "std.io.readText",
                 IntrinsicId.IoReadText,
                 new[] { new IntrinsicParameter("path") }),

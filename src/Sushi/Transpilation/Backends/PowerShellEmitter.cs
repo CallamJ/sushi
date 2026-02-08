@@ -366,6 +366,100 @@ function __sushi_http_post {
     param([string]$url, $body, $headers = $null, [string]$contentType = 'application/json')
     return (__sushi_http_request -method 'POST' -url $url -body $body -headers $headers -contentType $contentType)
 }
+
+function __sushi_require_string_receiver {
+    param($value, [string]$method)
+    if ($null -eq $value) {
+        [Console]::Error.WriteLine("Type contract violation: string receiver for '$method' expected non-null value")
+        exit 2
+    }
+    return [string]$value
+}
+
+function __sushi_string_trim {
+    param($value)
+    $s = __sushi_require_string_receiver -value $value -method 'trim'
+    return $s.Trim()
+}
+
+function __sushi_string_lower {
+    param($value)
+    $s = __sushi_require_string_receiver -value $value -method 'lower'
+    return $s.ToLowerInvariant()
+}
+
+function __sushi_string_upper {
+    param($value)
+    $s = __sushi_require_string_receiver -value $value -method 'upper'
+    return $s.ToUpperInvariant()
+}
+
+function __sushi_string_split {
+    param($value, $sep, [int]$limit = 0)
+    $s = __sushi_require_string_receiver -value $value -method 'split'
+    $delimiter = [string]$sep
+    if ($limit -gt 0) {
+        return ,($s.Split(@($delimiter), $limit, [System.StringSplitOptions]::None))
+    }
+
+    return ,($s.Split(@($delimiter), [System.StringSplitOptions]::None))
+}
+
+function __sushi_string_contains {
+    param($value, $needle)
+    $s = __sushi_require_string_receiver -value $value -method 'contains'
+    return $s.Contains([string]$needle)
+}
+
+function __sushi_string_starts_with {
+    param($value, $prefix)
+    $s = __sushi_require_string_receiver -value $value -method 'startsWith'
+    return $s.StartsWith([string]$prefix)
+}
+
+function __sushi_string_ends_with {
+    param($value, $suffix)
+    $s = __sushi_require_string_receiver -value $value -method 'endsWith'
+    return $s.EndsWith([string]$suffix)
+}
+
+function __sushi_string_replace {
+    param($value, $oldValue, $newValue)
+    $s = __sushi_require_string_receiver -value $value -method 'replace'
+    return $s.Replace([string]$oldValue, [string]$newValue)
+}
+
+function __sushi_string_is_match {
+    param($value, $pattern)
+    $s = __sushi_require_string_receiver -value $value -method 'isMatch'
+    return [System.Text.RegularExpressions.Regex]::IsMatch($s, [string]$pattern)
+}
+
+function __sushi_string_match {
+    param($value, $pattern)
+    $s = __sushi_require_string_receiver -value $value -method 'match'
+    $m = [System.Text.RegularExpressions.Regex]::Match($s, [string]$pattern)
+    if (-not $m.Success) {
+        return [PSCustomObject]@{
+            ok = $false
+            value = ''
+            index = -1
+            groups = @()
+        }
+    }
+
+    $groups = @()
+    foreach ($g in $m.Groups) {
+        $groups += ,([string]$g.Value)
+    }
+
+    return [PSCustomObject]@{
+        ok = $true
+        value = [string]$m.Value
+        index = [int]$m.Index
+        groups = $groups
+    }
+}
 """);
 
         _builder.AppendLine(
@@ -1042,6 +1136,16 @@ function __sushi_call_method {
         {
             IntrinsicId.Print => EmitPrint(call.Arguments, newline: false),
             IntrinsicId.Println => EmitPrint(call.Arguments, newline: true),
+            IntrinsicId.StringTrim => $"$null = {EmitStringTrim(call.Arguments)}",
+            IntrinsicId.StringLower => $"$null = {EmitStringLower(call.Arguments)}",
+            IntrinsicId.StringUpper => $"$null = {EmitStringUpper(call.Arguments)}",
+            IntrinsicId.StringSplit => $"$null = {EmitStringSplit(call.Arguments)}",
+            IntrinsicId.StringContains => $"$null = {EmitStringContains(call.Arguments)}",
+            IntrinsicId.StringStartsWith => $"$null = {EmitStringStartsWith(call.Arguments)}",
+            IntrinsicId.StringEndsWith => $"$null = {EmitStringEndsWith(call.Arguments)}",
+            IntrinsicId.StringReplace => $"$null = {EmitStringReplace(call.Arguments)}",
+            IntrinsicId.StringIsMatch => $"$null = {EmitStringIsMatch(call.Arguments)}",
+            IntrinsicId.StringMatch => $"$null = {EmitStringMatch(call.Arguments)}",
             IntrinsicId.IoWriteText => EmitIoWriteText(call.Arguments),
             IntrinsicId.EnvSet => EmitEnvSet(call.Arguments),
             IntrinsicId.ProcessExit => $"exit {EmitValueExpression(call.Arguments[0])}",
@@ -1065,6 +1169,16 @@ function __sushi_call_method {
         {
             IntrinsicId.Print => $"({EmitPrint(call.Arguments, newline: false)})",
             IntrinsicId.Println => $"({EmitPrint(call.Arguments, newline: true)})",
+            IntrinsicId.StringTrim => EmitStringTrim(call.Arguments),
+            IntrinsicId.StringLower => EmitStringLower(call.Arguments),
+            IntrinsicId.StringUpper => EmitStringUpper(call.Arguments),
+            IntrinsicId.StringSplit => EmitStringSplit(call.Arguments),
+            IntrinsicId.StringContains => EmitStringContains(call.Arguments),
+            IntrinsicId.StringStartsWith => EmitStringStartsWith(call.Arguments),
+            IntrinsicId.StringEndsWith => EmitStringEndsWith(call.Arguments),
+            IntrinsicId.StringReplace => EmitStringReplace(call.Arguments),
+            IntrinsicId.StringIsMatch => EmitStringIsMatch(call.Arguments),
+            IntrinsicId.StringMatch => EmitStringMatch(call.Arguments),
             IntrinsicId.IoReadText => $"(Get-Content -Raw -LiteralPath {Arg(call.Arguments, 0)})",
             IntrinsicId.IoExists => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)})",
             IntrinsicId.PathJoin => EmitPathJoin(call.Arguments),
@@ -1094,6 +1208,62 @@ function __sushi_call_method {
     {
         var value = arguments.Count == 0 ? "''" : Arg(arguments, 0);
         return newline ? $"Write-Host {value}" : $"Write-Host -NoNewline {value}";
+    }
+
+    private string EmitStringTrim(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"(__sushi_string_trim -value {Arg(arguments, 0)})";
+    }
+
+    private string EmitStringLower(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"(__sushi_string_lower -value {Arg(arguments, 0)})";
+    }
+
+    private string EmitStringUpper(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"(__sushi_string_upper -value {Arg(arguments, 0)})";
+    }
+
+    private string EmitStringSplit(IReadOnlyList<IrExpression> arguments)
+    {
+        return "(__sushi_string_split " +
+               "-value " + Arg(arguments, 0) + " " +
+               "-sep " + Arg(arguments, 1) + " " +
+               "-limit ([int](" + Arg(arguments, 2) + ")))";
+    }
+
+    private string EmitStringContains(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"(__sushi_string_contains -value {Arg(arguments, 0)} -needle {Arg(arguments, 1)})";
+    }
+
+    private string EmitStringStartsWith(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"(__sushi_string_starts_with -value {Arg(arguments, 0)} -prefix {Arg(arguments, 1)})";
+    }
+
+    private string EmitStringEndsWith(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"(__sushi_string_ends_with -value {Arg(arguments, 0)} -suffix {Arg(arguments, 1)})";
+    }
+
+    private string EmitStringReplace(IReadOnlyList<IrExpression> arguments)
+    {
+        return "(__sushi_string_replace " +
+               "-value " + Arg(arguments, 0) + " " +
+               "-oldValue " + Arg(arguments, 1) + " " +
+               "-newValue " + Arg(arguments, 2) + ")";
+    }
+
+    private string EmitStringIsMatch(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"(__sushi_string_is_match -value {Arg(arguments, 0)} -pattern {Arg(arguments, 1)})";
+    }
+
+    private string EmitStringMatch(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"(__sushi_string_match -value {Arg(arguments, 0)} -pattern {Arg(arguments, 1)})";
     }
 
     private string EmitIoWriteText(IReadOnlyList<IrExpression> arguments)
