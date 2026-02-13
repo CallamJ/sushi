@@ -166,6 +166,35 @@ public class EmitterTests
     }
 
     [Fact]
+    public void BashEmitter_EmitsMemoryBackedObjectRuntimeHelpers()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("obj", new IrObjectLiteralExpression(new IrObjectProperty[]
+            {
+                new("name", new IrLiteralExpression("sushi")),
+                new("count", new IrLiteralExpression(2))
+            })),
+            new IrVariableDeclarationStatement("name", new IrMemberAccessExpression(
+                new IrIdentifierExpression("obj"),
+                "name"))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var emitter = new BashEmitter();
+        var script = emitter.Emit(program, new EmitContext("objects.sushi", diagnostics));
+
+        Assert.Contains("__sushi_is_obj_handle()", script);
+        Assert.Contains("@o:\\{*) return 0", script);
+        Assert.Contains("__sushi_obj_to_json()", script);
+        Assert.Contains("__sushi_json_object_from_compact", script);
+        Assert.Contains("obj=\"$(__sushi_json_object", script);
+        Assert.Contains("__sushi_json_member \"${obj:-}\" 'name'", script);
+        Assert.DoesNotContain("stdout_json=\"$(__sushi_json_quote", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
     public void PowerShellEmitter_WriteText_CreatesParentDirectory()
     {
         var program = new IrProgram(new IrStatement[]

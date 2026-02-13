@@ -17,13 +17,13 @@ Default target selection:
 
 ### 1.2 For running Bash output (`-t Bash`)
 
-- Bash
+- Bash 4.0+ (runtime object storage uses in-memory object handles)
 - `curl`
 - standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`, `find`)
 
 ### 1.3 For running Zsh output (`-t Zsh`)
 
-- Zsh
+- Zsh 5.0+ (runtime object storage uses in-memory object handles)
 - `curl`
 - standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`, `find`)
 

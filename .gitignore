@@ -1,3 +1,4 @@
-src/Sushi/bin
-src/Sushi/obj
+src/*/bin
+src/*/obj
+
 publish/

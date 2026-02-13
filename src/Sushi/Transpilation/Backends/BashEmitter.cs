@@ -340,8 +340,44 @@ __sushi_json_quote() {
   printf '"%s"' "$value"
 }
 
+__sushi_is_obj_handle() {
+  case "${1-}" in
+    @o:\{*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+__sushi_obj_new() {
+  local compact="${1-\{\}}"
+  printf '@o:%s' "$compact"
+}
+
+__sushi_obj_get() {
+  local handle="${1-}"
+  local key="${2-}"
+  __sushi_is_obj_handle "$handle" || {
+    printf ''
+    return 0
+  }
+  __sushi_json_member "${handle#@o:}" "$key"
+}
+
+__sushi_obj_to_json() {
+  local handle="${1-}"
+  __sushi_is_obj_handle "$handle" || {
+    printf '{}'
+    return 0
+  }
+
+  printf '%s' "${handle#@o:}"
+}
+
 __sushi_json_try_compact() {
   local text="${1-}"
+  if __sushi_is_obj_handle "$text"; then
+    __sushi_obj_to_json "$text"
+    return 0
+  fi
   __sushi_j_reset "$text"
   __sushi_j_skip_ws
   __sushi_j_parse_value || return 1
@@ -417,16 +453,43 @@ __sushi_json_value_to_raw() {
   case "$value_json" in
     null) printf '' ;;
     true|false) printf '%s' "$value_json" ;;
-    \{*|\[* ) printf '%s' "$value_json" ;;
+    \{* ) __sushi_json_object_from_compact "$value_json" ;;
+    \[* ) printf '%s' "$value_json" ;;
     \"*) __sushi_j_unescape_string "$value_json" ;;
     *) printf '%s' "$value_json" ;;
   esac
 }
 
+__sushi_json_object_from_compact() {
+  local compact="${1-}"
+  __sushi_j_reset "$compact"
+  __sushi_j_skip_ws
+  [[ "$(__sushi_j_char)" == "{" ]] || {
+    printf '%s' "$compact"
+    return 0
+  }
+  __sushi_obj_new "$compact"
+}
+
+__sushi_value_to_json() {
+  local value="${1-}"
+  if __sushi_is_obj_handle "$value"; then
+    __sushi_obj_to_json "$value"
+    return 0
+  fi
+
+  local compact
+  if compact="$(__sushi_json_try_compact "$value")"; then
+    printf '%s' "$compact"
+  else
+    __sushi_json_quote "$value"
+  fi
+}
+
 __sushi_json_array() {
   local out='['
   local first=true
-  local raw compact
+  local raw value_json
   for raw in "$@"; do
     if [[ "$first" == "true" ]]; then
       first=false
@@ -434,11 +497,8 @@ __sushi_json_array() {
       out+=','
     fi
 
-    if compact="$(__sushi_json_try_compact "$raw")"; then
-      out+="$compact"
-    else
-      out+="$(__sushi_json_quote "$raw")"
-    fi
+    value_json="$(__sushi_value_to_json "$raw")"
+    out+="$value_json"
   done
   out+=']'
   printf '%s' "$out"
@@ -460,15 +520,11 @@ __sushi_json_object() {
     fi
 
     key_json="$(__sushi_json_quote "$key")"
-    if value_json="$(__sushi_json_try_compact "$raw")"; then
-      :
-    else
-      value_json="$(__sushi_json_quote "$raw")"
-    fi
+    value_json="$(__sushi_value_to_json "$raw")"
     out+="$key_json:$value_json"
   done
   out+='}'
-  printf '%s' "$out"
+  __sushi_obj_new "$out"
 }
 
 __sushi_json_array_each_json() {
@@ -508,6 +564,10 @@ __sushi_json_array_each_raw() {
 
 __sushi_json_object_each_kv() {
   local json="${1-}"
+  if __sushi_is_obj_handle "$json"; then
+    json="${json#@o:}"
+  fi
+
   local compact
   compact="$(__sushi_json_try_compact "$json")" || return 0
 
@@ -555,6 +615,11 @@ __sushi_json_object_each_kv() {
 __sushi_json_member() {
   local json="${1-}"
   local key="${2-}"
+  if __sushi_is_obj_handle "$json"; then
+    __sushi_obj_get "$json" "$key"
+    return 0
+  fi
+
   local target_json="$(__sushi_json_quote "$key")"
   local compact
   compact="$(__sushi_json_try_compact "$json")" || return 0
@@ -598,6 +663,11 @@ __sushi_json_member() {
 __sushi_json_index() {
   local json="${1-}"
   local index="${2-}"
+  if __sushi_is_obj_handle "$json"; then
+    __sushi_obj_get "$json" "$index"
+    return 0
+  fi
+
   local compact="$json"
   __sushi_j_reset "$compact"
   __sushi_j_skip_ws
@@ -719,7 +789,11 @@ __sushi_json_parse() {
   local text="${1-}"
   local compact
   if compact="$(__sushi_json_try_compact "$text")"; then
-    printf '%s' "$compact"
+    if [[ "${compact:0:1}" == "{" ]]; then
+      __sushi_json_object_from_compact "$compact"
+    else
+      printf '%s' "$compact"
+    fi
   else
     printf '%s' "$text"
   fi
@@ -745,14 +819,19 @@ __sushi_json_stringify() {
   local value="${1-}"
   local indent="${2:-0}"
   local compact
-  if compact="$(__sushi_json_try_compact "$value")"; then
-    if __sushi_j_is_integer "$indent" && (( indent > 0 )); then
-      __sushi_j_pretty_json "$compact" "$indent"
-    else
-      printf '%s' "$compact"
-    fi
+  if __sushi_is_obj_handle "$value"; then
+    compact="$(__sushi_obj_to_json "$value")"
+  elif compact="$(__sushi_json_try_compact "$value")"; then
+    :
   else
     __sushi_json_quote "$value"
+    return 0
+  fi
+
+  if __sushi_j_is_integer "$indent" && (( indent > 0 )); then
+    __sushi_j_pretty_json "$compact" "$indent"
+  else
+    printf '%s' "$compact"
   fi
 }
 
@@ -872,15 +951,12 @@ __sushi_process_run() {
     ok_json=true
   fi
 
-  local stdout_json stderr_json command_json result_json
-  stdout_json="$(__sushi_json_quote "$stdout_text")"
-  stderr_json="$(__sushi_json_quote "$stderr_text")"
-  command_json="$(__sushi_json_quote "$command_text")"
+  local result_json
   result_json="$(__sushi_json_object \
     code "$exit_code" \
-    stdout "$stdout_json" \
-    stderr "$stderr_json" \
-    command "$command_json" \
+    stdout "$stdout_text" \
+    stderr "$stderr_text" \
+    command "$command_text" \
     ok "$ok_json" \
     timedOut "$timed_out")"
 
@@ -907,7 +983,7 @@ __sushi_process_pipeline() {
 
   local next_input="${input_text-}"
   local last_result
-  last_result='{"code":0,"stdout":"","stderr":"","ok":true,"command":"","timedOut":false}'
+  last_result="$(__sushi_json_object code 0 stdout '' stderr '' ok true command '' timedOut false)"
 
   while IFS= read -r stage; do
     local stage_command stage_args stage_result stage_code stage_stderr
@@ -1012,7 +1088,7 @@ __sushi_http_request() {
     http_status=0
   fi
 
-  local body_text headers_obj ok_json json_body body_json url_json
+  local body_text headers_obj ok_json json_body
   local -a header_pairs
   body_text="$(cat -- "$body_file" 2>/dev/null || true)"
   headers_obj="$(__sushi_json_object)"
@@ -1044,23 +1120,21 @@ __sushi_http_request() {
     ok_json=false
   fi
 
-  json_body='null'
+  json_body=''
   if [[ -n "$body_text" ]]; then
     local compact_body
     if compact_body="$(__sushi_json_try_compact "$body_text")"; then
-      json_body="$compact_body"
+      json_body="$(__sushi_json_parse "$compact_body")"
     fi
   fi
 
-  body_json="$(__sushi_json_quote "$body_text")"
-  url_json="$(__sushi_json_quote "$url")"
   __sushi_json_object \
     status "$http_status" \
     ok "$ok_json" \
     headers "$headers_obj" \
-    body "$body_json" \
+    body "$body_text" \
     json "$json_body" \
-    url "$url_json"
+    url "$url"
 
   rm -f -- "$body_file" "$header_file"
 }
@@ -1089,6 +1163,10 @@ __sushi_http_post() {
 __sushi_json_member_json() {
   local json="${1-}"
   local key="${2-}"
+  if __sushi_is_obj_handle "$json"; then
+    json="${json#@o:}"
+  fi
+
   local target_json compact
   target_json="$(__sushi_json_quote "$key")"
   compact="$(__sushi_json_try_compact "$json")" || return 1
@@ -1128,7 +1206,9 @@ __sushi_json_member_json() {
 }
 
 __sushi_json_has_member() {
-  __sushi_json_member_json "${1-}" "${2-}" >/dev/null
+  local json="${1-}"
+  local key="${2-}"
+  __sushi_json_member_json "$json" "$key" >/dev/null
 }
 
 __sushi_is_float() {
@@ -1137,12 +1217,14 @@ __sushi_is_float() {
 }
 
 __sushi_json_is_array() {
+  __sushi_is_obj_handle "${1-}" && return 1
   local compact
   compact="$(__sushi_json_try_compact "${1-}")" || return 1
   [[ "${compact:0:1}" == "[" ]]
 }
 
 __sushi_json_is_object() {
+  __sushi_is_obj_handle "${1-}" && return 0
   local compact
   compact="$(__sushi_json_try_compact "${1-}")" || return 1
   [[ "${compact:0:1}" == "{" ]]
@@ -1298,6 +1380,10 @@ __sushi_is_json_array() {
 
 __sushi_json_length() {
   local value="${1-}"
+  if __sushi_is_obj_handle "$value"; then
+    value="${value#@o:}"
+  fi
+
   local compact
   compact="$(__sushi_json_try_compact "$value")" || {
     printf '%s' "${#value}"

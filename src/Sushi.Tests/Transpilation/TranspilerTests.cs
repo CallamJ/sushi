@@ -164,6 +164,29 @@ public class TranspilerTests
     }
 
     [Fact]
+    public void Transpile_Bash_JsonParseMemberAccess_UsesObjectRuntime()
+    {
+        const string source = """
+            var parsed = std.json.parse("{\"name\":\"sushi\",\"count\":2}")
+            println(parsed.name)
+            """;
+
+        var transpiler = new Transpiler();
+        var result = transpiler.Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "json_object_runtime.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.EmittedCode);
+        Assert.Contains("__sushi_json_object_from_compact", result.EmittedCode);
+        Assert.Contains("__sushi_is_obj_handle", result.EmittedCode);
+        Assert.Contains("__sushi_json_member", result.EmittedCode);
+    }
+
+    [Fact]
     public void Transpile_UserFunction_DefaultAndNamedArguments_Succeeds()
     {
         const string source = """

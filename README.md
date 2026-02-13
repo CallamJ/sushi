@@ -49,12 +49,12 @@ Default transpile target selection:
 
 ### Run transpiled Bash scripts
 
-- Bash
+- Bash 4.0+ (runtime object storage uses in-memory object handles)
 - `curl` (required for `std.http.get/post`)
 
 ### Run transpiled Zsh scripts
 
-- Zsh
+- Zsh 5.0+ (runtime object storage uses in-memory object handles)
 - `curl` (required for `std.http.get/post`)
 
 ### Run transpiled PowerShell scripts
@@ -97,6 +97,21 @@ dotnet run --project src/Sushi -- check examples/m3_verification.sushi
 dotnet run --project src/Sushi -- run examples/m3_verification.sushi
 dotnet run --project src/Sushi -- watch examples/m3_verification.sushi --run
 ```
+
+## Benchmark examples
+
+```bash
+scripts/benchmark-examples.sh
+scripts/benchmark-examples.sh --iterations 3 --targets bash,zsh,powershell
+scripts/benchmark-native-vs-transpiled.sh --iterations 3 --targets bash,zsh,powershell
+```
+
+`benchmark-native-vs-transpiled.sh` compares transpiled outputs against scripts
+in:
+
+- `native/bash/<example>.sh`
+- `native/zsh/<example>.zsh`
+- `native/powershell/<example>.ps1`
 
 ## Quickstart (M4 Phase 3 contracts)
 
