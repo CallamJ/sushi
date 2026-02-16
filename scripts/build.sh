@@ -115,8 +115,7 @@ build_platform() {
         -p:PublishSingleFile=True \
         -p:PublishTrimmed=True \
         -p:TrimMode=CopyUsed \
-        -p:PublishReadyToRun=True \
-        -o "$temp_dir"
+        -p:PublishReadyToRun=True
 
     if [ $? -eq 0 ]; then
         # Get source and destination filenames
