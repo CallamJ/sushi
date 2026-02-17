@@ -1,4 +1,4 @@
-#!/bin/env bash
+#!/bin/bash
 set -euo pipefail # Exit on error
 PROJECT_NAME="Sushi"
 OUTPUT_DIR="./publish"

@@ -104,6 +104,7 @@ dotnet run --project src/Sushi -- watch examples/m3_verification.sushi --run
 scripts/benchmark-examples.sh
 scripts/benchmark-examples.sh --iterations 3 --targets bash,zsh,powershell
 scripts/benchmark-native-vs-transpiled.sh --iterations 3 --targets bash,zsh,powershell
+dotnet run --project src/Sushi -- benchmark --targets bash,zsh,powershell
 ```
 
 `benchmark-native-vs-transpiled.sh` compares transpiled outputs against scripts
@@ -112,6 +113,31 @@ in:
 - `native/bash/<example>.sh`
 - `native/zsh/<example>.zsh`
 - `native/powershell/<example>.ps1`
+
+## Benchmark system (manifest-driven)
+
+The `benchmark` command compares native scripts with equivalent transpiled Sushi
+scripts using `benchmarks/manifest.json`.
+
+Default command:
+
+```bash
+dotnet run --project src/Sushi -- benchmark
+```
+
+Useful options:
+
+```bash
+dotnet run --project src/Sushi -- benchmark --targets bash,zsh --iterations 20 --warmup 3
+dotnet run --project src/Sushi -- benchmark --filter process --output-dir tmp/benchmarks/local
+dotnet run --project src/Sushi -- benchmark --baseline tmp/baseline/results.json
+```
+
+Artifacts written to `tmp/benchmarks/<timestamp>`:
+
+- `results.json`
+- `results.tsv`
+- `summary.md`
 
 ## Quickstart (M4 Phase 3 contracts)
 

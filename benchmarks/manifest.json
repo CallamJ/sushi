@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "name": "sushi-native-vs-transpiled-core",
+  "description": "Balanced core benchmark scenarios comparing native shell scripts with transpiled Sushi output.",
+  "scenarios": [
+    {
+      "id": "string_pipeline",
+      "name": "String pipeline workload",
+      "source": "sushi/string_pipeline.sushi",
+      "native": {
+        "bash": "native/bash/string_pipeline.sh",
+        "zsh": "native/zsh/string_pipeline.zsh",
+        "powershell": "native/powershell/string_pipeline.ps1"
+      },
+      "tags": ["string", "core"]
+    },
+    {
+      "id": "numeric_loop",
+      "name": "Numeric loop and arithmetic",
+      "source": "sushi/numeric_loop.sushi",
+      "native": {
+        "bash": "native/bash/numeric_loop.sh",
+        "zsh": "native/zsh/numeric_loop.zsh",
+        "powershell": "native/powershell/numeric_loop.ps1"
+      },
+      "tags": ["compute", "loops"]
+    },
+    {
+      "id": "json_roundtrip",
+      "name": "JSON parse/stringify",
+      "source": "sushi/json_roundtrip.sushi",
+      "native": {
+        "bash": "native/bash/json_roundtrip.sh",
+        "zsh": "native/zsh/json_roundtrip.zsh",
+        "powershell": "native/powershell/json_roundtrip.ps1"
+      },
+      "tags": ["json", "core"]
+    },
+    {
+      "id": "glob_scan",
+      "name": "Filesystem glob scan",
+      "source": "sushi/glob_scan.sushi",
+      "native": {
+        "bash": "native/bash/glob_scan.sh",
+        "zsh": "native/zsh/glob_scan.zsh",
+        "powershell": "native/powershell/glob_scan.ps1"
+      },
+      "tags": ["fs", "glob"]
+    },
+    {
+      "id": "process_run",
+      "name": "Process execution",
+      "source": "sushi/process_run.sushi",
+      "native": {
+        "bash": "native/bash/process_run.sh",
+        "zsh": "native/zsh/process_run.zsh",
+        "powershell": "native/powershell/process_run.ps1"
+      },
+      "tags": ["process", "runtime"]
+    },
+    {
+      "id": "process_pipeline",
+      "name": "Process pipeline",
+      "source": "sushi/process_pipeline.sushi",
+      "native": {
+        "bash": "native/bash/process_pipeline.sh",
+        "zsh": "native/zsh/process_pipeline.zsh",
+        "powershell": "native/powershell/process_pipeline.ps1"
+      },
+      "tags": ["process", "pipeline"]
+    },
+    {
+      "id": "function_contracts",
+      "name": "Typed and structural function contracts",
+      "source": "sushi/function_contracts.sushi",
+      "native": {
+        "bash": "native/bash/function_contracts.sh",
+        "zsh": "native/zsh/function_contracts.zsh",
+        "powershell": "native/powershell/function_contracts.ps1"
+      },
+      "tags": ["contracts", "functions"]
+    },
+    {
+      "id": "array_accumulate",
+      "name": "Array and varargs accumulation",
+      "source": "sushi/array_accumulate.sushi",
+      "native": {
+        "bash": "native/bash/array_accumulate.sh",
+        "zsh": "native/zsh/array_accumulate.zsh",
+        "powershell": "native/powershell/array_accumulate.ps1"
+      },
+      "tags": ["array", "functions"]
+    },
+    {
+      "id": "regex_match",
+      "name": "Regex string matching",
+      "source": "sushi/regex_match.sushi",
+      "native": {
+        "bash": "native/bash/regex_match.sh",
+        "zsh": "native/zsh/regex_match.zsh",
+        "powershell": "native/powershell/regex_match.ps1"
+      },
+      "tags": ["string", "regex"]
+    },
+    {
+      "id": "mixed_workflow",
+      "name": "Mixed json/process/string workflow",
+      "source": "sushi/mixed_workflow.sushi",
+      "native": {
+        "bash": "native/bash/mixed_workflow.sh",
+        "zsh": "native/zsh/mixed_workflow.zsh",
+        "powershell": "native/powershell/mixed_workflow.ps1"
+      },
+      "tags": ["mixed", "core"]
+    }
+  ]
+}

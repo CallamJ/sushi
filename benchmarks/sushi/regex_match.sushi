@@ -1,0 +1,12 @@
+var text = "Alpha42Beta"
+var i = 0
+var ok = false
+while (i < 400) {
+    ok = text.lower().isMatch("[a-z]+\\d+[a-z]+")
+    i = i + 1
+}
+if (ok) {
+    println("1")
+} else {
+    println("0")
+}

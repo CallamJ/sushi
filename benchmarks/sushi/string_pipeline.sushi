@@ -1,0 +1,8 @@
+var raw = "  Alpha,Beta,Gamma42  "
+var i = 0
+var output = ""
+while (i < 200) {
+    output = raw.trim().lower().replace("gamma42", "delta")
+    i = i + 1
+}
+println(output)

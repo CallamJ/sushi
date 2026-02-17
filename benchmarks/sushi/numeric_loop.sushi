@@ -1,0 +1,11 @@
+int compute(int n) {
+    var i = 0
+    var total = 0
+    while (i < n) {
+        total = total + (i * 3) - 1
+        i = i + 1
+    }
+    return total
+}
+
+println(compute(20000))

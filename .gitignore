@@ -1,4 +1,4 @@
 src/*/bin
 src/*/obj
-
 publish/
+tmp/

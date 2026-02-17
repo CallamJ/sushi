@@ -1,0 +1,14 @@
+var payload = std.json.stringify({ hello: "world", n: 1 })
+var run = std.process.run("dotnet", ["--version"], allowFailure: true)
+var parsed = std.json.parse(payload)
+var text = "  " + parsed.hello + "  "
+
+var i = 0
+var output = ""
+while (i < 100) {
+    output = text.trim().upper()
+    i = i + 1
+}
+
+println(output)
+println(run.code)

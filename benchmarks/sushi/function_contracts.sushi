@@ -1,0 +1,17 @@
+int nextValue(int x) {
+    return x + 1
+}
+
+string userLabel(object { string name, int age } user) {
+    return user.name + ":" + user.age
+}
+
+var i = 0
+var value = 0
+while (i < 300) {
+    value = nextValue(i)
+    i = i + 1
+}
+
+println(userLabel({ name: "worker", age: 30 }))
+println(value)
