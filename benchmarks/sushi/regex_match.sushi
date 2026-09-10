@@ -1,7 +1,7 @@
 var text = "Alpha42Beta"
 var i = 0
 var ok = false
-while (i < 50) {
+while (i < 500) {
     ok = text.lower().isMatch("[a-z]+\\d+[a-z]+")
     i = i + 1
 }

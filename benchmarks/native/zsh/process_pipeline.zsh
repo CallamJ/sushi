@@ -1,5 +1,6 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-dotnet --list-sdks | sort >/dev/null
-print -r -- "$?"
+pipeline_output="$(dotnet --list-sdks | sort)"
+code=$?
+print -r -- "$code"

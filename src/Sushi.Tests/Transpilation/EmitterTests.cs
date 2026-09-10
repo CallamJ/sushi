@@ -57,7 +57,7 @@ public class EmitterTests
         Assert.Contains("Set-StrictMode -Version Latest", script);
         Assert.Contains("$x = 1", script);
         Assert.Contains("Write-Host $x", script);
-        Assert.DoesNotContain("function __sushi_member", script);
+        Assert.Contains("function __sushi_member", script);
         Assert.Empty(diagnostics);
     }
 
@@ -189,11 +189,13 @@ public class EmitterTests
         var script = emitter.Emit(program, new EmitContext("objects.sushi", diagnostics));
 
         Assert.Contains("__sushi_is_obj_handle()", script);
-        Assert.Contains("@o:\\{*) return 0", script);
+        Assert.Contains("@o:\\{*|@o:__sushi_object_*) return 0", script);
         Assert.Contains("__sushi_obj_to_json()", script);
         Assert.Contains("__sushi_json_object_from_compact", script);
-        Assert.Contains("obj=\"$(__sushi_json_object", script);
-        Assert.Contains("__sushi_json_member \"${obj:-}\" 'name'", script);
+        Assert.Contains("__sushi_native_obj_new", script);
+        Assert.Contains("__sushi_native_obj_get_into", script);
+        Assert.Contains("__sushi_native_obj_set_kind", script);
+        Assert.Contains("__sushi_native_obj_to_json_into", script);
         Assert.DoesNotContain("stdout_json=\"$(__sushi_json_quote", script);
         Assert.Empty(diagnostics);
     }
@@ -284,6 +286,7 @@ public class EmitterTests
 
         Assert.Contains("function __sushi_process_run", script);
         Assert.Contains("function __sushi_json_parse", script);
+        Assert.Contains("function __sushi_json_sort_value", script);
         Assert.Contains("__sushi_process_run -command", script);
         Assert.Contains("__sushi_json_parse -text", script);
         Assert.Empty(diagnostics);
@@ -438,7 +441,8 @@ public class EmitterTests
 
         Assert.Contains("local head=\"$1\"", script);
         Assert.Contains("local -a __sushi_varargs_rest=(\"${@:2}\")", script);
-        Assert.Contains("local rest=\"$(__sushi_json_array", script);
+        Assert.Contains("__sushi_array_new \"${__sushi_flat_varargs_rest[@]}\"", script);
+        Assert.Contains("local rest=\"${__sushi_result-}\"", script);
         Assert.Empty(diagnostics);
     }
 
@@ -501,8 +505,9 @@ public class EmitterTests
 
         Assert.Contains("__sushi_type_check", script);
         Assert.Contains("__sushi_struct_check", script);
-        Assert.Contains("__sushi_type_check \"${count:-}\"", script);
-        Assert.Contains("local __sushi_return_value=", script);
+        Assert.Contains("__sushi_validate_integer \"${count:-}\"", script);
+        Assert.Contains("__sushi_result=", script);
+        Assert.Contains("return value of function", script);
         Assert.Empty(diagnostics);
     }
 
@@ -562,9 +567,58 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("arith.sushi", diagnostics));
 
-        Assert.Contains("__sushi_require_integer", script);
+        Assert.Contains("__sushi_validate_integer", script);
         Assert.Contains("__sushi_json_index", script);
         Assert.DoesNotContain("${total:-0}", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void BashEmitter_UsesNativeArrayStorageWithoutFullRuntimeForLiteralIndexing()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("values", new IrArrayLiteralExpression(new IrExpression[]
+            {
+                new IrLiteralExpression("first"),
+                new IrLiteralExpression("second")
+            })),
+            new IrExpressionStatement(new IrIntrinsicCallExpression(
+                "println",
+                IntrinsicId.Println,
+                new[] { new IrIndexExpression(new IrIdentifierExpression("values"), new IrLiteralExpression(0)) }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new BashEmitter().Emit(program, new EmitContext("array.sushi", diagnostics));
+
+        Assert.Contains("__sushi_array_new", script);
+        Assert.Contains("__sushi_array_get_into", script);
+        Assert.DoesNotContain("__sushi_j_reset", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void PowerShellEmitter_UsesDirectArithmeticForKnownIntegers()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("left", new IrLiteralExpression(1)),
+            new IrVariableDeclarationStatement("right", new IrLiteralExpression(2)),
+            new IrExpressionStatement(new IrAssignmentExpression(
+                new IrIdentifierExpression("left"),
+                "=",
+                new IrBinaryExpression(
+                    new IrIdentifierExpression("left"),
+                    "+",
+                    new IrIdentifierExpression("right"))))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new PowerShellEmitter().Emit(program, new EmitContext("numeric.sushi", diagnostics));
+
+        Assert.Contains("$left = ($left + $right)", script);
+        Assert.DoesNotContain("__sushi_add $left $right", script);
         Assert.Empty(diagnostics);
     }
 }

@@ -68,7 +68,7 @@ Default transpile target selection:
 
 ### Run transpiled Bash scripts
 
-- Bash 4.0+ (runtime object storage uses in-memory object handles)
+- Bash 4.3+ (native array storage uses namerefs)
 - `curl` (required for `std.http.get/post`)
 
 ### Run transpiled Zsh scripts
@@ -150,6 +150,7 @@ Useful options:
 dotnet run --project src/Sushi -- benchmark --targets bash,zsh --iterations 20 --warmup 3
 dotnet run --project src/Sushi -- benchmark --filter process --output-dir tmp/benchmarks/local
 dotnet run --project src/Sushi -- benchmark --baseline tmp/baseline/results.json
+dotnet run --project src/Sushi -- benchmark --targets bash,zsh --allow-skipped
 ```
 
 Artifacts written to `tmp/benchmarks/<timestamp>`:
@@ -157,6 +158,13 @@ Artifacts written to `tmp/benchmarks/<timestamp>`:
 - `results.json`
 - `results.tsv`
 - `summary.md`
+
+Benchmark manifests can define exact `exitCode`, `stdout`, and `stderr`
+expectations plus per-target `maxRuntimeRatioMedian` gates. Output comparison
+preserves whitespace (apart from CRLF normalization), missing or malformed
+explicit baselines fail fast, and baselines are reused only when their suite
+fingerprint matches. Requested skips fail by default; `--allow-skipped` is an
+explicit local-development escape hatch.
 
 ## Quickstart (M4 Phase 3 contracts)
 
@@ -180,6 +188,9 @@ Current tooling limitations:
 - `box` and `use` syntax is parser-only and produces an explicit transpilation
   error instead of being silently ignored.
 - `check` rejects references to undefined variables in supported code paths.
+- Bash and Zsh functions return values through an internal result slot. Calls
+  execute in the current shell, so variable mutations are retained and runtime
+  contract failures propagate with exit code `2`.
 
 ## CI
 

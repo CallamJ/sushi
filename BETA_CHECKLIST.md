@@ -43,7 +43,7 @@ All gates must be true before tagging a beta release.
 - [ ] Arity and named-argument validation for calls.
 - [ ] Intrinsic stdlib call validation with useful diagnostics.
 - [ ] Assignment validity checks (non-assignable targets rejected).
-- [ ] Control-flow diagnostics (invalid break/continue/return contexts).
+- [x] Control-flow diagnostics (invalid break/continue/return contexts).
 
 ### 3.3 Runtime semantics consistency
 - [ ] Truthiness semantics are documented and enforced consistently.
@@ -67,7 +67,7 @@ All gates must be true before tagging a beta release.
 ### 4.3 Code generation quality
 - [ ] Generated script is readable enough for debugging.
 - [ ] Deterministic output (stable ordering, stable formatting).
-- [ ] Minimal unnecessary temporary variables.
+- [x] Hot-path expressions avoid subshells and unnecessary runtime conversion.
 - [ ] Safe identifier mangling to avoid target collisions.
 
 ## 5. Shell Interop Checklist (Critical)
@@ -199,9 +199,9 @@ Each example must include:
 - [ ] Emit warnings for deprecated constructs before removal.
 
 ### 11.2 Performance sanity
-- [ ] Transpile time measured on small/medium/large scripts.
-- [ ] Command startup overhead measured for `run`.
-- [ ] No pathological generation slowdowns on large ASTs.
+- [x] Manifest benchmark artifacts include transpile time and generated size.
+- [x] Native-vs-transpiled startup/runtime overhead is measured per target.
+- [x] CPU/runtime benchmark scenarios enforce a 5x median-ratio ceiling.
 
 ### 11.3 Security and safety
 - [ ] Prevent obvious command injection via unsafe interpolation paths.

@@ -14,8 +14,12 @@ public sealed class BashEmitter : IBackendEmitter
     private readonly bool _zshMode;
     private EmitContext _context = null!;
     private int _indent;
+    private int _valueTempId;
     private string? _currentFunctionName;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
+    private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
+    private HashSet<string> _integerReturningFunctions = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _nativeArrayVariables = new(StringComparer.Ordinal);
 
     public BashEmitter()
     {
@@ -32,8 +36,16 @@ public sealed class BashEmitter : IBackendEmitter
         _builder.Clear();
         _context = context;
         _indent = 0;
+        _valueTempId = 0;
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
+        _knownIntegerVariables.Clear();
+        _integerReturningFunctions = program.Statements
+            .OfType<IrFunctionDeclarationStatement>()
+            .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
+                               function.ReturnType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true)
+            .Select(function => function.Name)
+            .ToHashSet(StringComparer.Ordinal);
 
         WriteLine(_zshMode ? "#!/usr/bin/env zsh" : "#!/usr/bin/env bash");
         if (_zshMode)
@@ -41,11 +53,16 @@ public sealed class BashEmitter : IBackendEmitter
             WriteLine("set -eu");
             WriteLine("set -o pipefail");
             WriteLine("setopt typesetsilent");
+            WriteLine("setopt ksharrays");
         }
         else
         {
             WriteLine("set -euo pipefail");
         }
+        WriteLine("__sushi_result=''");
+        WriteLine("__sushi_kind='auto'");
+        WriteLine("");
+        EmitCoreRuntimeHelpers();
         WriteLine("");
         if (RuntimeDependencyAnalyzer.RequiresRuntime(program))
         {
@@ -59,6 +76,188 @@ public sealed class BashEmitter : IBackendEmitter
         }
 
         return _builder.ToString();
+    }
+
+    private void EmitCoreRuntimeHelpers()
+    {
+        AppendRuntimeBlock(
+"""
+__sushi_j_is_integer() {
+  [[ "${1-}" =~ ^-?[0-9]+$ ]]
+}
+
+__sushi_validate_integer() {
+  local value="${1-}"
+  local context="${2-arithmetic operand}"
+  __sushi_j_is_integer "$value" && return 0
+  printf 'Type contract violation: %s expected int\n' "$context" >&2
+  exit 2
+}
+
+__sushi_truthy() {
+  local value="${1-}"
+  case "$value" in
+    ''|false|FALSE|False|null|NULL|Null) return 1 ;;
+  esac
+  if __sushi_j_is_integer "$value"; then (( value != 0 )); return $?; fi
+  return 0
+}
+
+__sushi_validate_string_receiver() {
+  local value="${1-}"
+  local method="${2-string method}"
+  if [[ "$value" == "__sushi_null__" ]]; then
+    printf 'Type contract violation: string receiver for %s expected non-null value\n' "$method" >&2
+    exit 2
+  fi
+}
+
+__sushi_regex_to_ere_into() {
+  local pattern="${1-}"
+  pattern="${pattern//\\d/[0-9]}"
+  pattern="${pattern//\\D/[^0-9]}"
+  pattern="${pattern//\\w/[[:alnum:]_]}"
+  pattern="${pattern//\\W/[^[:alnum:]_]}"
+  pattern="${pattern//\\s/[[:space:]]}"
+  pattern="${pattern//\\S/[^[:space:]]}"
+  __sushi_result="$pattern"
+}
+
+__sushi_infer_kind_into() {
+  local value="${1-}"
+  case "$value" in
+    @a:__sushi_array_*) __sushi_kind='array' ;;
+    @o:__sushi_object_*) __sushi_kind='object' ;;
+    true|false) __sushi_kind='bool' ;;
+    null) __sushi_kind='null' ;;
+    '') __sushi_kind='string' ;;
+    *)
+      if __sushi_j_is_integer "$value"; then __sushi_kind='number'
+      elif [[ "$value" =~ ^-?([0-9]+(\.[0-9]+)?|\.[0-9]+)([eE][+-]?[0-9]+)?$ ]]; then __sushi_kind='number'
+      else __sushi_kind='string'
+      fi
+      ;;
+  esac
+}
+""");
+
+        AppendRuntimeBlock(_zshMode
+            ? """
+__sushi_array_seq=0
+__sushi_is_array_handle() {
+  local handle="${1-}" name="${1#@a:}"
+  [[ "$handle" == @a:__sushi_array_<-> ]] || return 1
+  (( ${+parameters[$name]} ))
+}
+__sushi_array_new() {
+  __sushi_array_seq=$((__sushi_array_seq + 1))
+  local name="__sushi_array_${__sushi_array_seq}" kinds_name="__sushi_array_${__sushi_array_seq}__kinds"
+  local item index=0
+  typeset -g -a "$name"
+  typeset -g -a "$kinds_name"
+  eval "$name=()"
+  eval "$kinds_name=()"
+  for item in "$@"; do
+    eval "$name[$index]=${(q)item}"
+    __sushi_infer_kind_into "$item"
+    eval "$kinds_name[$index]=${(q)__sushi_kind}"
+    (( index += 1 ))
+  done
+  __sushi_result="@a:$name"
+}
+__sushi_array_get_into() {
+  local handle="${1-}" index="${2-0}" name="${1#@a:}"
+  __sushi_is_array_handle "$handle" || { __sushi_result=''; return 0; }
+  eval "local length=\${#$name[@]}"
+  if (( index < 0 )); then index=$((length + index)); fi
+  if (( index < 0 || index >= length )); then __sushi_result=''; return 0; fi
+  eval "__sushi_result=\"\${$name[$index]-}\""
+}
+__sushi_array_each_raw() {
+  local handle="${1-}" name="${1#@a:}"
+  __sushi_is_array_handle "$handle" || return 0
+  local -a values
+  eval "values=(\"\${$name[@]}\")"
+  local item
+  for item in "${values[@]}"; do printf '%s\n' "$item"; done
+}
+__sushi_array_length_into() {
+  local handle="${1-}" name="${1#@a:}"
+  __sushi_is_array_handle "$handle" || { __sushi_result=0; return 0; }
+  eval "__sushi_result=\${#$name[@]}"
+}
+__sushi_array_kind_into() {
+  local handle="${1-}" index="${2-0}" name="${1#@a:}__kinds"
+  eval "__sushi_kind=\"\${$name[$index]-string}\""
+}
+__sushi_array_set_kind() {
+  local handle="${1-}" index="${2-0}" kind="${3-string}" name="${1#@a:}__kinds"
+  eval "$name[$index]=${(q)kind}"
+}
+__sushi_array_append_to() {
+  local handle="${1-}" destination="${2-}" name="${1#@a:}"
+  __sushi_is_array_handle "$handle" || return 1
+  eval "$destination+=(\"\${$name[@]}\")"
+}
+"""
+            : """
+__sushi_array_seq=0
+__sushi_is_array_handle() {
+  local handle="${1-}" name="${1#@a:}"
+  [[ "$handle" =~ ^@a:__sushi_array_[0-9]+$ ]] || return 1
+  declare -p "$name" >/dev/null 2>&1
+}
+__sushi_array_new() {
+  __sushi_array_seq=$((__sushi_array_seq + 1))
+  local name="__sushi_array_${__sushi_array_seq}" kinds_name="__sushi_array_${__sushi_array_seq}__kinds"
+  declare -g -a "$name"
+  declare -g -a "$kinds_name"
+  local -n target="$name" kinds="$kinds_name"
+  target=("$@")
+  kinds=()
+  local item
+  for item in "$@"; do __sushi_infer_kind_into "$item"; kinds+=("$__sushi_kind"); done
+  __sushi_result="@a:$name"
+}
+__sushi_array_get_into() {
+  local handle="${1-}" index="${2-0}" name="${1#@a:}"
+  __sushi_is_array_handle "$handle" || { __sushi_result=''; return 0; }
+  local -n values="$name"
+  local length=${#values[@]}
+  if (( index < 0 )); then index=$((length + index)); fi
+  if (( index < 0 || index >= length )); then __sushi_result=''; return 0; fi
+  __sushi_result="${values[$index]-}"
+}
+__sushi_array_each_raw() {
+  local handle="${1-}" name="${1#@a:}"
+  __sushi_is_array_handle "$handle" || return 0
+  local -n values="$name"
+  local item
+  for item in "${values[@]}"; do printf '%s\n' "$item"; done
+}
+__sushi_array_length_into() {
+  local handle="${1-}" name="${1#@a:}"
+  __sushi_is_array_handle "$handle" || { __sushi_result=0; return 0; }
+  local -n values="$name"
+  __sushi_result="${#values[@]}"
+}
+__sushi_array_kind_into() {
+  local handle="${1-}" index="${2-0}" name="${1#@a:}__kinds"
+  local -n kinds="$name"
+  __sushi_kind="${kinds[$index]-string}"
+}
+__sushi_array_set_kind() {
+  local handle="${1-}" index="${2-0}" kind="${3-string}" name="${1#@a:}__kinds"
+  local -n kinds="$name"
+  kinds[$index]="$kind"
+}
+__sushi_array_append_to() {
+  local handle="${1-}" destination="${2-}" name="${1#@a:}"
+  __sushi_is_array_handle "$handle" || return 1
+  local -n source="$name" target="$destination"
+  target+=("${source[@]}")
+}
+""");
     }
 
     private void EmitRuntimeHelpers()
@@ -118,7 +317,7 @@ __sushi_j_is_integer() {
 
 __sushi_j_parse_string() {
   local start=$__sushi_j_pos
-  [[ "$(__sushi_j_char)" == '"' ]] || __sushi_j_fail 'expected string'
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == '"' ]] || __sushi_j_fail 'expected string'
   __sushi_j_pos=$((__sushi_j_pos + 1))
 
   while (( __sushi_j_pos < __sushi_j_len )); do
@@ -231,10 +430,10 @@ __sushi_j_parse_literal() {
 }
 
 __sushi_j_parse_array() {
-  [[ "$(__sushi_j_char)" == "[" ]] || __sushi_j_fail 'expected array'
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "[" ]] || __sushi_j_fail 'expected array'
   __sushi_j_pos=$((__sushi_j_pos + 1))
   __sushi_j_skip_ws
-  if [[ "$(__sushi_j_char)" == "]" ]]; then
+  if [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "]" ]]; then
     __sushi_j_pos=$((__sushi_j_pos + 1))
     __sushi_j_last='[]'
     return 0
@@ -253,7 +452,7 @@ __sushi_j_parse_array() {
     out+="$__sushi_j_last"
 
     __sushi_j_skip_ws
-    local c="$(__sushi_j_char)"
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
     if [[ "$c" == "," ]]; then
       __sushi_j_pos=$((__sushi_j_pos + 1))
       continue
@@ -269,10 +468,10 @@ __sushi_j_parse_array() {
 }
 
 __sushi_j_parse_object() {
-  [[ "$(__sushi_j_char)" == "{" ]] || __sushi_j_fail 'expected object'
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "{" ]] || __sushi_j_fail 'expected object'
   __sushi_j_pos=$((__sushi_j_pos + 1))
   __sushi_j_skip_ws
-  if [[ "$(__sushi_j_char)" == "}" ]]; then
+  if [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "}" ]]; then
     __sushi_j_pos=$((__sushi_j_pos + 1))
     __sushi_j_last='{}'
     return 0
@@ -286,7 +485,7 @@ __sushi_j_parse_object() {
     local key_json="$__sushi_j_last"
 
     __sushi_j_skip_ws
-    [[ "$(__sushi_j_char)" == ":" ]] || __sushi_j_fail 'expected :'
+    [[ "${__sushi_j_src:$__sushi_j_pos:1}" == ":" ]] || __sushi_j_fail 'expected :'
     __sushi_j_pos=$((__sushi_j_pos + 1))
 
     __sushi_j_skip_ws
@@ -301,7 +500,7 @@ __sushi_j_parse_object() {
     out+="$key_json:$value_json"
 
     __sushi_j_skip_ws
-    local c="$(__sushi_j_char)"
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
     if [[ "$c" == "," ]]; then
       __sushi_j_pos=$((__sushi_j_pos + 1))
       continue
@@ -318,7 +517,7 @@ __sushi_j_parse_object() {
 
 __sushi_j_parse_value() {
   __sushi_j_skip_ws
-  local c="$(__sushi_j_char)"
+  local c="${__sushi_j_src:$__sushi_j_pos:1}"
   case "$c" in
     '"') __sushi_j_parse_string ;;
     '{') __sushi_j_parse_object ;;
@@ -331,7 +530,7 @@ __sushi_j_parse_value() {
   esac
 }
 
-__sushi_json_quote() {
+__sushi_json_quote_into() {
   local value="${1-}"
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
@@ -340,12 +539,17 @@ __sushi_json_quote() {
   value="${value//$'\t'/\\t}"
   value="${value//$'\f'/\\f}"
   value="${value//$'\b'/\\b}"
-  printf '"%s"' "$value"
+  __sushi_result="\"$value\""
+}
+
+__sushi_json_quote() {
+  __sushi_json_quote_into "${1-}"
+  printf '%s' "${__sushi_result-}"
 }
 
 __sushi_is_obj_handle() {
   case "${1-}" in
-    @o:\{*) return 0 ;;
+    @o:\{*|@o:__sushi_object_*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -358,6 +562,11 @@ __sushi_obj_new() {
 __sushi_obj_get() {
   local handle="${1-}"
   local key="${2-}"
+  if [[ "$handle" == @o:__sushi_object_* ]]; then
+    __sushi_native_obj_get_into "$handle" "$key"
+    printf '%s' "${__sushi_result-}"
+    return 0
+  fi
   __sushi_is_obj_handle "$handle" || {
     printf ''
     return 0
@@ -365,14 +574,39 @@ __sushi_obj_get() {
   __sushi_json_member "${handle#@o:}" "$key"
 }
 
+__sushi_obj_get_into() {
+  local handle="${1-}"
+  local key="${2-}"
+  if [[ "$handle" == @o:__sushi_object_* ]]; then
+    __sushi_native_obj_get_into "$handle" "$key"
+  else
+    __sushi_result="$(__sushi_json_member "$handle" "$key")"
+  fi
+}
+
 __sushi_obj_to_json() {
   local handle="${1-}"
+  if [[ "$handle" == @o:__sushi_object_* ]]; then
+    __sushi_native_obj_to_json "$handle"
+    return 0
+  fi
   __sushi_is_obj_handle "$handle" || {
     printf '{}'
     return 0
   }
 
   printf '%s' "${handle#@o:}"
+}
+
+__sushi_obj_to_json_into() {
+  local handle="${1-}"
+  if [[ "$handle" == @o:__sushi_object_* ]]; then
+    __sushi_native_obj_to_json_into "$handle"
+  elif __sushi_is_obj_handle "$handle"; then
+    __sushi_result="${handle#@o:}"
+  else
+    __sushi_result='{}'
+  fi
 }
 
 __sushi_json_try_compact() {
@@ -467,7 +701,7 @@ __sushi_json_object_from_compact() {
   local compact="${1-}"
   __sushi_j_reset "$compact"
   __sushi_j_skip_ws
-  [[ "$(__sushi_j_char)" == "{" ]] || {
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "{" ]] || {
     printf '%s' "$compact"
     return 0
   }
@@ -476,6 +710,10 @@ __sushi_json_object_from_compact() {
 
 __sushi_value_to_json() {
   local value="${1-}"
+  if __sushi_is_array_handle "$value"; then
+    __sushi_array_to_json "$value"
+    return 0
+  fi
   if __sushi_is_obj_handle "$value"; then
     __sushi_obj_to_json "$value"
     return 0
@@ -487,6 +725,30 @@ __sushi_value_to_json() {
   else
     __sushi_json_quote "$value"
   fi
+}
+
+__sushi_value_to_json_kind() {
+  local value="${1-}" kind="${2-auto}"
+  case "$kind" in
+    string) __sushi_json_quote "$value" ;;
+    null) printf 'null' ;;
+    bool|number) printf '%s' "$value" ;;
+    array) __sushi_array_to_json "$value" ;;
+    object) __sushi_obj_to_json "$value" ;;
+    *) __sushi_value_to_json "$value" ;;
+  esac
+}
+
+__sushi_value_to_json_kind_into() {
+  local value="${1-}" kind="${2-auto}"
+  case "$kind" in
+    string) __sushi_json_quote_into "$value" ;;
+    null) __sushi_result='null' ;;
+    bool|number) __sushi_result="$value" ;;
+    array) __sushi_array_to_json_into "$value" ;;
+    object) __sushi_obj_to_json_into "$value" ;;
+    *) __sushi_result="$(__sushi_value_to_json "$value")" ;;
+  esac
 }
 
 __sushi_json_array() {
@@ -505,6 +767,26 @@ __sushi_json_array() {
   done
   out+=']'
   printf '%s' "$out"
+}
+
+__sushi_array_to_json_into() {
+  local handle="${1-}"
+  __sushi_is_array_handle "$handle" || { __sushi_result='[]'; return 0; }
+  local out='[' first=true index length value kind
+  __sushi_array_length_into "$handle"; length="${__sushi_result-0}"
+  for (( index=0; index<length; index++ )); do
+    __sushi_array_get_into "$handle" "$index"; value="${__sushi_result-}"
+    __sushi_array_kind_into "$handle" "$index"; kind="${__sushi_kind-auto}"
+    [[ "$first" == true ]] || out+=','; first=false
+    __sushi_value_to_json_kind_into "$value" "$kind"
+    out+="${__sushi_result-}"
+  done
+  __sushi_result="$out]"
+}
+
+__sushi_array_to_json() {
+  __sushi_array_to_json_into "${1-}"
+  printf '%s' "${__sushi_result-}"
 }
 
 __sushi_json_object() {
@@ -532,12 +814,20 @@ __sushi_json_object() {
 
 __sushi_json_array_each_json() {
   local json="${1-}"
+  if __sushi_is_array_handle "$json"; then
+    local raw
+    while IFS= read -r raw; do
+      __sushi_value_to_json "$raw"
+      printf '\n'
+    done < <(__sushi_array_each_raw "$json")
+    return 0
+  fi
   __sushi_j_reset "$json"
   __sushi_j_skip_ws
-  [[ "$(__sushi_j_char)" == "[" ]] || return 0
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "[" ]] || return 0
   __sushi_j_pos=$((__sushi_j_pos + 1))
   __sushi_j_skip_ws
-  if [[ "$(__sushi_j_char)" == "]" ]]; then
+  if [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "]" ]]; then
     return 0
   fi
 
@@ -545,7 +835,7 @@ __sushi_json_array_each_json() {
     __sushi_j_parse_value || return 0
     printf '%s\n' "$__sushi_j_last"
     __sushi_j_skip_ws
-    local c="$(__sushi_j_char)"
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
     if [[ "$c" == "," ]]; then
       __sushi_j_pos=$((__sushi_j_pos + 1))
       __sushi_j_skip_ws
@@ -558,6 +848,10 @@ __sushi_json_array_each_json() {
 
 __sushi_json_array_each_raw() {
   local json="${1-}"
+  if __sushi_is_array_handle "$json"; then
+    __sushi_array_each_raw "$json"
+    return 0
+  fi
   local item
   while IFS= read -r item; do
     __sushi_json_value_to_raw "$item"
@@ -567,6 +861,10 @@ __sushi_json_array_each_raw() {
 
 __sushi_json_object_each_kv() {
   local json="${1-}"
+  if [[ "$json" == @o:__sushi_object_* ]]; then
+    __sushi_native_obj_each_kv "$json"
+    return 0
+  fi
   if __sushi_is_obj_handle "$json"; then
     json="${json#@o:}"
   fi
@@ -576,10 +874,10 @@ __sushi_json_object_each_kv() {
 
   __sushi_j_reset "$compact"
   __sushi_j_skip_ws
-  [[ "$(__sushi_j_char)" == "{" ]] || return 0
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "{" ]] || return 0
   __sushi_j_pos=$((__sushi_j_pos + 1))
   __sushi_j_skip_ws
-  if [[ "$(__sushi_j_char)" == "}" ]]; then
+  if [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "}" ]]; then
     return 0
   fi
 
@@ -589,7 +887,7 @@ __sushi_json_object_each_kv() {
     local key_raw="$(__sushi_j_unescape_string "$key_json")"
 
     __sushi_j_skip_ws
-    [[ "$(__sushi_j_char)" == ":" ]] || return 0
+    [[ "${__sushi_j_src:$__sushi_j_pos:1}" == ":" ]] || return 0
     __sushi_j_pos=$((__sushi_j_pos + 1))
     __sushi_j_skip_ws
 
@@ -604,7 +902,7 @@ __sushi_json_object_each_kv() {
     printf '%s\t%s\n' "$key_raw" "$value_raw"
 
     __sushi_j_skip_ws
-    local c="$(__sushi_j_char)"
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
     if [[ "$c" == "," ]]; then
       __sushi_j_pos=$((__sushi_j_pos + 1))
       __sushi_j_skip_ws
@@ -629,10 +927,10 @@ __sushi_json_member() {
 
   __sushi_j_reset "$compact"
   __sushi_j_skip_ws
-  [[ "$(__sushi_j_char)" == "{" ]] || return 0
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "{" ]] || return 0
   __sushi_j_pos=$((__sushi_j_pos + 1))
   __sushi_j_skip_ws
-  if [[ "$(__sushi_j_char)" == "}" ]]; then
+  if [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "}" ]]; then
     return 0
   fi
 
@@ -640,7 +938,7 @@ __sushi_json_member() {
     __sushi_j_parse_string || return 0
     local key_json="$__sushi_j_last"
     __sushi_j_skip_ws
-    [[ "$(__sushi_j_char)" == ":" ]] || return 0
+    [[ "${__sushi_j_src:$__sushi_j_pos:1}" == ":" ]] || return 0
     __sushi_j_pos=$((__sushi_j_pos + 1))
     __sushi_j_skip_ws
     __sushi_j_parse_value || return 0
@@ -652,7 +950,7 @@ __sushi_json_member() {
     fi
 
     __sushi_j_skip_ws
-    local c="$(__sushi_j_char)"
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
     if [[ "$c" == "," ]]; then
       __sushi_j_pos=$((__sushi_j_pos + 1))
       __sushi_j_skip_ws
@@ -666,6 +964,11 @@ __sushi_json_member() {
 __sushi_json_index() {
   local json="${1-}"
   local index="${2-}"
+  if __sushi_is_array_handle "$json"; then
+    __sushi_array_get_into "$json" "$index"
+    printf '%s' "${__sushi_result-}"
+    return 0
+  fi
   if __sushi_is_obj_handle "$json"; then
     __sushi_obj_get "$json" "$index"
     return 0
@@ -674,7 +977,7 @@ __sushi_json_index() {
   local compact="$json"
   __sushi_j_reset "$compact"
   __sushi_j_skip_ws
-  local first_char="$(__sushi_j_char)"
+  local first_char="${__sushi_j_src:$__sushi_j_pos:1}"
 
   if [[ "$first_char" == "{" ]]; then
     __sushi_json_member "$compact" "$index"
@@ -805,18 +1108,136 @@ __sushi_j_pretty_json() {
   printf '%s' "$out"
 }
 
-__sushi_json_parse() {
-  local text="${1-}"
-  local compact
-  if compact="$(__sushi_json_try_compact "$text")"; then
-    if [[ "${compact:0:1}" == "{" ]]; then
-      __sushi_json_object_from_compact "$compact"
-    else
-      printf '%s' "$compact"
-    fi
-  else
-    printf '%s' "$text"
+__sushi_j_parse_native_array() {
+  __sushi_j_pos=$((__sushi_j_pos + 1))
+  __sushi_j_skip_ws
+  local -a values=() kinds=()
+  if [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "]" ]]; then
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    __sushi_array_new
+    __sushi_kind='array'
+    return 0
   fi
+
+  while :; do
+    __sushi_j_parse_native_value || return 1
+    values+=("${__sushi_result-}")
+    kinds+=("${__sushi_kind-auto}")
+    __sushi_j_skip_ws
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
+    if [[ "$c" == "," ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      __sushi_j_skip_ws
+      continue
+    fi
+    [[ "$c" == "]" ]] || return 1
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    break
+  done
+
+  __sushi_array_new "${values[@]}"
+  local handle="${__sushi_result-}" index
+  for (( index=0; index<${#kinds[@]}; index++ )); do
+    __sushi_array_set_kind "$handle" "$index" "${kinds[$index]}"
+  done
+  __sushi_result="$handle"
+  __sushi_kind='array'
+}
+
+__sushi_j_parse_native_object() {
+  __sushi_j_pos=$((__sushi_j_pos + 1))
+  __sushi_j_skip_ws
+  local -a keys=() values=() kinds=()
+  if [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "}" ]]; then
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    __sushi_native_obj_new
+    __sushi_kind='object'
+    return 0
+  fi
+
+  while :; do
+    __sushi_j_parse_string || return 1
+    local key_json="$__sushi_j_last"
+    local key_raw="$(__sushi_j_unescape_string "$key_json")"
+    __sushi_j_skip_ws
+    [[ "${__sushi_j_src:$__sushi_j_pos:1}" == ":" ]] || return 1
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    __sushi_j_skip_ws
+    __sushi_j_parse_native_value || return 1
+    keys+=("$key_raw")
+    values+=("${__sushi_result-}")
+    kinds+=("${__sushi_kind-auto}")
+    __sushi_j_skip_ws
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
+    if [[ "$c" == "," ]]; then
+      __sushi_j_pos=$((__sushi_j_pos + 1))
+      __sushi_j_skip_ws
+      continue
+    fi
+    [[ "$c" == "}" ]] || return 1
+    __sushi_j_pos=$((__sushi_j_pos + 1))
+    break
+  done
+
+  local -a pairs=()
+  local index
+  for (( index=0; index<${#keys[@]}; index++ )); do
+    pairs+=("${keys[$index]}" "${values[$index]}")
+  done
+  __sushi_native_obj_new "${pairs[@]}"
+  local handle="${__sushi_result-}"
+  for (( index=0; index<${#keys[@]}; index++ )); do
+    __sushi_native_obj_set_kind "$handle" "${keys[$index]}" "${kinds[$index]}"
+  done
+  __sushi_result="$handle"
+  __sushi_kind='object'
+}
+
+__sushi_j_parse_native_value() {
+  __sushi_j_skip_ws
+  local c="${__sushi_j_src:$__sushi_j_pos:1}"
+  case "$c" in
+    '"')
+      __sushi_j_parse_string || return 1
+      __sushi_result="$(__sushi_j_unescape_string "$__sushi_j_last")"
+      __sushi_kind='string'
+      ;;
+    '{') __sushi_j_parse_native_object ;;
+    '[') __sushi_j_parse_native_array ;;
+    't') __sushi_j_parse_literal true || return 1; __sushi_result=true; __sushi_kind='bool' ;;
+    'f') __sushi_j_parse_literal false || return 1; __sushi_result=false; __sushi_kind='bool' ;;
+    'n') __sushi_j_parse_literal null || return 1; __sushi_result=''; __sushi_kind='null' ;;
+    '-'|[0-9]) __sushi_j_parse_number || return 1; __sushi_result="$__sushi_j_last"; __sushi_kind='number' ;;
+    *) return 1 ;;
+  esac
+}
+
+__sushi_json_parse_into() {
+  local text="${1-}"
+  __sushi_j_reset "$text"
+  if __sushi_j_parse_native_value; then
+    local parsed="${__sushi_result-}" parsed_kind="${__sushi_kind-auto}"
+    __sushi_j_skip_ws
+    if (( __sushi_j_pos == __sushi_j_len )); then
+      __sushi_result="$parsed"
+      __sushi_kind="$parsed_kind"
+      return 0
+    fi
+  fi
+  __sushi_result="$text"
+  __sushi_kind='string'
+}
+
+__sushi_json_parse() {
+  __sushi_json_parse_into "${1-}"
+  case "${__sushi_kind-auto}" in
+    object)
+      local compact="$(__sushi_obj_to_json "${__sushi_result-}")"
+      __sushi_obj_new "$compact"
+      ;;
+    array) __sushi_array_to_json "${__sushi_result-}" ;;
+    *) printf '%s' "${__sushi_result-}" ;;
+  esac
 }
 
 __sushi_json_last_compact() {
@@ -839,7 +1260,9 @@ __sushi_json_stringify() {
   local value="${1-}"
   local indent="${2:-0}"
   local compact
-  if __sushi_is_obj_handle "$value"; then
+  if __sushi_is_array_handle "$value"; then
+    compact="$(__sushi_array_to_json "$value")"
+  elif __sushi_is_obj_handle "$value"; then
     compact="$(__sushi_obj_to_json "$value")"
   elif compact="$(__sushi_json_try_compact "$value")"; then
     :
@@ -855,7 +1278,26 @@ __sushi_json_stringify() {
   fi
 }
 
-__sushi_process_run() {
+__sushi_json_stringify_into() {
+  local value="${1-}" indent="${2:-0}" compact
+  if __sushi_is_array_handle "$value"; then
+    __sushi_array_to_json_into "$value"; compact="${__sushi_result-}"
+  elif __sushi_is_obj_handle "$value"; then
+    __sushi_obj_to_json_into "$value"; compact="${__sushi_result-}"
+  elif compact="$(__sushi_json_try_compact "$value")"; then
+    :
+  else
+    __sushi_json_quote_into "$value"; compact="${__sushi_result-}"
+  fi
+  if __sushi_j_is_integer "$indent" && (( indent > 0 )); then
+    __sushi_result="$(__sushi_j_pretty_json "$compact" "$indent")"
+  else
+    __sushi_result="$compact"
+  fi
+  __sushi_kind='string'
+}
+
+__sushi_process_run_into() {
   local command="${1-}"
   local args_json="${2-}"
   local cwd="${3-}"
@@ -864,19 +1306,19 @@ __sushi_process_run() {
   local timeout_ms="${6-0}"
   local allow_failure="${7-false}"
   local stream="${8-false}"
+  local shared_stderr_file="${9-}"
 
-  local stdout_file stderr_file input_file
-  stdout_file="$(mktemp)"
-  stderr_file="$(mktemp)"
-  input_file="$(mktemp)"
-  printf '%s' "$input_text" > "$input_file"
-
-  local -a cmd_argv env_pairs
+  local stdout_file='' stderr_file='' input_file=''
+  local -a cmd_argv=() env_pairs=() env_prefix=()
   cmd_argv=("$command")
   if [[ -n "$args_json" ]] && [[ "$args_json" != "null" ]]; then
-    while IFS= read -r arg; do
-      cmd_argv+=("$arg")
-    done < <(__sushi_json_array_each_raw "$args_json")
+    if __sushi_is_array_handle "$args_json"; then
+      __sushi_array_append_to "$args_json" cmd_argv
+    else
+      while IFS= read -r arg; do
+        cmd_argv+=("$arg")
+      done < <(__sushi_json_array_each_raw "$args_json")
+    fi
   fi
 
   if [[ -n "$env_json" ]] && [[ "$env_json" != "null" ]]; then
@@ -885,6 +1327,9 @@ __sushi_process_run() {
       env_pairs+=("${key}=${value}")
     done < <(__sushi_json_object_each_kv "$env_json")
   fi
+  if (( ${#env_pairs[@]} > 0 )); then
+    env_prefix=(env "${env_pairs[@]}")
+  fi
 
   local exit_code timed_out=false
   local timeout_enabled=false
@@ -892,8 +1337,41 @@ __sushi_process_run() {
     timeout_enabled=true
   fi
 
+  local fast_capture=false
+  local cleanup_stderr_file=false
+  if [[ "$timeout_enabled" != "true" && "$stream" != "true" ]]; then
+    fast_capture=true
+    if [[ -n "$shared_stderr_file" ]]; then
+      stderr_file="$shared_stderr_file"
+      : > "$stderr_file"
+    else
+      stderr_file="$(mktemp)"
+      cleanup_stderr_file=true
+    fi
+  else
+    stdout_file="$(mktemp)"
+    stderr_file="$(mktemp)"
+    cleanup_stderr_file=true
+    input_file="$(mktemp)"
+    printf '%s' "$input_text" > "$input_file"
+  fi
+
+  local stdout_text='' stderr_text=''
   set +e
-  if [[ "$timeout_enabled" == "true" ]]; then
+  if [[ "$fast_capture" == "true" ]]; then
+    if [[ -n "$cwd" ]] && [[ "$cwd" != "null" ]]; then
+      if [[ -n "$input_text" ]]; then
+        stdout_text="$(cd -- "$cwd" 2>/dev/null && "${env_prefix[@]}" "${cmd_argv[@]}" < <(printf '%s' "$input_text") 2> "$stderr_file")"
+      else
+        stdout_text="$(cd -- "$cwd" 2>/dev/null && "${env_prefix[@]}" "${cmd_argv[@]}" < /dev/null 2> "$stderr_file")"
+      fi
+    elif [[ -n "$input_text" ]]; then
+      stdout_text="$("${env_prefix[@]}" "${cmd_argv[@]}" < <(printf '%s' "$input_text") 2> "$stderr_file")"
+    else
+      stdout_text="$("${env_prefix[@]}" "${cmd_argv[@]}" < /dev/null 2> "$stderr_file")"
+    fi
+    exit_code=$?
+  elif [[ "$timeout_enabled" == "true" ]]; then
     local timeout_flag timeout_pid command_pid timeout_seconds
     timeout_flag="$(mktemp)"
     rm -f -- "$timeout_flag"
@@ -961,9 +1439,13 @@ __sushi_process_run() {
   fi
   set -e
 
-  local stdout_text stderr_text command_text ok_json
-  stdout_text="$(cat -- "$stdout_file" 2>/dev/null || true)"
-  stderr_text="$(cat -- "$stderr_file" 2>/dev/null || true)"
+  local command_text ok_json
+  if [[ "$fast_capture" == "true" ]]; then
+    stderr_text="$(< "$stderr_file")"
+  else
+    stdout_text="$(cat -- "$stdout_file" 2>/dev/null || true)"
+    stderr_text="$(cat -- "$stderr_file" 2>/dev/null || true)"
+  fi
   command_text="$(printf '%q ' "${cmd_argv[@]}")"
   command_text="${command_text% }"
   ok_json=false
@@ -971,16 +1453,24 @@ __sushi_process_run() {
     ok_json=true
   fi
 
-  local result_json
-  result_json="$(__sushi_json_object \
+  __sushi_native_obj_new \
     code "$exit_code" \
     stdout "$stdout_text" \
     stderr "$stderr_text" \
     command "$command_text" \
     ok "$ok_json" \
-    timedOut "$timed_out")"
+    timedOut "$timed_out"
+  local result_handle="${__sushi_result-}"
+  __sushi_native_obj_set_kind "$result_handle" code number
+  __sushi_native_obj_set_kind "$result_handle" stdout string
+  __sushi_native_obj_set_kind "$result_handle" stderr string
+  __sushi_native_obj_set_kind "$result_handle" command string
+  __sushi_native_obj_set_kind "$result_handle" ok bool
+  __sushi_native_obj_set_kind "$result_handle" timedOut bool
 
-  rm -f -- "$stdout_file" "$stderr_file" "$input_file"
+  [[ -z "$stdout_file" ]] || rm -f -- "$stdout_file"
+  [[ "$cleanup_stderr_file" != "true" ]] || rm -f -- "$stderr_file"
+  [[ -z "$input_file" ]] || rm -f -- "$input_file"
 
   if [[ "$allow_failure" != "true" ]] && [[ "$exit_code" -ne 0 ]]; then
     if [[ -n "$stderr_text" ]]; then
@@ -989,10 +1479,15 @@ __sushi_process_run() {
     exit "$exit_code"
   fi
 
-  printf '%s' "$result_json"
+  __sushi_result="$result_handle"
 }
 
-__sushi_process_pipeline() {
+__sushi_process_run() {
+  __sushi_process_run_into "$@"
+  __sushi_obj_to_json "${__sushi_result-}"
+}
+
+__sushi_process_pipeline_into() {
   local stages_json="${1-}"
   local cwd="${2-}"
   local env_json="${3-}"
@@ -1002,28 +1497,57 @@ __sushi_process_pipeline() {
   local stream="${7-false}"
 
   local next_input="${input_text-}"
-  local last_result
-  last_result="$(__sushi_json_object code 0 stdout '' stderr '' ok true command '' timedOut false)"
+  local -a pipeline_stages=()
+  if __sushi_is_array_handle "$stages_json"; then
+    __sushi_array_append_to "$stages_json" pipeline_stages
+  else
+    while IFS= read -r stage; do pipeline_stages+=("$stage"); done < <(__sushi_json_array_each_json "$stages_json")
+  fi
+  local pipeline_stderr_file=''
+  if [[ "$timeout_ms" == "0" && "$stream" != "true" ]]; then
+    pipeline_stderr_file="$(mktemp)"
+  fi
+  __sushi_native_obj_new code 0 stdout '' stderr '' ok true command '' timedOut false
+  local last_result="${__sushi_result-}"
+  __sushi_native_obj_set_kind "$last_result" code number
+  __sushi_native_obj_set_kind "$last_result" stdout string
+  __sushi_native_obj_set_kind "$last_result" stderr string
+  __sushi_native_obj_set_kind "$last_result" command string
+  __sushi_native_obj_set_kind "$last_result" ok bool
+  __sushi_native_obj_set_kind "$last_result" timedOut bool
 
-  while IFS= read -r stage; do
+  local stage
+  for stage in "${pipeline_stages[@]}"; do
     local stage_command stage_args stage_result stage_code stage_stderr
-    stage_command="$(__sushi_json_member "$stage" "command")"
-    stage_args="$(__sushi_json_member "$stage" "args")"
-    stage_result="$(__sushi_process_run "$stage_command" "$stage_args" "$cwd" "$env_json" "$next_input" "$timeout_ms" "true" "$stream")"
-    stage_result="$(__sushi_json_last_compact "$stage_result")"
-    stage_code="$(__sushi_json_member "$stage_result" "code")"
+    __sushi_obj_get_into "$stage" command
+    stage_command="${__sushi_result-}"
+    __sushi_obj_get_into "$stage" args
+    stage_args="${__sushi_result-}"
+    __sushi_process_run_into "$stage_command" "$stage_args" "$cwd" "$env_json" "$next_input" "$timeout_ms" "true" "$stream" "$pipeline_stderr_file"
+    stage_result="${__sushi_result-}"
+    __sushi_obj_get_into "$stage_result" code
+    stage_code="${__sushi_result-}"
     if [[ "$allow_failure" != "true" ]] && [[ "$stage_code" -ne 0 ]]; then
-      stage_stderr="$(__sushi_json_member "$stage_result" "stderr")"
+      __sushi_obj_get_into "$stage_result" stderr
+      stage_stderr="${__sushi_result-}"
       if [[ -n "$stage_stderr" ]]; then
         printf '%s\n' "$stage_stderr" >&2
       fi
+      [[ -z "$pipeline_stderr_file" ]] || rm -f -- "$pipeline_stderr_file"
       exit "$stage_code"
     fi
-    next_input="$(__sushi_json_member "$stage_result" "stdout")"
+    __sushi_obj_get_into "$stage_result" stdout
+    next_input="${__sushi_result-}"
     last_result="$stage_result"
-  done < <(__sushi_json_array_each_json "$stages_json")
+  done
 
-  printf '%s' "$last_result"
+  [[ -z "$pipeline_stderr_file" ]] || rm -f -- "$pipeline_stderr_file"
+  __sushi_result="$last_result"
+}
+
+__sushi_process_pipeline() {
+  __sushi_process_pipeline_into "$@"
+  __sushi_obj_to_json "${__sushi_result-}"
 }
 
 __sushi_process_fail() {
@@ -1051,24 +1575,65 @@ __sushi_process_require_success() {
   printf '%s' "$result"
 }
 
-__sushi_fs_glob() {
+__sushi_fs_glob_into() {
   local pattern="${1-}"
   local cwd="${2-}"
-  local -a results
+  local -a results=()
+  local search_root='.' match_pattern="$pattern" zero_pattern="$pattern"
+  local prefix='' remaining="$pattern" segment
+
+  # Restrict find to the literal path prefix. This is the dominant difference
+  # between scanning src/**/*.cs and walking the entire repository from '.'.
+  if [[ "$pattern" != /* ]]; then
+    while [[ "$remaining" == */* ]]; do
+      segment="${remaining%%/*}"
+      case "$segment" in
+        *'*'*|*'?'*|*'['*) break ;;
+      esac
+      prefix="${prefix:+$prefix/}$segment"
+      remaining="${remaining#*/}"
+    done
+    [[ -n "$prefix" ]] && search_root="$prefix"
+  fi
+
+  [[ "$search_root" == "." ]] && match_pattern="./$pattern"
+  while [[ "$zero_pattern" == '**/'* || "$zero_pattern" == *'/**/'* ]]; do
+    if [[ "$zero_pattern" == '**/'* ]]; then
+      zero_pattern="${zero_pattern:3}"
+    else
+      zero_pattern="${zero_pattern/\/\*\*\//\/}"
+    fi
+  done
+  [[ "$search_root" == "." ]] && zero_pattern="./$zero_pattern"
+
+  local -a find_depth=()
+  if [[ "$pattern" != *'**'* ]]; then
+    find_depth=(-maxdepth 1)
+  fi
 
   if [[ -n "$cwd" ]] && [[ "$cwd" != "null" ]]; then
     while IFS= read -r line; do
       line="${line#./}"
       [[ -n "$line" ]] && results+=("$line")
-    done < <(cd -- "$cwd" 2>/dev/null && find . -path "./$pattern" -print 2>/dev/null || true)
+    done < <(cd -- "$cwd" 2>/dev/null && find "$search_root" "${find_depth[@]}" \( -path "$match_pattern" -o -path "$zero_pattern" \) -print 2>/dev/null || true)
   else
     while IFS= read -r line; do
       line="${line#./}"
       [[ -n "$line" ]] && results+=("$line")
-    done < <(find . -path "./$pattern" -print 2>/dev/null || true)
+    done < <(find "$search_root" "${find_depth[@]}" \( -path "$match_pattern" -o -path "$zero_pattern" \) -print 2>/dev/null || true)
   fi
 
-  __sushi_json_array "${results[@]}"
+  __sushi_array_new "${results[@]}"
+  local result_handle="${__sushi_result-}" index
+  for (( index=0; index<${#results[@]}; index++ )); do
+    __sushi_array_set_kind "$result_handle" "$index" string
+  done
+  __sushi_result="$result_handle"
+}
+
+__sushi_fs_glob() {
+  __sushi_fs_glob_into "$@"
+  __sushi_array_to_json "${__sushi_result-}"
 }
 
 __sushi_http_request() {
@@ -1109,7 +1674,7 @@ __sushi_http_request() {
   fi
 
   local body_text headers_obj ok_json json_body
-  local -a header_pairs
+  local -a header_pairs=()
   body_text="$(cat -- "$body_file" 2>/dev/null || true)"
   headers_obj="$(__sushi_json_object)"
   while IFS= read -r line; do
@@ -1183,6 +1748,12 @@ __sushi_http_post() {
 __sushi_json_member_json() {
   local json="${1-}"
   local key="${2-}"
+  if [[ "$json" == @o:__sushi_object_* ]]; then
+    __sushi_native_obj_has "$json" "$key" || return 1
+    __sushi_native_obj_get_into "$json" "$key"
+    __sushi_value_to_json "${__sushi_result-}"
+    return 0
+  fi
   if __sushi_is_obj_handle "$json"; then
     json="${json#@o:}"
   fi
@@ -1193,16 +1764,16 @@ __sushi_json_member_json() {
 
   __sushi_j_reset "$compact"
   __sushi_j_skip_ws
-  [[ "$(__sushi_j_char)" == "{" ]] || return 1
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "{" ]] || return 1
   __sushi_j_pos=$((__sushi_j_pos + 1))
   __sushi_j_skip_ws
-  [[ "$(__sushi_j_char)" == "}" ]] && return 1
+  [[ "${__sushi_j_src:$__sushi_j_pos:1}" == "}" ]] && return 1
 
   while :; do
     __sushi_j_parse_string || return 1
     local key_json="$__sushi_j_last"
     __sushi_j_skip_ws
-    [[ "$(__sushi_j_char)" == ":" ]] || return 1
+    [[ "${__sushi_j_src:$__sushi_j_pos:1}" == ":" ]] || return 1
     __sushi_j_pos=$((__sushi_j_pos + 1))
     __sushi_j_skip_ws
     __sushi_j_parse_value || return 1
@@ -1214,7 +1785,7 @@ __sushi_json_member_json() {
     fi
 
     __sushi_j_skip_ws
-    local c="$(__sushi_j_char)"
+    local c="${__sushi_j_src:$__sushi_j_pos:1}"
     if [[ "$c" == "," ]]; then
       __sushi_j_pos=$((__sushi_j_pos + 1))
       __sushi_j_skip_ws
@@ -1237,6 +1808,7 @@ __sushi_is_float() {
 }
 
 __sushi_json_is_array() {
+  __sushi_is_array_handle "${1-}" && return 0
   __sushi_is_obj_handle "${1-}" && return 1
   local compact
   compact="$(__sushi_json_try_compact "${1-}")" || return 1
@@ -1388,18 +1960,42 @@ __sushi_require_integer() {
   printf 'Type contract violation: %s expected int, got %s\n' "$context" "$(__sushi_detect_type "$value")" >&2
   exit 2
 }
+
+__sushi_validate_integer() {
+  local value="${1-}"
+  local context="${2-arithmetic operand}"
+  if __sushi_j_is_integer "$value"; then
+    return 0
+  fi
+
+  printf 'Type contract violation: %s expected int, got %s\n' "$context" "$(__sushi_detect_type "$value")" >&2
+  exit 2
+}
 """);
 
         AppendRuntimeBlock(
 """
 __sushi_is_json_array() {
+  local value="${1-}"
+  __sushi_is_array_handle "$value" && return 0
+  [[ "${value:0:1}" == "[" ]] || return 1
   local compact
-  compact="$(__sushi_json_try_compact "${1-}")" || return 1
+  compact="$(__sushi_json_try_compact "$value")" || return 1
   [[ "${compact:0:1}" == "[" ]]
 }
 
 __sushi_json_length() {
   local value="${1-}"
+  if __sushi_is_array_handle "$value"; then
+    local name="${value#@a:}"
+    if [[ -n "${ZSH_VERSION-}" ]]; then
+      eval "printf '%s' \${#$name[@]}"
+    else
+      local -n values="$name"
+      printf '%s' "${#values[@]}"
+    fi
+    return 0
+  fi
   if __sushi_is_obj_handle "$value"; then
     value="${value#@o:}"
   fi
@@ -1614,6 +2210,16 @@ __sushi_require_string_receiver() {
   printf '%s' "$value"
 }
 
+__sushi_validate_string_receiver() {
+  local value="${1-}"
+  local method="${2-string method}"
+  if [[ "$value" == "__sushi_null__" ]]; then
+    printf 'Type contract violation: string receiver for %s expected non-null value\n' "$method" >&2
+    exit 2
+  fi
+  return 0
+}
+
 __sushi_string_trim() {
   local value
   value="$(__sushi_require_string_receiver "${1-}" "trim")"
@@ -1756,6 +2362,17 @@ __sushi_regex_to_ere() {
   printf '%s' "$pattern"
 }
 
+__sushi_regex_to_ere_into() {
+  local pattern="${1-}"
+  pattern="${pattern//\\d/[0-9]}"
+  pattern="${pattern//\\D/[^0-9]}"
+  pattern="${pattern//\\w/[[:alnum:]_]}"
+  pattern="${pattern//\\W/[^[:alnum:]_]}"
+  pattern="${pattern//\\s/[[:space:]]}"
+  pattern="${pattern//\\S/[^[:space:]]}"
+  __sushi_result="$pattern"
+}
+
 __sushi_string_is_match() {
   local value
   value="$(__sushi_require_string_receiver "${1-}" "isMatch")"
@@ -1803,6 +2420,143 @@ __sushi_truthy() {
   return 0
 }
 """);
+
+        AppendRuntimeBlock(_zshMode
+            ? """
+__sushi_native_object_seq=0
+__sushi_native_obj_new() {
+  __sushi_native_object_seq=$((__sushi_native_object_seq + 1))
+  local name="__sushi_object_${__sushi_native_object_seq}" kinds_name="__sushi_object_${__sushi_native_object_seq}__kinds" key value
+  typeset -gA "$name"; eval "$name=()"
+  typeset -gA "$kinds_name"; eval "$kinds_name=()"
+  while (( $# > 1 )); do
+    key="$1"; value="$2"; shift 2
+    eval "$name[${(q)key}]=${(q)value}"
+    __sushi_infer_kind_into "$value"
+    eval "$kinds_name[${(q)key}]=${(q)__sushi_kind}"
+  done
+  __sushi_result="@o:$name"
+}
+__sushi_native_obj_get_into() {
+  local handle="${1-}" key="${2-}" name="${1#@o:}"
+  [[ "$handle" == @o:__sushi_object_<-> ]] && (( ${+parameters[$name]} )) || { __sushi_result=''; return 0; }
+  eval "__sushi_result=\"\${$name[${(q)key}]-}\""
+}
+__sushi_native_obj_has() {
+  local handle="${1-}" key="${2-}" name="${1#@o:}"
+  [[ "$handle" == @o:__sushi_object_<-> ]] && (( ${+parameters[$name]} )) || return 1
+  eval "(( \${+$name[${(q)key}]} ))"
+}
+__sushi_native_obj_kind_into() {
+  local handle="${1-}" key="${2-}" name="${1#@o:}__kinds"
+  eval "__sushi_kind=\"\${$name[${(q)key}]-auto}\""
+}
+__sushi_native_obj_set_kind() {
+  local handle="${1-}" key="${2-}" kind="${3-auto}" name="${1#@o:}__kinds"
+  eval "$name[${(q)key}]=${(q)kind}"
+}
+__sushi_native_obj_each_kv() {
+  local handle="${1-}" name="${1#@o:}" key value
+  local -a keys; eval "keys=(\"\${(k)$name[@]}\")"
+  for key in "${keys[@]}"; do
+    eval "value=\"\${$name[${(q)key}]-}\""
+    key="${key//$'\t'/ }"; key="${key//$'\n'/ }"
+    value="${value//$'\t'/ }"; value="${value//$'\n'/ }"
+    printf '%s\t%s\n' "$key" "$value"
+  done
+}
+__sushi_native_obj_to_json_into() {
+  local handle="${1-}" name="${1#@o:}" out='{' first=true key value kind
+  [[ "$handle" == @o:__sushi_object_<-> ]] || { __sushi_result='{}'; return 0; }
+  local -a keys; eval "keys=(\"\${(k)$name[@]}\")"; keys=(${(on)keys[@]})
+  for key in "${keys[@]}"; do
+    eval "value=\"\${$name[${(q)key}]-}\""
+    __sushi_native_obj_kind_into "$handle" "$key"; kind="${__sushi_kind-auto}"
+    [[ "$first" == true ]] || out+=','; first=false
+    __sushi_json_quote_into "$key"; out+="${__sushi_result-}:"
+    __sushi_value_to_json_kind_into "$value" "$kind"; out+="${__sushi_result-}"
+  done
+  __sushi_result="$out}"
+}
+__sushi_native_obj_to_json() {
+  __sushi_native_obj_to_json_into "${1-}"
+  printf '%s' "${__sushi_result-}"
+}
+"""
+            : """
+__sushi_native_object_seq=0
+__sushi_native_obj_new() {
+  __sushi_native_object_seq=$((__sushi_native_object_seq + 1))
+  local name="__sushi_object_${__sushi_native_object_seq}" kinds_name="__sushi_object_${__sushi_native_object_seq}__kinds" key value
+  declare -gA "$name"; declare -gA "$kinds_name"
+  local -n values="$name" kinds="$kinds_name"
+  values=(); kinds=()
+  while (( $# > 1 )); do
+    key="$1"; value="$2"; shift 2; values["$key"]="$value"
+    __sushi_infer_kind_into "$value"; kinds["$key"]="$__sushi_kind"
+  done
+  __sushi_result="@o:$name"
+}
+__sushi_native_obj_get_into() {
+  local handle="${1-}" key="${2-}" name="${1#@o:}"
+  [[ "$handle" =~ ^@o:__sushi_object_[0-9]+$ ]] && declare -p "$name" >/dev/null 2>&1 || { __sushi_result=''; return 0; }
+  local -n values="$name"; __sushi_result="${values["$key"]-}"
+}
+__sushi_native_obj_has() {
+  local handle="${1-}" key="${2-}" name="${1#@o:}"
+  [[ "$handle" =~ ^@o:__sushi_object_[0-9]+$ ]] && declare -p "$name" >/dev/null 2>&1 || return 1
+  local -n values="$name"
+  [[ -n "${values["$key"]+present}" ]]
+}
+__sushi_native_obj_kind_into() {
+  local handle="${1-}" key="${2-}" name="${1#@o:}__kinds"
+  local -n kinds="$name"
+  __sushi_kind="${kinds["$key"]-auto}"
+}
+__sushi_native_obj_set_kind() {
+  local handle="${1-}" key="${2-}" kind="${3-auto}" name="${1#@o:}__kinds"
+  local -n kinds="$name"
+  kinds["$key"]="$kind"
+}
+__sushi_native_obj_each_kv() {
+  local handle="${1-}" name="${1#@o:}" key value
+  local -n values="$name"
+  for key in "${!values[@]}"; do
+    value="${values["$key"]-}"
+    key="${key//$'\t'/ }"; key="${key//$'\n'/ }"
+    value="${value//$'\t'/ }"; value="${value//$'\n'/ }"
+    printf '%s\t%s\n' "$key" "$value"
+  done
+}
+__sushi_native_obj_to_json_into() {
+  local handle="${1-}" name="${1#@o:}" kinds_name="${1#@o:}__kinds" out='{' first=true key kind
+  [[ "$handle" =~ ^@o:__sushi_object_[0-9]+$ ]] || { __sushi_result='{}'; return 0; }
+  local -n values="$name" kinds="$kinds_name"
+  local -a keys=("${!values[@]}")
+  local index cursor candidate
+  local LC_ALL=C
+  for (( index=1; index<${#keys[@]}; index++ )); do
+    candidate="${keys[$index]}"
+    cursor=$index
+    while (( cursor > 0 )) && [[ "$candidate" < "${keys[$((cursor - 1))]}" ]]; do
+      keys[$cursor]="${keys[$((cursor - 1))]}"
+      cursor=$((cursor - 1))
+    done
+    keys[$cursor]="$candidate"
+  done
+  for key in "${keys[@]}"; do
+    [[ "$first" == true ]] || out+=','; first=false
+    kind="${kinds["$key"]-auto}"
+    __sushi_json_quote_into "$key"; out+="${__sushi_result-}:"
+    __sushi_value_to_json_kind_into "${values["$key"]-}" "$kind"; out+="${__sushi_result-}"
+  done
+  __sushi_result="$out}"
+}
+__sushi_native_obj_to_json() {
+  __sushi_native_obj_to_json_into "${1-}"
+  printf '%s' "${__sushi_result-}"
+}
+""");
     }
 
     private void AppendRuntimeBlock(string text)
@@ -1826,11 +2580,18 @@ __sushi_truthy() {
                 break;
 
             case IrVariableDeclarationStatement variable:
-                WriteLine($"{SanitizeVariableName(variable.Name)}={EmitValueExpression(variable.Initializer ?? new IrLiteralExpression(null))}");
+            {
+                var initializer = variable.Initializer ?? new IrLiteralExpression(null);
+                var value = PrepareValue(initializer, inFunction);
+                var name = SanitizeVariableName(variable.Name);
+                WriteLine($"{(inFunction ? "local " : "")}{name}={value}");
+                SetKnownInteger(name, IsDefinitelyInteger(initializer));
+                SetKnownArray(name, initializer is IrArrayLiteralExpression);
                 break;
+            }
 
             case IrExpressionStatement expressionStatement:
-                EmitExpressionStatement(expressionStatement.Expression);
+                EmitExpressionStatement(expressionStatement.Expression, inFunction);
                 break;
 
             case IrIfStatement ifStatement:
@@ -1873,7 +2634,8 @@ __sushi_truthy() {
 
     private void EmitIfStatement(IrIfStatement statement, bool inFunction)
     {
-        WriteLine($"if {EmitConditionCommand(statement.Condition)}; then");
+        var condition = PrepareCondition(statement.Condition, inFunction);
+        WriteLine($"if {condition}; then");
         _indent++;
         EmitStatement(statement.ThenBlock, inFunction);
         _indent--;
@@ -1891,8 +2653,14 @@ __sushi_truthy() {
 
     private void EmitWhileStatement(IrWhileStatement statement, bool inFunction)
     {
-        WriteLine($"while {EmitConditionCommand(statement.Condition)}; do");
+        WriteLine("while true; do");
         _indent++;
+        var condition = PrepareCondition(statement.Condition, inFunction);
+        WriteLine($"if ! {condition}; then");
+        _indent++;
+        WriteLine("break");
+        _indent--;
+        WriteLine("fi");
         EmitStatement(statement.Body, inFunction);
         _indent--;
         WriteLine("done");
@@ -1905,15 +2673,22 @@ __sushi_truthy() {
             EmitStatement(statement.Initializer, inFunction);
         }
 
-        var condition = statement.Condition != null ? EmitConditionCommand(statement.Condition) : "true";
-
-        WriteLine($"while {condition}; do");
+        WriteLine("while true; do");
         _indent++;
+        if (statement.Condition != null)
+        {
+            var condition = PrepareCondition(statement.Condition, inFunction);
+            WriteLine($"if ! {condition}; then");
+            _indent++;
+            WriteLine("break");
+            _indent--;
+            WriteLine("fi");
+        }
         EmitStatement(statement.Body, inFunction);
 
         if (statement.Increment != null)
         {
-            EmitExpressionStatement(statement.Increment);
+            EmitExpressionStatement(statement.Increment, inFunction);
         }
 
         _indent--;
@@ -1925,7 +2700,8 @@ __sushi_truthy() {
         WriteLine("while true; do");
         _indent++;
         EmitStatement(statement.Body, inFunction);
-        WriteLine($"if ! {EmitConditionCommand(statement.Condition)}; then");
+        var condition = PrepareCondition(statement.Condition, inFunction);
+        WriteLine($"if ! {condition}; then");
         _indent++;
         WriteLine("break");
         _indent--;
@@ -1941,8 +2717,12 @@ __sushi_truthy() {
 
         var previousFunctionName = _currentFunctionName;
         var previousReturnType = _currentFunctionReturnType;
+        var previousKnownIntegers = _knownIntegerVariables;
+        var previousNativeArrays = _nativeArrayVariables;
         _currentFunctionName = statement.Name;
         _currentFunctionReturnType = statement.ReturnType;
+        _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
+        _nativeArrayVariables = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var argIndex = 1;
         foreach (var parameter in statement.Parameters)
@@ -1957,7 +2737,16 @@ __sushi_truthy() {
                 WriteLine("local __sushi_vararg_candidate");
                 WriteLine($"for __sushi_vararg_candidate in \"${{{varargsArray}[@]}}\"; do");
                 _indent++;
-                WriteLine("if __sushi_is_json_array \"$__sushi_vararg_candidate\"; then");
+                WriteLine("if __sushi_is_array_handle \"$__sushi_vararg_candidate\"; then");
+                _indent++;
+                WriteLine("local __sushi_vararg_expanded");
+                WriteLine("while IFS= read -r __sushi_vararg_expanded; do");
+                _indent++;
+                WriteLine($"{flatVarargsArray}+=(\"$__sushi_vararg_expanded\")");
+                _indent--;
+                WriteLine("done < <(__sushi_array_each_raw \"$__sushi_vararg_candidate\")");
+                _indent--;
+                WriteLine("elif typeset -f __sushi_is_json_array >/dev/null 2>&1 && __sushi_is_json_array \"$__sushi_vararg_candidate\"; then");
                 _indent++;
                 WriteLine("local __sushi_vararg_expanded");
                 WriteLine("while IFS= read -r __sushi_vararg_expanded; do");
@@ -1973,8 +2762,10 @@ __sushi_truthy() {
                 WriteLine("fi");
                 _indent--;
                 WriteLine("done");
-                WriteLine($"local {param}=\"$(__sushi_json_array \"${{{flatVarargsArray}[@]}}\")\"");
-                EmitVarargsContractCheck(parameter, param, statement.Name);
+                WriteLine($"__sushi_array_new \"${{{flatVarargsArray}[@]}}\"");
+                WriteLine($"local {param}=\"${{__sushi_result-}}\"");
+                _nativeArrayVariables[param] = flatVarargsArray;
+                EmitVarargsContractCheck(parameter, param, statement.Name, flatVarargsArray);
             }
             else
             {
@@ -1985,11 +2776,21 @@ __sushi_truthy() {
                     $"\"${{{param}:-}}\"",
                     $"parameter '{parameter.Name}' of function '{statement.Name}'");
             }
+
+            if (parameter.DeclaredType.Kind == IrTypeKind.Primitive &&
+                parameter.DeclaredType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                _knownIntegerVariables.Add(param);
+            }
         }
 
         EmitStatement(statement.Body, inFunction: true);
+        WriteLine("__sushi_result=''");
+        WriteLine("return 0");
         _currentFunctionName = previousFunctionName;
         _currentFunctionReturnType = previousReturnType;
+        _knownIntegerVariables = previousKnownIntegers;
+        _nativeArrayVariables = previousNativeArrays;
         _indent--;
         WriteLine("}");
     }
@@ -1998,38 +2799,58 @@ __sushi_truthy() {
     {
         if (statement.Expression != null)
         {
+            var value = PrepareValue(statement.Expression, inFunction);
             if (inFunction && _currentFunctionName != null && !_currentFunctionReturnType.IsAnyOrUnknown)
             {
-                WriteLine($"local __sushi_return_value={EmitValueExpression(statement.Expression)}");
+                WriteLine($"__sushi_result={value}");
                 EmitContractCheckForValue(
                     _currentFunctionReturnType,
-                    "\"${__sushi_return_value:-}\"",
+                    "\"${__sushi_result:-}\"",
                     $"return value of function '{_currentFunctionName}'");
-                WriteLine("printf '%s\\n' \"${__sushi_return_value:-}\"");
+            }
+            else if (inFunction)
+            {
+                WriteLine($"__sushi_result={value}");
             }
             else
             {
-                WriteLine($"printf '%s\\n' {EmitValueExpression(statement.Expression)}");
+                WriteLine($"printf '%s\\n' {value}");
             }
+        }
+        else if (inFunction)
+        {
+            WriteLine("__sushi_result=''");
         }
 
         WriteLine(inFunction ? "return 0" : "exit 0");
     }
 
-    private void EmitExpressionStatement(IrExpression expression)
+    private void EmitExpressionStatement(IrExpression expression, bool inFunction)
     {
         switch (expression)
         {
             case IrIntrinsicCallExpression intrinsicCall:
-                WriteLine(EmitIntrinsicCommand(intrinsicCall));
+                if (intrinsicCall.Id is IntrinsicId.Print or IntrinsicId.Println)
+                {
+                    var value = intrinsicCall.Arguments.Count == 0
+                        ? "''"
+                        : PrepareValue(intrinsicCall.Arguments[0], inFunction);
+                    WriteLine(intrinsicCall.Id == IntrinsicId.Println
+                        ? $"printf '%s\\n' {value}"
+                        : $"printf '%s' {value}");
+                }
+                else
+                {
+                    _ = PrepareValue(intrinsicCall, inFunction);
+                }
                 return;
 
             case IrCallExpression call:
-                WriteLine(EmitCallCommand(call));
+                _ = PrepareValue(call, inFunction);
                 return;
 
             case IrAssignmentExpression assignment:
-                WriteLine(EmitAssignmentExpression(assignment));
+                EmitPreparedAssignment(assignment, inFunction);
                 return;
 
             case IrUnaryExpression unary when unary.Operator is "++" or "--":
@@ -2037,8 +2858,12 @@ __sushi_truthy() {
                 {
                     var op = unary.Operator == "++" ? "+" : "-";
                     var name = SanitizeVariableName(identifier.Name);
-                    var checkedCurrent = EmitCheckedInteger($"\"${{{name}:-}}\"", $"variable '{identifier.Name}'");
-                    WriteLine($"{name}=$(( {checkedCurrent} {op} 1 ))");
+                    if (!_knownIntegerVariables.Contains(name))
+                    {
+                        WriteLine($"__sushi_validate_integer \"${{{name}:-}}\" {Escape.BashSingleQuoted($"variable '{identifier.Name}'")}");
+                    }
+                    WriteLine($"{name}=$(( {name} {op} 1 ))");
+                    _knownIntegerVariables.Add(name);
                     return;
                 }
                 break;
@@ -2047,11 +2872,12 @@ __sushi_truthy() {
                 if (methodCall.MethodName == "push" && methodCall.Target is IrIdentifierExpression targetIdentifier)
                 {
                     var targetName = SanitizeVariableName(targetIdentifier.Name);
-                    WriteLine($"{targetName}=\"$({EmitMethodCallCommand(methodCall)})\"");
+                    var value = PrepareValue(methodCall, inFunction);
+                    WriteLine($"{targetName}={value}");
                     return;
                 }
 
-                WriteLine($"{EmitMethodCallCommand(methodCall)} >/dev/null");
+                _ = PrepareValue(methodCall, inFunction);
                 return;
         }
 
@@ -2069,6 +2895,455 @@ __sushi_truthy() {
         var mathOp = assignment.Operator[0];
         var checkedCurrent = EmitCheckedInteger($"\"${{{name}:-}}\"", $"variable '{assignment.Target.Name}'");
         return $"{name}=$(( {checkedCurrent} {mathOp} {EmitArithmeticExpression(assignment.Value)} ))";
+    }
+
+    private void EmitPreparedAssignment(IrAssignmentExpression assignment, bool inFunction)
+    {
+        var name = SanitizeVariableName(assignment.Target.Name);
+        var value = PrepareValue(assignment.Value, inFunction);
+        if (assignment.Operator == "=")
+        {
+            WriteLine($"{name}={value}");
+            SetKnownInteger(name, IsDefinitelyInteger(assignment.Value));
+            SetKnownArray(name, assignment.Value is IrArrayLiteralExpression);
+            return;
+        }
+
+        var right = DeclareTemp(value, inFunction);
+        if (!_knownIntegerVariables.Contains(name))
+        {
+            WriteLine($"__sushi_validate_integer \"${{{name}:-}}\" {Escape.BashSingleQuoted($"variable '{assignment.Target.Name}'")}");
+        }
+        if (!IsDefinitelyInteger(assignment.Value))
+        {
+            WriteLine($"__sushi_validate_integer \"${{{right}:-}}\" 'arithmetic operand'");
+        }
+
+        WriteLine($"{name}=$(( {name} {assignment.Operator[0]} {right} ))");
+        _knownIntegerVariables.Add(name);
+    }
+
+    private string PrepareValue(IrExpression expression, bool inFunction)
+    {
+        switch (expression)
+        {
+            case IrLiteralExpression or IrIdentifierExpression:
+                return EmitValueExpression(expression);
+
+            case IrArrayLiteralExpression array:
+            {
+                var elements = array.Elements.Select(element => PrepareValue(element, inFunction)).ToList();
+                WriteLine(elements.Count == 0
+                    ? "__sushi_array_new"
+                    : $"__sushi_array_new {string.Join(" ", elements)}");
+                var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
+                for (var index = 0; index < array.Elements.Count; index++)
+                {
+                    if (GetKnownJsonKind(array.Elements[index]) is { } kind)
+                    {
+                        WriteLine($"__sushi_array_set_kind \"${{{result}-}}\" {index} {Escape.BashSingleQuoted(kind)}");
+                    }
+                }
+                return $"\"${{{result}-}}\"";
+            }
+
+            case IrObjectLiteralExpression obj:
+            {
+                var pairs = new List<string>();
+                foreach (var property in obj.Properties)
+                {
+                    pairs.Add(Escape.BashSingleQuoted(property.Name));
+                    pairs.Add(PrepareValue(property.Value, inFunction));
+                }
+                WriteLine(pairs.Count == 0 ? "__sushi_native_obj_new" : $"__sushi_native_obj_new {string.Join(" ", pairs)}");
+                var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
+                foreach (var property in obj.Properties)
+                {
+                    if (GetKnownJsonKind(property.Value) is { } kind)
+                    {
+                        WriteLine($"__sushi_native_obj_set_kind \"${{{result}-}}\" {Escape.BashSingleQuoted(property.Name)} {Escape.BashSingleQuoted(kind)}");
+                    }
+                }
+                return $"\"${{{result}-}}\"";
+            }
+
+            case IrMemberAccessExpression member:
+            {
+                var target = DeclareTemp(PrepareValue(member.Target, inFunction), inFunction);
+                var result = DeclareTemp("''", inFunction);
+                WriteLine($"if [[ \"${{{target}-}}\" == @o:__sushi_object_* ]]; then");
+                _indent++;
+                WriteLine($"__sushi_native_obj_get_into \"${{{target}-}}\" {Escape.BashSingleQuoted(member.MemberName)}");
+                WriteLine($"{result}=\"${{__sushi_result-}}\"");
+                _indent--;
+                WriteLine("else");
+                _indent++;
+                WriteLine($"{result}=\"$(__sushi_json_member \"${{{target}-}}\" {Escape.BashSingleQuoted(member.MemberName)})\"");
+                _indent--;
+                WriteLine("fi");
+                return $"\"${{{result}-}}\"";
+            }
+
+            case IrIndexExpression index when index.Target is IrIdentifierExpression identifier &&
+                                             _nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var arrayName):
+            {
+                var indexValue = DeclareTemp(PrepareValue(index.Index, inFunction), inFunction);
+                if (!IsDefinitelyInteger(index.Index))
+                {
+                    WriteLine($"__sushi_validate_integer \"${{{indexValue}:-}}\" 'array index'");
+                }
+                if (arrayName.Length > 0)
+                {
+                    WriteLine($"if (( {indexValue} < 0 )); then {indexValue}=$(( ${{#{arrayName}[@]}} + {indexValue} )); fi");
+                    var directResult = DeclareTemp($"\"${{{arrayName}[{indexValue}]-}}\"", inFunction);
+                    return $"\"${{{directResult}-}}\"";
+                }
+
+                var targetName = SanitizeVariableName(identifier.Name);
+                WriteLine($"__sushi_array_get_into \"${{{targetName}-}}\" \"${{{indexValue}-}}\"");
+                var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
+                return $"\"${{{result}-}}\"";
+            }
+
+            case IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%":
+                return PrepareArithmetic(binary, inFunction);
+
+            case IrUnaryExpression unary when unary.Operator is "+" or "-":
+            {
+                var operand = PrepareValue(unary.Operand, inFunction);
+                var operandTemp = DeclareTemp(operand, inFunction);
+                if (!IsDefinitelyInteger(unary.Operand))
+                {
+                    WriteLine($"__sushi_validate_integer \"${{{operandTemp}:-}}\" 'arithmetic operand'");
+                }
+                return $"$(( {unary.Operator}{operandTemp} ))";
+            }
+
+            case IrCallExpression call when !call.Callee.StartsWith("__sushi_", StringComparison.Ordinal):
+            {
+                var arguments = call.Arguments.Select(argument => PrepareValue(argument.Value, inFunction)).ToList();
+                var command = arguments.Count > 0
+                    ? $"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)}"
+                    : SanitizeFunctionName(call.Callee);
+                WriteLine($"{command} || {{ __sushi_status=$?; exit \"$__sushi_status\"; }}");
+                var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
+                if (_integerReturningFunctions.Contains(call.Callee))
+                {
+                    _knownIntegerVariables.Add(result);
+                }
+                return $"\"${{{result}-}}\"";
+            }
+
+            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.FsGlob:
+                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_fs_glob_into", 2);
+
+            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.ProcessRun:
+                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_process_run_into", 8);
+
+            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.ProcessPipeline:
+                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_process_pipeline_into", 7);
+
+            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.JsonParse:
+                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_json_parse_into", 1);
+
+            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.JsonStringify:
+                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_json_stringify_into", 2);
+
+            case IrIntrinsicCallExpression intrinsic when IsInlineStringIntrinsic(intrinsic.Id):
+                return PrepareStringIntrinsic(intrinsic, inFunction);
+
+            case IrConditionalExpression conditional:
+            {
+                var result = DeclareTemp("''", inFunction);
+                var condition = PrepareCondition(conditional.Condition, inFunction);
+                WriteLine($"if {condition}; then");
+                _indent++;
+                var whenTrue = PrepareValue(conditional.TrueExpression, inFunction);
+                WriteLine($"{result}={whenTrue}");
+                _indent--;
+                WriteLine("else");
+                _indent++;
+                var whenFalse = PrepareValue(conditional.FalseExpression, inFunction);
+                WriteLine($"{result}={whenFalse}");
+                _indent--;
+                WriteLine("fi");
+                return $"\"${{{result}-}}\"";
+            }
+
+            default:
+                return CaptureValue(EmitValueExpression(expression), inFunction);
+        }
+    }
+
+    private string PrepareIntrinsicInto(
+        IrIntrinsicCallExpression intrinsic,
+        bool inFunction,
+        string helper,
+        int argumentCount)
+    {
+        var arguments = new List<string>(argumentCount);
+        for (var index = 0; index < argumentCount; index++)
+        {
+            arguments.Add(index < intrinsic.Arguments.Count
+                ? PrepareValue(intrinsic.Arguments[index], inFunction)
+                : "''");
+        }
+
+        WriteLine($"{helper} {string.Join(" ", arguments)}");
+        var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
+        return $"\"${{{result}-}}\"";
+    }
+
+    private static string? GetKnownJsonKind(IrExpression expression)
+    {
+        return expression switch
+        {
+            IrLiteralExpression { Value: null } => "null",
+            IrLiteralExpression { Value: string or char } => "string",
+            IrLiteralExpression { Value: bool } => "bool",
+            IrLiteralExpression { Value: sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal } => "number",
+            IrArrayLiteralExpression => "array",
+            IrObjectLiteralExpression => "object",
+            _ => null
+        };
+    }
+
+    private string PrepareArithmetic(IrBinaryExpression binary, bool inFunction)
+    {
+        if (CanEmitInlineInteger(binary))
+        {
+            return $"$(( {EmitInlineInteger(binary)} ))";
+        }
+
+        var leftExpression = PrepareValue(binary.Left, inFunction);
+        var rightExpression = PrepareValue(binary.Right, inFunction);
+        var left = DeclareTemp(leftExpression, inFunction);
+        var right = DeclareTemp(rightExpression, inFunction);
+        var result = DeclareTemp("''", inFunction);
+
+        if (binary.Operator == "+" && !IsDefinitelyInteger(binary))
+        {
+            WriteLine($"if __sushi_j_is_integer \"${{{left}-}}\" && __sushi_j_is_integer \"${{{right}-}}\"; then");
+            _indent++;
+            WriteLine($"{result}=$(( {left} + {right} ))");
+            _indent--;
+            WriteLine("else");
+            _indent++;
+            WriteLine($"{result}=\"${{{left}-}}${{{right}-}}\"");
+            _indent--;
+            WriteLine("fi");
+            return $"\"${{{result}-}}\"";
+        }
+
+        if (!IsDefinitelyInteger(binary.Left))
+        {
+            WriteLine($"__sushi_validate_integer \"${{{left}:-}}\" 'arithmetic operand'");
+        }
+        if (!IsDefinitelyInteger(binary.Right))
+        {
+            WriteLine($"__sushi_validate_integer \"${{{right}:-}}\" 'arithmetic operand'");
+        }
+        WriteLine($"{result}=$(( {left} {binary.Operator} {right} ))");
+        _knownIntegerVariables.Add(result);
+        return $"\"${{{result}-}}\"";
+    }
+
+    private string PrepareCondition(IrExpression expression, bool inFunction)
+    {
+        if (expression is IrUnaryExpression { Operator: "!" } unary)
+        {
+            return $"! {PrepareCondition(unary.Operand, inFunction)}";
+        }
+
+        if (expression is IrBinaryExpression logical && logical.Operator is "&&" or "||")
+        {
+            var result = DeclareTemp(logical.Operator == "&&" ? "'false'" : "'true'", inFunction);
+            var left = PrepareCondition(logical.Left, inFunction);
+            WriteLine(logical.Operator == "&&" ? $"if {left}; then" : $"if ! {left}; then");
+            _indent++;
+            var right = PrepareCondition(logical.Right, inFunction);
+            WriteLine($"if {right}; then {result}='true'; else {result}='false'; fi");
+            _indent--;
+            WriteLine("fi");
+            return $"__sushi_truthy \"${{{result}-}}\"";
+        }
+
+        if (expression is IrBinaryExpression comparison && comparison.Operator is "==" or "!=")
+        {
+            var left = PrepareValue(comparison.Left, inFunction);
+            var right = PrepareValue(comparison.Right, inFunction);
+            return $"[[ {left} {comparison.Operator} {right} ]]";
+        }
+
+        if (expression is IrBinaryExpression relational && relational.Operator is "<" or ">" or "<=" or ">=")
+        {
+            if (CanEmitInlineInteger(relational.Left) && CanEmitInlineInteger(relational.Right))
+            {
+                return $"(( {EmitInlineInteger(relational.Left)} {relational.Operator} {EmitInlineInteger(relational.Right)} ))";
+            }
+
+            var left = DeclareTemp(PrepareValue(relational.Left, inFunction), inFunction);
+            var right = DeclareTemp(PrepareValue(relational.Right, inFunction), inFunction);
+            if (!IsDefinitelyInteger(relational.Left))
+            {
+                WriteLine($"__sushi_validate_integer \"${{{left}:-}}\" 'comparison operand'");
+            }
+            if (!IsDefinitelyInteger(relational.Right))
+            {
+                WriteLine($"__sushi_validate_integer \"${{{right}:-}}\" 'comparison operand'");
+            }
+            return $"(( {left} {relational.Operator} {right} ))";
+        }
+
+        var value = PrepareValue(expression, inFunction);
+        return $"__sushi_truthy {value}";
+    }
+
+    private string PrepareStringIntrinsic(IrIntrinsicCallExpression call, bool inFunction)
+    {
+        var chain = new List<IrIntrinsicCallExpression> { call };
+        var receiverExpression = call.Arguments[0];
+        while (receiverExpression is IrIntrinsicCallExpression nested && IsInlineStringIntrinsic(nested.Id))
+        {
+            chain.Add(nested);
+            receiverExpression = nested.Arguments[0];
+        }
+        chain.Reverse();
+
+        var result = DeclareTemp(PrepareValue(receiverExpression, inFunction), inFunction);
+        WriteLine($"__sushi_validate_string_receiver \"${{{result}-}}\" {Escape.BashSingleQuoted(chain[0].CanonicalName)}");
+
+        foreach (var operation in chain)
+        {
+            switch (operation.Id)
+            {
+                case IntrinsicId.StringTrim:
+                    WriteLine($"{result}=\"${{{result}#\"${{{result}%%[![:space:]]*}}\"}}\"");
+                    WriteLine($"{result}=\"${{{result}%\"${{{result}##*[![:space:]]}}\"}}\"");
+                    break;
+                case IntrinsicId.StringLower:
+                    WriteLine(_zshMode ? $"{result}=\"${{(L){result}}}\"" : $"{result}=\"${{{result},,}}\"");
+                    break;
+                case IntrinsicId.StringUpper:
+                    WriteLine(_zshMode ? $"{result}=\"${{(U){result}}}\"" : $"{result}=\"${{{result}^^}}\"");
+                    break;
+                case IntrinsicId.StringReplace:
+                {
+                    var oldValue = DeclareTemp(PrepareValue(operation.Arguments[1], inFunction), inFunction);
+                    var newValue = DeclareTemp(PrepareValue(operation.Arguments[2], inFunction), inFunction);
+                    WriteLine($"if [[ -n \"${{{oldValue}-}}\" ]]; then {result}=\"${{{result}//${{{oldValue}}}/${{{newValue}}}}}\"; fi");
+                    break;
+                }
+                case IntrinsicId.StringContains:
+                case IntrinsicId.StringStartsWith:
+                case IntrinsicId.StringEndsWith:
+                {
+                    var needle = DeclareTemp(PrepareValue(operation.Arguments[1], inFunction), inFunction);
+                    var test = operation.Id switch
+                    {
+                        IntrinsicId.StringContains => $"\"${{{result}-}}\" == *\"${{{needle}-}}\"*",
+                        IntrinsicId.StringStartsWith => $"\"${{{result}-}}\" == \"${{{needle}-}}\"*",
+                        _ => $"\"${{{result}-}}\" == *\"${{{needle}-}}\""
+                    };
+                    WriteLine($"if [[ {test} ]]; then {result}='true'; else {result}='false'; fi");
+                    break;
+                }
+                case IntrinsicId.StringIsMatch:
+                {
+                    var pattern = DeclareTemp(PrepareValue(operation.Arguments[1], inFunction), inFunction);
+                    WriteLine($"__sushi_regex_to_ere_into \"${{{pattern}-}}\"");
+                    WriteLine($"{pattern}=\"${{__sushi_result-}}\"");
+                    WriteLine($"if [[ \"${{{result}-}}\" =~ ${{{pattern}}} ]]; then {result}='true'; else {result}='false'; fi");
+                    break;
+                }
+            }
+        }
+
+        return $"\"${{{result}-}}\"";
+    }
+
+    private string CaptureValue(string expression, bool inFunction)
+    {
+        var result = DeclareTemp("''", inFunction);
+        WriteLine($"{result}={expression} || {{ __sushi_status=$?; exit \"$__sushi_status\"; }}");
+        return $"\"${{{result}-}}\"";
+    }
+
+    private string DeclareTemp(string value, bool inFunction)
+    {
+        var name = $"__sushi_value_{++_valueTempId}";
+        WriteLine($"{(inFunction ? "local " : "")}{name}={value}");
+        return name;
+    }
+
+    private bool IsDefinitelyInteger(IrExpression expression)
+    {
+        return expression switch
+        {
+            IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
+            IrIdentifierExpression identifier => _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
+            IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),
+            IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
+                IsDefinitelyInteger(binary.Left) && IsDefinitelyInteger(binary.Right),
+            IrCallExpression call => _integerReturningFunctions.Contains(call.Callee),
+            _ => false
+        };
+    }
+
+    private bool CanEmitInlineInteger(IrExpression expression)
+    {
+        return expression switch
+        {
+            IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
+            IrIdentifierExpression identifier => _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
+            IrUnaryExpression unary when unary.Operator is "+" or "-" => CanEmitInlineInteger(unary.Operand),
+            IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
+                CanEmitInlineInteger(binary.Left) && CanEmitInlineInteger(binary.Right),
+            _ => false
+        };
+    }
+
+    private string EmitInlineInteger(IrExpression expression)
+    {
+        return expression switch
+        {
+            IrLiteralExpression literal => Convert.ToString(literal.Value, CultureInfo.InvariantCulture) ?? "0",
+            IrIdentifierExpression identifier => SanitizeVariableName(identifier.Name),
+            IrUnaryExpression unary => $"{unary.Operator}{EmitInlineInteger(unary.Operand)}",
+            IrBinaryExpression binary => $"({EmitInlineInteger(binary.Left)} {binary.Operator} {EmitInlineInteger(binary.Right)})",
+            _ => "0"
+        };
+    }
+
+    private void SetKnownInteger(string name, bool isInteger)
+    {
+        if (isInteger)
+        {
+            _knownIntegerVariables.Add(name);
+        }
+        else
+        {
+            _knownIntegerVariables.Remove(name);
+        }
+    }
+
+    private void SetKnownArray(string name, bool isArray)
+    {
+        if (isArray)
+        {
+            _nativeArrayVariables[name] = string.Empty;
+        }
+        else
+        {
+            _nativeArrayVariables.Remove(name);
+        }
+    }
+
+    private static bool IsInlineStringIntrinsic(IntrinsicId id)
+    {
+        return id is IntrinsicId.StringTrim or IntrinsicId.StringLower or IntrinsicId.StringUpper or
+            IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or
+            IntrinsicId.StringReplace or IntrinsicId.StringIsMatch;
     }
 
     private string EmitCallCommand(IrCallExpression call)
@@ -2190,7 +3465,11 @@ __sushi_truthy() {
         return $"\"$(__sushi_json_object {args})\"";
     }
 
-    private void EmitVarargsContractCheck(IrFunctionParameter parameter, string parameterName, string functionName)
+    private void EmitVarargsContractCheck(
+        IrFunctionParameter parameter,
+        string parameterName,
+        string functionName,
+        string? nativeArrayName = null)
     {
         if (parameter.DeclaredType.IsAnyOrUnknown)
         {
@@ -2198,14 +3477,23 @@ __sushi_truthy() {
         }
 
         WriteLine("local __sushi_vararg_item");
-        WriteLine($"while IFS= read -r __sushi_vararg_item; do");
+        if (nativeArrayName != null)
+        {
+            WriteLine($"for __sushi_vararg_item in \"${{{nativeArrayName}[@]}}\"; do");
+        }
+        else
+        {
+            WriteLine("while IFS= read -r __sushi_vararg_item; do");
+        }
         _indent++;
         EmitContractCheckForValue(
             parameter.DeclaredType,
             "\"${__sushi_vararg_item:-}\"",
             $"varargs parameter '{parameter.Name}' of function '{functionName}'");
         _indent--;
-        WriteLine($"done < <(__sushi_json_array_each_raw \"${{{parameterName}:-[]}}\")");
+        WriteLine(nativeArrayName != null
+            ? "done"
+            : $"done < <(__sushi_json_array_each_raw \"${{{parameterName}:-[]}}\")");
     }
 
     private void EmitContractCheckForValue(IrTypeRef type, string valueExpression, string context)
@@ -2220,6 +3508,20 @@ __sushi_truthy() {
         {
             var structuralSpec = Escape.BashSingleQuoted(EncodeStructuralSpec(type));
             WriteLine($"__sushi_struct_check {valueExpression} {structuralSpec} {contextLiteral} || exit 2");
+            return;
+        }
+
+        if (type.Kind == IrTypeKind.Primitive &&
+            type.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            WriteLine($"__sushi_validate_integer {valueExpression} {contextLiteral}");
+            return;
+        }
+
+        if (type.Kind == IrTypeKind.Primitive &&
+            type.Name?.Equals("bool", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            WriteLine($"if [[ {valueExpression} != 'true' && {valueExpression} != 'false' ]]; then printf 'Type contract violation: %s expected bool\\n' {contextLiteral} >&2; exit 2; fi");
             return;
         }
 

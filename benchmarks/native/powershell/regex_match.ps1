@@ -1,7 +1,7 @@
 $text = "Alpha42Beta"
 $i = 0
 $ok = 0
-while ($i -lt 50) {
+while ($i -lt 500) {
     if ($text.ToLowerInvariant() -match '^[a-z]+\d+[a-z]+$') {
         $ok = 1
     }

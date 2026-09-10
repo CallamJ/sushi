@@ -80,6 +80,12 @@ internal static class BenchmarkCommand
             Description = "Optional case-insensitive substring filter on scenario id/name/tags."
         };
 
+        Option<bool> allowSkippedOption = new("--allow-skipped")
+        {
+            Description = "Allow requested targets or scenarios to be skipped without failing the run.",
+            DefaultValueFactory = _ => false
+        };
+
         var command = new Command("benchmark", "Benchmark native scripts vs transpiled Sushi scripts.")
         {
             manifestOption,
@@ -91,7 +97,8 @@ internal static class BenchmarkCommand
             includeHttpOption,
             baselineOption,
             strictOutputOption,
-            filterOption
+            filterOption,
+            allowSkippedOption
         };
 
         command.SetAction(parseResult =>
@@ -106,6 +113,7 @@ internal static class BenchmarkCommand
             var baseline = parseResult.GetValue(baselineOption);
             var strictOutput = parseResult.GetValue(strictOutputOption);
             var filter = parseResult.GetValue(filterOption);
+            var allowSkipped = parseResult.GetValue(allowSkippedOption);
 
             if (iterations <= 0)
             {
@@ -156,7 +164,7 @@ internal static class BenchmarkCommand
             }
 
             var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath)) ?? Directory.GetCurrentDirectory();
-            var run = Execute(manifest, manifestDirectory, targets, iterations, warmup, timeoutSeconds, outputDir, includeHttp, strictOutput, filter, baseline);
+            var run = Execute(manifest, manifestDirectory, targets, iterations, warmup, timeoutSeconds, outputDir, includeHttp, strictOutput, filter, baseline, allowSkipped);
             return run.ExitCode;
         });
 
@@ -174,7 +182,8 @@ internal static class BenchmarkCommand
         bool includeHttp,
         bool strictOutput,
         string? filter,
-        string? baselinePathOrUrl)
+        string? baselinePathOrUrl,
+        bool allowSkipped)
     {
         var startedUtc = DateTimeOffset.UtcNow;
         var rows = new List<BenchmarkResultRow>();
@@ -193,13 +202,60 @@ internal static class BenchmarkCommand
             return new BenchmarkRun(2, null);
         }
 
-        var baselineRows = LoadBaselineRows(baselinePathOrUrl);
+        try
+        {
+            Directory.CreateDirectory(outputDir);
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"Failed to create benchmark output directory: {ex.Message}");
+            return new BenchmarkRun(2, null);
+        }
+
+        var totalWorkItems = checked(selected.Count * targets.Count);
+        var completedWorkItems = 0;
+        var progressPath = Path.Combine(outputDir, "progress.txt");
+        WriteProgress(progressPath, startedUtc, totalWorkItems, completedWorkItems, "starting");
+        System.Console.WriteLine(
+            $"Benchmark starting: {selected.Count} scenario(s) × {targets.Count} target(s) " +
+            $"({warmup} warmup, {iterations} measured iteration(s) each).");
+        System.Console.WriteLine($"Live artifacts: {outputDir}");
+
+        var suiteFingerprint = ComputeSuiteFingerprint(manifest, manifestDirectory);
+        BenchmarkResultFile? baselineFile;
+        try
+        {
+            baselineFile = LoadBaseline(baselinePathOrUrl);
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"Failed to load benchmark baseline: {ex.Message}");
+            return new BenchmarkRun(2, null);
+        }
+
+        var baselineRows = new List<BenchmarkResultRow>();
+        if (baselineFile != null)
+        {
+            if (baselineFile.Version == 2 && baselineFile.SuiteFingerprint == suiteFingerprint)
+            {
+                baselineRows = baselineFile.Rows;
+            }
+            else
+            {
+                System.Console.Error.WriteLine("Benchmark baseline is incompatible with this suite; regression comparison was reset.");
+            }
+        }
+
+        WriteLiveArtifacts(outputDir, startedUtc, manifest, suiteFingerprint, rows, tsvRows);
 
         foreach (var scenario in selected)
         {
             foreach (var target in targets)
             {
                 var targetKey = ToTargetKey(target);
+                var workItem = ++completedWorkItems;
+                WriteProgress(progressPath, startedUtc, totalWorkItems, completedWorkItems, $"running {scenario.Id} ({targetKey})");
+                System.Console.WriteLine($"[{workItem}/{totalWorkItems}] {scenario.Id} ({targetKey})");
                 var nativePath = scenario.Native.GetValueOrDefault(targetKey);
                 if (string.IsNullOrWhiteSpace(nativePath))
                 {
@@ -284,23 +340,34 @@ internal static class BenchmarkCommand
                         nativeTimings.Add(nativeRun.ElapsedMs);
                         transpiledTimings.Add(transpiledRun.ElapsedMs);
 
-                        tsvRows.Add(ToTsvRow(scenario.Id, targetKey, "native", i, nativeRun, "ok", ""));
-                        tsvRows.Add(ToTsvRow(scenario.Id, targetKey, "transpiled", i, transpiledRun, "ok", ""));
-
+                        var iterationFailures = new List<string>();
                         if (strictOutput)
                         {
                             var compare = CompareOutputs(nativeRun, transpiledRun);
                             if (compare != null)
                             {
-                                strictFailures.Add($"iter {i}: {compare}");
+                                iterationFailures.Add(compare);
                             }
                         }
+
+                        AddExpectedFailures(scenario.Expected, nativeRun, "native", iterationFailures);
+                        AddExpectedFailures(scenario.Expected, transpiledRun, "transpiled", iterationFailures);
+                        var iterationStatus = iterationFailures.Count == 0 ? "ok" : "failed";
+                        var iterationNote = string.Join("; ", iterationFailures);
+                        tsvRows.Add(ToTsvRow(scenario.Id, targetKey, "native", i, nativeRun, iterationStatus, iterationNote));
+                        tsvRows.Add(ToTsvRow(scenario.Id, targetKey, "transpiled", i, transpiledRun, iterationStatus, iterationNote));
+                        strictFailures.AddRange(iterationFailures.Select(failure => $"iter {i}: {failure}"));
                     }
 
                     var nativeStats = BenchmarkStats.From(nativeTimings);
                     var transpiledStats = BenchmarkStats.From(transpiledTimings);
                     var ratio = nativeStats.MedianMs <= 0 ? 0 : transpiledStats.MedianMs / nativeStats.MedianMs;
                     var baselineDelta = GetBaselineDelta(baselineRows, scenario.Id, targetKey, ratio);
+                    var ratioBudget = scenario.MaxRuntimeRatioMedian.GetValueOrDefault(targetKey);
+                    if (ratioBudget > 0 && ratio > ratioBudget)
+                    {
+                        strictFailures.Add($"median ratio {ratio:0.000} exceeds budget {ratioBudget:0.000}");
+                    }
                     var note = strictFailures.Count == 0 ? "" : string.Join("; ", strictFailures.Take(3));
                     if (strictFailures.Count > 3)
                     {
@@ -315,9 +382,11 @@ internal static class BenchmarkCommand
                         Status = strictFailures.Count == 0 ? "ok" : "failed",
                         Note = note,
                         TranspileMs = transpileWatch.Elapsed.TotalMilliseconds,
+                        GeneratedScriptBytes = Encoding.UTF8.GetByteCount(transpileResult.EmittedCode),
                         Native = nativeStats,
                         Transpiled = transpiledStats,
                         RuntimeRatioMedian = ratio,
+                        MaxRuntimeRatioMedian = ratioBudget > 0 ? ratioBudget : null,
                         BaselineRatioMedian = baselineDelta?.Baseline,
                         BaselineDeltaPercent = baselineDelta?.DeltaPercent,
                         Tags = scenario.Tags
@@ -337,70 +406,109 @@ internal static class BenchmarkCommand
                         // best effort cleanup
                     }
                 }
+
+                WriteLiveArtifacts(outputDir, startedUtc, manifest, suiteFingerprint, rows, tsvRows);
             }
         }
 
         var endedUtc = DateTimeOffset.UtcNow;
-        Directory.CreateDirectory(outputDir);
+        WriteProgress(progressPath, startedUtc, totalWorkItems, completedWorkItems, "writing result artifacts");
+        var result = WriteLiveArtifacts(outputDir, startedUtc, manifest, suiteFingerprint, rows, tsvRows, endedUtc);
+        WriteProgress(progressPath, startedUtc, totalWorkItems, completedWorkItems, "complete");
+
+        var failed = rows.Count(r => r.Status == "failed");
+        var skipped = rows.Count(r => r.Status == "skipped");
+        var regressions = rows.Count(r => r.BaselineDeltaPercent is > 20.0);
+        System.Console.WriteLine($"Benchmark completed. Scenarios: {rows.Count}, failed: {failed}, skipped: {skipped}, regressions: {regressions}");
+        System.Console.WriteLine($"Artifacts: {outputDir}");
+
+        return new BenchmarkRun(failed > 0 || regressions > 0 || (!allowSkipped && skipped > 0) ? 1 : 0, outputDir);
+    }
+
+    private static void WriteProgress(
+        string progressPath,
+        DateTimeOffset startedUtc,
+        int totalWorkItems,
+        int completedWorkItems,
+        string state)
+    {
+        File.WriteAllText(
+            progressPath,
+            $"status: {state}{Environment.NewLine}" +
+            $"started_utc: {startedUtc:O}{Environment.NewLine}" +
+            $"completed: {completedWorkItems}/{totalWorkItems}{Environment.NewLine}");
+    }
+
+    private static BenchmarkResultFile WriteLiveArtifacts(
+        string outputDir,
+        DateTimeOffset startedUtc,
+        BenchmarkManifest manifest,
+        string suiteFingerprint,
+        List<BenchmarkResultRow> rows,
+        List<string> tsvRows,
+        DateTimeOffset? endedUtc = null)
+    {
         var result = new BenchmarkResultFile
         {
-            Version = 1,
+            Version = 2,
+            SuiteFingerprint = suiteFingerprint,
             StartedUtc = startedUtc,
-            EndedUtc = endedUtc,
+            EndedUtc = endedUtc ?? DateTimeOffset.UtcNow,
             Host = BenchmarkHostInfo.Create(),
             Manifest = manifest.Metadata,
             Rows = rows
         };
 
-        var jsonPath = Path.Combine(outputDir, "results.json");
-        var tsvPath = Path.Combine(outputDir, "results.tsv");
-        var markdownPath = Path.Combine(outputDir, "summary.md");
-
-        File.WriteAllText(jsonPath, JsonSerializer.Serialize(result, JsonOptions));
-        File.WriteAllLines(tsvPath, tsvRows);
-        File.WriteAllText(markdownPath, RenderSummaryMarkdown(result));
-
-        var failed = rows.Count(r => r.Status == "failed");
-        var regressions = rows.Count(r => r.BaselineDeltaPercent is > 20.0);
-        System.Console.WriteLine($"Benchmark completed. Scenarios: {rows.Count}, failed: {failed}, regressions: {regressions}");
-        System.Console.WriteLine($"Artifacts: {outputDir}");
-
-        return new BenchmarkRun(failed > 0 || regressions > 0 ? 1 : 0, outputDir);
+        File.WriteAllText(Path.Combine(outputDir, "results.json"), JsonSerializer.Serialize(result, JsonOptions));
+        File.WriteAllLines(Path.Combine(outputDir, "results.tsv"), tsvRows);
+        File.WriteAllText(Path.Combine(outputDir, "summary.md"), RenderSummaryMarkdown(result));
+        return result;
     }
 
-    private static List<BenchmarkResultRow> LoadBaselineRows(string? baselinePathOrUrl)
+    private static BenchmarkResultFile? LoadBaseline(string? baselinePathOrUrl)
     {
         if (string.IsNullOrWhiteSpace(baselinePathOrUrl))
         {
-            return new List<BenchmarkResultRow>();
+            return null;
         }
 
-        try
+        string payload;
+        if (Uri.TryCreate(baselinePathOrUrl, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
-            string payload;
-            if (Uri.TryCreate(baselinePathOrUrl, UriKind.Absolute, out var uri) &&
-                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            using var http = new HttpClient();
+            payload = http.GetStringAsync(uri).GetAwaiter().GetResult();
+        }
+        else
+        {
+            if (!File.Exists(baselinePathOrUrl))
             {
-                using var http = new HttpClient();
-                payload = http.GetStringAsync(uri).GetAwaiter().GetResult();
+                throw new FileNotFoundException("Baseline file was not found.", baselinePathOrUrl);
             }
-            else
+            payload = File.ReadAllText(baselinePathOrUrl);
+        }
+
+        return JsonSerializer.Deserialize<BenchmarkResultFile>(payload, JsonOptions)
+            ?? throw new InvalidDataException("Baseline payload is empty.");
+    }
+
+    private static string ComputeSuiteFingerprint(BenchmarkManifest manifest, string manifestDirectory)
+    {
+        var content = new StringBuilder(JsonSerializer.Serialize(manifest, JsonOptions));
+        foreach (var scenario in manifest.Scenarios.OrderBy(scenario => scenario.Id, StringComparer.Ordinal))
+        {
+            var paths = new[] { scenario.Source }.Concat(scenario.Native.OrderBy(pair => pair.Key).Select(pair => pair.Value));
+            foreach (var path in paths)
             {
-                if (!File.Exists(baselinePathOrUrl))
+                var absolutePath = ResolvePath(manifestDirectory, path);
+                content.Append('\n').Append(path).Append('\n');
+                if (File.Exists(absolutePath))
                 {
-                    return new List<BenchmarkResultRow>();
+                    content.Append(File.ReadAllText(absolutePath));
                 }
-
-                payload = File.ReadAllText(baselinePathOrUrl);
             }
-
-            var baseline = JsonSerializer.Deserialize<BenchmarkResultFile>(payload, JsonOptions);
-            return baseline?.Rows ?? new List<BenchmarkResultRow>();
         }
-        catch
-        {
-            return new List<BenchmarkResultRow>();
-        }
+        return HashText(content.ToString());
     }
 
     private static (double Baseline, double DeltaPercent)? GetBaselineDelta(
@@ -433,15 +541,16 @@ internal static class BenchmarkCommand
         sb.AppendLine($"- Framework: {result.Host.FrameworkDescription}");
         sb.AppendLine($"- Processor count: {result.Host.ProcessorCount}");
         sb.AppendLine();
-        sb.AppendLine("| Scenario | Target | Status | Transpile ms | Native median ms | Transpiled median ms | Ratio (t/n) | Baseline delta % |");
-        sb.AppendLine("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |");
+        sb.AppendLine("| Scenario | Target | Status | Transpile ms | Native median ms | Transpiled median ms | Ratio (t/n) | Budget | Baseline delta % |");
+        sb.AppendLine("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |");
 
         foreach (var row in result.Rows.OrderBy(r => r.ScenarioId).ThenBy(r => r.Target))
         {
             var baselineDelta = row.BaselineDeltaPercent.HasValue
                 ? row.BaselineDeltaPercent.Value.ToString("0.00", CultureInfo.InvariantCulture)
                 : "";
-            sb.AppendLine($"| {row.ScenarioId} | {row.Target} | {row.Status} | {row.TranspileMs.ToString("0.00", CultureInfo.InvariantCulture)} | {row.Native.MedianMs.ToString("0.00", CultureInfo.InvariantCulture)} | {row.Transpiled.MedianMs.ToString("0.00", CultureInfo.InvariantCulture)} | {row.RuntimeRatioMedian.ToString("0.000", CultureInfo.InvariantCulture)} | {baselineDelta} |");
+            var budget = row.MaxRuntimeRatioMedian?.ToString("0.000", CultureInfo.InvariantCulture) ?? "";
+            sb.AppendLine($"| {row.ScenarioId} | {row.Target} | {row.Status} | {row.TranspileMs.ToString("0.00", CultureInfo.InvariantCulture)} | {row.Native.MedianMs.ToString("0.00", CultureInfo.InvariantCulture)} | {row.Transpiled.MedianMs.ToString("0.00", CultureInfo.InvariantCulture)} | {row.RuntimeRatioMedian.ToString("0.000", CultureInfo.InvariantCulture)} | {budget} | {baselineDelta} |");
         }
 
         sb.AppendLine();
@@ -506,7 +615,32 @@ internal static class BenchmarkCommand
 
     private static string NormalizeOutput(string value)
     {
-        return value.Replace("\r\n", "\n", StringComparison.Ordinal).Trim();
+        return value.Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    private static void AddExpectedFailures(
+        BenchmarkExpected? expected,
+        CapturedProcessResult run,
+        string mode,
+        ICollection<string> failures)
+    {
+        if (expected == null)
+        {
+            return;
+        }
+
+        if (run.ExitCode != expected.ExitCode)
+        {
+            failures.Add($"{mode} exit expected {expected.ExitCode}, got {run.ExitCode}");
+        }
+        if (expected.Stdout != null && NormalizeOutput(run.Stdout) != NormalizeOutput(expected.Stdout))
+        {
+            failures.Add($"{mode} stdout did not match expected output");
+        }
+        if (expected.Stderr != null && NormalizeOutput(run.Stderr) != NormalizeOutput(expected.Stderr))
+        {
+            failures.Add($"{mode} stderr did not match expected output");
+        }
     }
 
     private static string HashText(string value)
@@ -769,11 +903,21 @@ internal static class BenchmarkCommand
         public List<string> Args { get; set; } = new();
         public Dictionary<string, string> Env { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public List<string> Tags { get; set; } = new();
+        public BenchmarkExpected? Expected { get; set; }
+        public Dictionary<string, double> MaxRuntimeRatioMedian { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed class BenchmarkExpected
+    {
+        public int ExitCode { get; set; }
+        public string? Stdout { get; set; }
+        public string? Stderr { get; set; }
     }
 
     private sealed class BenchmarkResultFile
     {
         public int Version { get; set; }
+        public string SuiteFingerprint { get; set; } = "";
         public DateTimeOffset StartedUtc { get; set; }
         public DateTimeOffset EndedUtc { get; set; }
         public BenchmarkHostInfo Host { get; set; } = new();
@@ -812,9 +956,11 @@ internal static class BenchmarkCommand
         public string Status { get; set; } = "";
         public string Note { get; set; } = "";
         public double TranspileMs { get; set; }
+        public int GeneratedScriptBytes { get; set; }
         public BenchmarkStats Native { get; set; } = new();
         public BenchmarkStats Transpiled { get; set; } = new();
         public double RuntimeRatioMedian { get; set; }
+        public double? MaxRuntimeRatioMedian { get; set; }
         public double? BaselineRatioMedian { get; set; }
         public double? BaselineDeltaPercent { get; set; }
         public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();

@@ -12,5 +12,5 @@ compute() {
   printf '%s' "$total"
 }
 
-compute 500
+compute 5000
 printf '\n'

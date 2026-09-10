@@ -4,7 +4,7 @@ set -euo pipefail
 text="Alpha42Beta"
 i=0
 ok=0
-while (( i < 50 )); do
+while (( i < 500 )); do
   lowered="${text,,}"
   if [[ "$lowered" =~ ^[a-z]+[0-9]+[a-z]+$ ]]; then
     ok=1

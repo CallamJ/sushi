@@ -230,6 +230,39 @@ public class AstToIrLowererTests
         Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1023");
     }
 
+    [Theory]
+    [InlineData("break", "SUSHI1027")]
+    [InlineData("continue", "SUSHI1028")]
+    [InlineData("return 1", "SUSHI1029")]
+    public void Lower_InvalidControlFlowContext_ReportsDiagnostic(string source, string code)
+    {
+        var program = Parse(source);
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(program, "control-flow.sushi");
+
+        Assert.Contains(lowerer.Diagnostics, diagnostic => diagnostic.Code == code);
+    }
+
+    [Fact]
+    public void Lower_LoopControlInsideFunctionLoop_IsValid()
+    {
+        const string source = """
+            work() {
+                while (true) {
+                    continue
+                    break
+                }
+                return 1
+            }
+            """;
+
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(Parse(source), "control-flow.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, diagnostic =>
+            diagnostic.Code is "SUSHI1027" or "SUSHI1028" or "SUSHI1029");
+    }
+
     private static ProgramNode Parse(string source)
     {
         var tokenizer = new Tokenizer(source);

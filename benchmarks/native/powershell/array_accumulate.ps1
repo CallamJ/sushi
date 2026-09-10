@@ -8,7 +8,7 @@ function Sum10 {
 
 $i = 0
 $total = 0
-while ($i -lt 5) {
+while ($i -lt 100) {
     $total += (Sum10)
     $i++
 }

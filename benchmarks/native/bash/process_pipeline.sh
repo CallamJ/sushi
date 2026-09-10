@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dotnet --list-sdks | sort >/dev/null
-printf '%s\n' "$?"
+pipeline_output="$(dotnet --list-sdks | sort)"
+code=$?
+printf '%s\n' "$code"

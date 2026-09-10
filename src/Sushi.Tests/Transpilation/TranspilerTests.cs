@@ -186,6 +186,36 @@ public class TranspilerTests
         Assert.Contains("__sushi_json_member", result.EmittedCode);
     }
 
+    [Theory]
+    [InlineData(TargetLanguage.Bash)]
+    [InlineData(TargetLanguage.Zsh)]
+    public void Transpile_ShellCollectionBoundaries_UseParentShellNativeHandles(TargetLanguage target)
+    {
+        const string source = """
+            var parsed = std.json.parse("{\"name\":\"sushi\",\"count\":2}")
+            var files = std.fs.glob("src/**/*.cs")
+            var stages = [{ command: "printf", args: ["hello"] }]
+            var result = std.process.pipeline(stages, allowFailure: true)
+            println(std.json.stringify(parsed))
+            println(result.code)
+            """;
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "native_boundaries.sushi",
+            TargetLanguage = target
+        });
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.EmittedCode);
+        Assert.Contains("__sushi_json_parse_into", result.EmittedCode);
+        Assert.Contains("__sushi_json_stringify_into", result.EmittedCode);
+        Assert.Contains("__sushi_fs_glob_into", result.EmittedCode);
+        Assert.Contains("__sushi_process_pipeline_into", result.EmittedCode);
+        Assert.Contains("__sushi_native_obj_get_into", result.EmittedCode);
+    }
+
     [Fact]
     public void Transpile_UserFunction_DefaultAndNamedArguments_Succeeds()
     {
@@ -237,7 +267,8 @@ public class TranspilerTests
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
         Assert.Contains("local -a __sushi_varargs_rest", result.EmittedCode);
-        Assert.Contains("local rest=\"$(__sushi_json_array", result.EmittedCode);
+        Assert.Contains("__sushi_array_new \"${__sushi_flat_varargs_rest[@]}\"", result.EmittedCode);
+        Assert.Contains("local rest=\"${__sushi_result-}\"", result.EmittedCode);
     }
 
     [Fact]
@@ -467,7 +498,7 @@ public class TranspilerTests
     }
 
     [Fact]
-    public void Transpile_Bash_ArithmeticIndexExpression_EmitsStrictNumericCheck()
+    public void Transpile_Bash_TypedVarargsIndex_UsesNativeArrayStorage()
     {
         const string source = """
             sum(int... values) {
@@ -492,8 +523,8 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("__sushi_require_integer", result.EmittedCode);
-        Assert.Contains("__sushi_json_index", result.EmittedCode);
+        Assert.Contains("__sushi_flat_varargs_values", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_json_index", result.EmittedCode);
     }
 
     [Fact]

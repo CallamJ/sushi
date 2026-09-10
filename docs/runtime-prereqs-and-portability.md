@@ -17,7 +17,7 @@ Default target selection:
 
 ### 1.2 For running Bash output (`-t Bash`)
 
-- Bash 4.0+ (runtime object storage uses in-memory object handles)
+- Bash 4.3+ (`local -n` namerefs are used by native array storage)
 - `curl`
 - standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`, `find`)
 
@@ -62,7 +62,7 @@ Returns the same object shape as `std.process.run`, from the final stage.
 - invalid JSON returns a non-throwing fallback:
   - Bash/Zsh helpers return raw text
   - PowerShell helper returns raw text
-- `stringify`: emits compact JSON by default.
+- `stringify`: emits compact JSON by default and sorts object keys lexicographically at every depth.
 
 ### 2.4 `std.fs.glob(pattern, cwd?)`
 
@@ -105,6 +105,18 @@ Contract mismatch behavior:
 - compile-time diagnostics are emitted for statically-provable mismatches
 - runtime mismatches print a contract violation message and exit with code `2`
 
+### 2.6.1 Bash/Zsh function and collection ABI
+
+- user functions execute in the current shell and place their return value in
+  an internal result slot; return values are not transported through stdout
+- this preserves caller-visible mutations and prevents command substitution
+  from swallowing a failing status
+- arrays and objects use opaque handles backed by native shell collections;
+  JSON parsing, globbing, and process results stay native after crossing their
+  API boundary, and conversion to compact JSON happens only during stringify
+  or another explicit serialization boundary
+- generated Zsh enables zero-based array indexing for Bash parity
+
 ### 2.7 Arithmetic numeric strictness
 
 For Bash/Zsh and PowerShell outputs, numeric arithmetic is strict:
@@ -112,6 +124,8 @@ For Bash/Zsh and PowerShell outputs, numeric arithmetic is strict:
 - no implicit fallback coercion to `0` for non-numeric operands
 - index/member/call expression operands used in arithmetic are runtime-validated
 - non-numeric arithmetic operands fail with contract violation and exit code `2`
+- invalid top-level `break`, `continue`, and `return` are rejected during
+  checking (`SUSHI1027`, `SUSHI1028`, and `SUSHI1029`)
 
 ### 2.8 `std.string.*` and string method sugar
 

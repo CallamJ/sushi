@@ -13,7 +13,7 @@ sum10() {
 
 i=0
 total=0
-while (( i < 5 )); do
+while (( i < 100 )); do
   total=$(( total + $(sum10) ))
   ((i += 1))
 done

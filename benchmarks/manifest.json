@@ -12,7 +12,9 @@
         "zsh": "native/zsh/string_pipeline.zsh",
         "powershell": "native/powershell/string_pipeline.ps1"
       },
-      "tags": ["string", "core"]
+      "tags": ["string", "core"],
+      "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
+      "expected": { "exitCode": 0, "stdout": "alpha,beta,delta\n", "stderr": "" }
     },
     {
       "id": "numeric_loop",
@@ -23,7 +25,9 @@
         "zsh": "native/zsh/numeric_loop.zsh",
         "powershell": "native/powershell/numeric_loop.ps1"
       },
-      "tags": ["compute", "loops"]
+      "tags": ["compute", "loops"],
+      "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
+      "expected": { "exitCode": 0, "stdout": "37487500\n", "stderr": "" }
     },
     {
       "id": "json_roundtrip",
@@ -34,7 +38,9 @@
         "zsh": "native/zsh/json_roundtrip.zsh",
         "powershell": "native/powershell/json_roundtrip.ps1"
       },
-      "tags": ["json", "core"]
+      "tags": ["json", "core"],
+      "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
+      "expected": { "exitCode": 0, "stdout": "{\"count\":42,\"name\":\"sushi\"}\n", "stderr": "" }
     },
     {
       "id": "glob_scan",
@@ -45,7 +51,9 @@
         "zsh": "native/zsh/glob_scan.zsh",
         "powershell": "native/powershell/glob_scan.ps1"
       },
-      "tags": ["fs", "glob"]
+      "tags": ["fs", "glob"],
+      "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
+      "expected": { "exitCode": 0, "stdout": "glob_done\n", "stderr": "" }
     },
     {
       "id": "process_run",
@@ -56,7 +64,8 @@
         "zsh": "native/zsh/process_run.zsh",
         "powershell": "native/powershell/process_run.ps1"
       },
-      "tags": ["process", "runtime"]
+      "tags": ["process", "runtime"],
+      "expected": { "exitCode": 0, "stdout": "0\n", "stderr": "" }
     },
     {
       "id": "process_pipeline",
@@ -67,7 +76,9 @@
         "zsh": "native/zsh/process_pipeline.zsh",
         "powershell": "native/powershell/process_pipeline.ps1"
       },
-      "tags": ["process", "pipeline"]
+      "tags": ["process", "pipeline"],
+      "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
+      "expected": { "exitCode": 0, "stdout": "0\n", "stderr": "" }
     },
     {
       "id": "function_contracts",
@@ -78,7 +89,9 @@
         "zsh": "native/zsh/function_contracts.zsh",
         "powershell": "native/powershell/function_contracts.ps1"
       },
-      "tags": ["contracts", "functions"]
+      "tags": ["contracts", "functions"],
+      "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
+      "expected": { "exitCode": 0, "stdout": "worker:30\n1000\n", "stderr": "" }
     },
     {
       "id": "array_accumulate",
@@ -89,7 +102,9 @@
         "zsh": "native/zsh/array_accumulate.zsh",
         "powershell": "native/powershell/array_accumulate.ps1"
       },
-      "tags": ["array", "functions"]
+      "tags": ["array", "functions"],
+      "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
+      "expected": { "exitCode": 0, "stdout": "5500\n", "stderr": "" }
     },
     {
       "id": "regex_match",
@@ -100,7 +115,9 @@
         "zsh": "native/zsh/regex_match.zsh",
         "powershell": "native/powershell/regex_match.ps1"
       },
-      "tags": ["string", "regex"]
+      "tags": ["string", "regex"],
+      "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
+      "expected": { "exitCode": 0, "stdout": "1\n", "stderr": "" }
     },
     {
       "id": "mixed_workflow",
@@ -111,7 +128,8 @@
         "zsh": "native/zsh/mixed_workflow.zsh",
         "powershell": "native/powershell/mixed_workflow.ps1"
       },
-      "tags": ["mixed", "core"]
+      "tags": ["mixed", "core"],
+      "expected": { "exitCode": 0, "stdout": "WORLD\n0\n", "stderr": "" }
     }
   ]
 }

@@ -4,7 +4,7 @@ set -euo pipefail
 raw="  Alpha,Beta,Gamma42  "
 i=0
 output=""
-while (( i < 50 )); do
+while (( i < 1000 )); do
   lowered="${(L)raw}"
   lowered="${lowered#"${lowered%%[![:space:]]*}"}"
   lowered="${lowered%"${lowered##*[![:space:]]}"}"

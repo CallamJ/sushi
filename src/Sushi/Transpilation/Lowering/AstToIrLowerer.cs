@@ -18,6 +18,9 @@ public sealed class AstToIrLowerer
     private const string ReturnTypeMismatchCode = "SUSHI1024";
     private const string InvalidStructuralDeclarationCode = "SUSHI1025";
     private const string UnsupportedStructuralConstructCode = "SUSHI1026";
+    private const string InvalidBreakCode = "SUSHI1027";
+    private const string InvalidContinueCode = "SUSHI1028";
+    private const string InvalidReturnCode = "SUSHI1029";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -47,6 +50,8 @@ public sealed class AstToIrLowerer
     private bool _validateIdentifiers;
     private int _tempId;
     private int _lambdaId;
+    private int _loopDepth;
+    private int _functionDepth;
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
 
@@ -61,6 +66,8 @@ public sealed class AstToIrLowerer
         _globalVariables.Clear();
         _tempId = 0;
         _lambdaId = 0;
+        _loopDepth = 0;
+        _functionDepth = 0;
         CollectTypes(program);
         CollectGlobalVariables(program);
         _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
@@ -110,8 +117,11 @@ public sealed class AstToIrLowerer
         var previousFunctionName = _currentFunctionName;
         var previousReturnType = _currentFunctionReturnType;
         var previousVariables = _definedVariables;
+        var previousLoopDepth = _loopDepth;
         _currentFunctionName = node.Name;
         _currentFunctionReturnType = signature.ReturnType;
+        _functionDepth++;
+        _loopDepth = 0;
         _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
         foreach (var parameter in signature.Parameters)
         {
@@ -128,6 +138,8 @@ public sealed class AstToIrLowerer
 
         _currentFunctionName = previousFunctionName;
         _currentFunctionReturnType = previousReturnType;
+        _functionDepth--;
+        _loopDepth = previousLoopDepth;
         _definedVariables = previousVariables;
 
         if (body == null)
@@ -183,18 +195,18 @@ public sealed class AstToIrLowerer
             case WhileStatementNode whileStatement:
                 return new IrWhileStatement(
                     LowerExpression(whileStatement.Condition),
-                    StatementToBlock(whileStatement.Body));
+                    LowerLoopBody(whileStatement.Body));
 
             case ForStatementNode forStatement:
                 return new IrForStatement(
                     forStatement.Initializer != null ? LowerStatement(forStatement.Initializer) : null,
                     forStatement.Condition != null ? LowerExpression(forStatement.Condition) : null,
                     forStatement.Increment != null ? LowerExpression(forStatement.Increment) : null,
-                    StatementToBlock(forStatement.Body));
+                    LowerLoopBody(forStatement.Body));
 
             case DoWhileStatementNode doWhile:
                 return new IrDoWhileStatement(
-                    StatementToBlock(doWhile.Body),
+                    LowerLoopBody(doWhile.Body),
                     LowerExpression(doWhile.Condition));
 
             case ForRangeStatementNode forRange:
@@ -211,15 +223,43 @@ public sealed class AstToIrLowerer
 
             case ReturnStatementNode returnStatement:
             {
+                if (_functionDepth == 0)
+                {
+                    AddDiagnostic(
+                        InvalidReturnCode,
+                        "return can only be used inside a function or lambda.",
+                        returnStatement.Line,
+                        returnStatement.Column);
+                    return null;
+                }
+
                 var expression = returnStatement.Expression != null ? LowerExpression(returnStatement.Expression) : null;
                 ValidateReturnType(expression, returnStatement.Line, returnStatement.Column);
                 return new IrReturnStatement(expression);
             }
 
-            case BreakStatementNode:
+            case BreakStatementNode breakStatement:
+                if (_loopDepth == 0)
+                {
+                    AddDiagnostic(
+                        InvalidBreakCode,
+                        "break can only be used inside a loop.",
+                        breakStatement.Line,
+                        breakStatement.Column);
+                    return null;
+                }
                 return new IrBreakStatement();
 
-            case ContinueStatementNode:
+            case ContinueStatementNode continueStatement:
+                if (_loopDepth == 0)
+                {
+                    AddDiagnostic(
+                        InvalidContinueCode,
+                        "continue can only be used inside a loop.",
+                        continueStatement.Line,
+                        continueStatement.Column);
+                    return null;
+                }
                 return new IrContinueStatement();
 
             default:
@@ -248,6 +288,19 @@ public sealed class AstToIrLowerer
         return new IrBlockStatement(new[] { lowered });
     }
 
+    private IrBlockStatement LowerLoopBody(StatementNode statement)
+    {
+        _loopDepth++;
+        try
+        {
+            return StatementToBlock(statement);
+        }
+        finally
+        {
+            _loopDepth--;
+        }
+    }
+
     private IrStatement LowerForRangeStatement(ForRangeStatementNode node)
     {
         var startExpression = LowerExpression(node.Start);
@@ -269,7 +322,7 @@ public sealed class AstToIrLowerer
                 iterator,
                 "+=",
                 stepExpression),
-            StatementToBlock(node.Body));
+            LowerLoopBody(node.Body));
     }
 
     private IrStatement LowerForEachStatement(ForEachStatementNode node)
@@ -300,7 +353,7 @@ public sealed class AstToIrLowerer
         loopBodyStatements.Add(
             new IrVariableDeclarationStatement(node.ItemVariable, itemValue));
 
-        loopBodyStatements.AddRange(StatementToBlock(node.Body).Statements);
+        loopBodyStatements.AddRange(LowerLoopBody(node.Body).Statements);
 
         return new IrBlockStatement(new IrStatement[]
         {
@@ -730,7 +783,10 @@ public sealed class AstToIrLowerer
             .ToList();
 
         var previousVariables = _definedVariables;
+        var previousLoopDepth = _loopDepth;
         _definedVariables = new HashSet<string>(previousVariables, StringComparer.Ordinal);
+        _functionDepth++;
+        _loopDepth = 0;
         foreach (var parameter in parameters)
         {
             _definedVariables.Add(parameter.Name);
@@ -755,6 +811,8 @@ public sealed class AstToIrLowerer
             body = new IrBlockStatement();
         }
 
+        _functionDepth--;
+        _loopDepth = previousLoopDepth;
         _definedVariables = previousVariables;
 
         var lifted = new IrFunctionDeclarationStatement(

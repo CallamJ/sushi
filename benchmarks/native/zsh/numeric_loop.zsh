@@ -12,4 +12,4 @@ compute() {
   print -r -- "$total"
 }
 
-compute 500
+compute 5000

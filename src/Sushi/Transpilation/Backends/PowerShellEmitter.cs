@@ -15,6 +15,8 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private int _indent;
     private string? _currentFunctionName;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
+    private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
+    private HashSet<string> _integerReturningFunctions = new(StringComparer.Ordinal);
 
     public string Emit(IrProgram program, EmitContext context)
     {
@@ -23,14 +25,22 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _indent = 0;
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
+        _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
+        _integerReturningFunctions = program.Statements
+            .OfType<IrFunctionDeclarationStatement>()
+            .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
+                               function.ReturnType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true)
+            .Select(function => function.Name)
+            .ToHashSet(StringComparer.Ordinal);
 
         WriteLine("Set-StrictMode -Version Latest");
         WriteLine("");
-        if (RuntimeDependencyAnalyzer.RequiresRuntime(program))
-        {
-            EmitRuntimeHelpers();
-            WriteLine("");
-        }
+        // PowerShell expressions still rely on shared helpers for dynamic
+        // addition, contracts, member/index access, and intrinsic dispatch.
+        // The Bash/Zsh dependency analyzer models their native fast paths and
+        // must not be used to prune PowerShell's runtime.
+        EmitRuntimeHelpers();
+        WriteLine("");
 
         foreach (var statement in program.Statements)
         {
@@ -271,10 +281,38 @@ function __sushi_json_parse {
     try { return ($text | ConvertFrom-Json) } catch { return $text }
 }
 
+function __sushi_json_sort_value {
+    param($value)
+    if ($null -eq $value) { return $null }
+    if ($value -is [System.Collections.IDictionary]) {
+        $ordered = [ordered]@{}
+        foreach ($key in @($value.Keys | Sort-Object)) {
+            $ordered[[string]$key] = __sushi_json_sort_value $value[$key]
+        }
+        return [PSCustomObject]$ordered
+    }
+    if ($value -is [PSCustomObject]) {
+        $ordered = [ordered]@{}
+        foreach ($property in @($value.PSObject.Properties | Sort-Object Name)) {
+            $ordered[$property.Name] = __sushi_json_sort_value $property.Value
+        }
+        return [PSCustomObject]$ordered
+    }
+    if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string]) {
+        $items = @()
+        foreach ($item in $value) {
+            $items += ,(__sushi_json_sort_value $item)
+        }
+        return ,$items
+    }
+    return $value
+}
+
 function __sushi_json_stringify {
     param($value, [int]$indent = 0)
-    if ($indent -gt 0) { return ($value | ConvertTo-Json -Depth 100) }
-    return ($value | ConvertTo-Json -Compress -Depth 100)
+    $normalized = __sushi_json_sort_value $value
+    if ($indent -gt 0) { return ($normalized | ConvertTo-Json -Depth 100) }
+    return ($normalized | ConvertTo-Json -Compress -Depth 100)
 }
 
 function __sushi_fs_glob {
@@ -705,8 +743,12 @@ function __sushi_call_method {
                 break;
 
             case IrVariableDeclarationStatement variable:
-                WriteLine($"${SanitizeName(variable.Name)} = {EmitValueExpression(variable.Initializer ?? new IrLiteralExpression(null))}");
+            {
+                var initializer = variable.Initializer ?? new IrLiteralExpression(null);
+                WriteLine($"${SanitizeName(variable.Name)} = {EmitValueExpression(initializer)}");
+                SetKnownInteger(SanitizeName(variable.Name), IsDefinitelyInteger(initializer));
                 break;
+            }
 
             case IrExpressionStatement expressionStatement:
                 EmitExpressionStatement(expressionStatement.Expression);
@@ -830,8 +872,10 @@ function __sushi_call_method {
 
         var previousFunctionName = _currentFunctionName;
         var previousReturnType = _currentFunctionReturnType;
+        var previousKnownIntegers = _knownIntegerVariables;
         _currentFunctionName = statement.Name;
         _currentFunctionReturnType = statement.ReturnType;
+        _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
 
         var regularParameters = statement.Parameters
             .Where(parameter => !parameter.IsVarargs)
@@ -867,6 +911,11 @@ function __sushi_call_method {
         foreach (var parameter in statement.Parameters)
         {
             var paramName = SanitizeName(parameter.Name);
+            if (parameter.DeclaredType.Kind == IrTypeKind.Primitive &&
+                parameter.DeclaredType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                _knownIntegerVariables.Add(paramName);
+            }
             if (parameter.IsVarargs)
             {
                 if (parameter.DeclaredType.IsAnyOrUnknown)
@@ -894,6 +943,7 @@ function __sushi_call_method {
         EmitStatement(statement.Body);
         _currentFunctionName = previousFunctionName;
         _currentFunctionReturnType = previousReturnType;
+        _knownIntegerVariables = previousKnownIntegers;
         _indent--;
         WriteLine("}");
     }
@@ -942,6 +992,7 @@ function __sushi_call_method {
     private string EmitAssignmentExpression(IrAssignmentExpression assignment)
     {
         var name = SanitizeName(assignment.Target.Name);
+        SetKnownInteger(name, assignment.Operator == "=" && IsDefinitelyInteger(assignment.Value));
         return assignment.Operator switch
         {
             "=" => $"${name} = {EmitValueExpression(assignment.Value)}",
@@ -1007,7 +1058,9 @@ function __sushi_call_method {
             IrConditionalExpression conditional =>
                 $"$(if ({EmitConditionExpression(conditional.Condition)}) {{ {EmitValueExpression(conditional.TrueExpression)} }} else {{ {EmitValueExpression(conditional.FalseExpression)} }})",
             IrBinaryExpression binary when binary.Operator == "+" =>
-                $"(__sushi_add {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})",
+                IsDefinitelyInteger(binary)
+                    ? $"({EmitValueExpression(binary.Left)} + {EmitValueExpression(binary.Right)})"
+                    : $"(__sushi_add {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})",
             IrBinaryExpression binary =>
                 $"({EmitValueExpression(binary.Left)} {MapBinaryOperator(binary.Operator)} {EmitValueExpression(binary.Right)})",
             IrIntrinsicCallExpression intrinsicCall =>
@@ -1020,6 +1073,32 @@ function __sushi_call_method {
                 $"({EmitAssignmentExpression(assignment)}; ${SanitizeName(assignment.Target.Name)})",
             _ => "$null"
         };
+    }
+
+    private bool IsDefinitelyInteger(IrExpression expression)
+    {
+        return expression switch
+        {
+            IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
+            IrIdentifierExpression identifier => _knownIntegerVariables.Contains(SanitizeName(identifier.Name)),
+            IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),
+            IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
+                IsDefinitelyInteger(binary.Left) && IsDefinitelyInteger(binary.Right),
+            IrCallExpression call => _integerReturningFunctions.Contains(call.Callee),
+            _ => false
+        };
+    }
+
+    private void SetKnownInteger(string name, bool isInteger)
+    {
+        if (isInteger)
+        {
+            _knownIntegerVariables.Add(name);
+        }
+        else
+        {
+            _knownIntegerVariables.Remove(name);
+        }
     }
 
     private string EmitArrayLiteral(IrArrayLiteralExpression expression)
