@@ -61,6 +61,8 @@ jobs:
         run: |
           test -f publish/Sushi-linux_x64-64
           publish/Sushi-linux_x64-64 --help >/dev/null
+          publish/Sushi-linux_x64-64 check examples/m3_verification.sushi --target Bash --json >/dev/null
+          publish/Sushi-linux_x64-64 benchmark --targets bash --iterations 1 --warmup 0 --strict-output --filter regex_match --output-dir /tmp/sushi-package-smoke
 
   m3-verification-bash:
     name: M3 Verification (Bash)

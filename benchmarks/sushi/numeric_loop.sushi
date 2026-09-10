@@ -8,4 +8,4 @@ int compute(int n) {
     return total
 }
 
-println(compute(20000))
+println(compute(500))

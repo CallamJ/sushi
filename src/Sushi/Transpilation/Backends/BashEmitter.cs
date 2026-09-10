@@ -687,25 +687,42 @@ __sushi_json_index() {
 
   __sushi_j_is_integer "$index" || return 0
   local idx=$index
+  local i=0
+  local item
+  local selected=''
+  local found=false
+
+  if (( idx >= 0 )); then
+    while IFS= read -r item; do
+      if (( i == idx )); then
+        selected="$item"
+        found=true
+      fi
+      i=$((i + 1))
+    done < <(__sushi_json_array_each_json "$compact")
+
+    [[ "$found" == "true" ]] && __sushi_json_value_to_raw "$selected"
+    return 0
+  fi
+
   local count=0
   while IFS= read -r _line; do
     count=$((count + 1))
   done < <(__sushi_json_array_each_json "$compact")
 
-  if (( idx < 0 )); then
-    idx=$((count + idx))
-  fi
+  idx=$((count + idx))
   (( idx >= 0 && idx < count )) || return 0
 
-  local i=0
-  local item
+  i=0
   while IFS= read -r item; do
     if (( i == idx )); then
-      __sushi_json_value_to_raw "$item"
-      return 0
+      selected="$item"
+      found=true
     fi
     i=$((i + 1))
   done < <(__sushi_json_array_each_json "$compact")
+
+  [[ "$found" == "true" ]] && __sushi_json_value_to_raw "$selected"
 }
 
 __sushi_j_indent() {
@@ -1728,10 +1745,22 @@ __sushi_string_replace() {
   printf '%s' "$replaced"
 }
 
+__sushi_regex_to_ere() {
+  local pattern="${1-}"
+  pattern="${pattern//\\d/[0-9]}"
+  pattern="${pattern//\\D/[^0-9]}"
+  pattern="${pattern//\\w/[[:alnum:]_]}"
+  pattern="${pattern//\\W/[^[:alnum:]_]}"
+  pattern="${pattern//\\s/[[:space:]]}"
+  pattern="${pattern//\\S/[^[:space:]]}"
+  printf '%s' "$pattern"
+}
+
 __sushi_string_is_match() {
   local value
   value="$(__sushi_require_string_receiver "${1-}" "isMatch")"
-  local pattern="${2-}"
+  local pattern
+  pattern="$(__sushi_regex_to_ere "${2-}")"
   if printf '%s\n' "$value" | grep -E -q -- "$pattern"; then
     printf 'true'
   else
@@ -1742,7 +1771,8 @@ __sushi_string_is_match() {
 __sushi_string_match() {
   local value
   value="$(__sushi_require_string_receiver "${1-}" "match")"
-  local pattern="${2-}"
+  local pattern
+  pattern="$(__sushi_regex_to_ere "${2-}")"
   local matched
   matched="$(printf '%s\n' "$value" | grep -E -o -- "$pattern" | head -n 1 || true)"
   if [[ -z "$matched" ]]; then
@@ -2347,7 +2377,7 @@ __sushi_truthy() {
             IntrinsicId.PathDirname => $"$(dirname -- {Arg(call.Arguments, 0)})",
             IntrinsicId.PathBasename => $"$(basename -- {Arg(call.Arguments, 0)})",
             IntrinsicId.EnvGet => EmitEnvGet(call.Arguments),
-            IntrinsicId.ProcessArgs => "\"$*\"",
+            IntrinsicId.ProcessArgs => "\"$(__sushi_json_array \"$@\")\"",
             IntrinsicId.OsCwd => "$(pwd)",
             IntrinsicId.IoWriteText => $"$({EmitIoWriteText(call.Arguments)})",
             IntrinsicId.EnvSet => $"$({EmitEnvSet(call.Arguments)})",

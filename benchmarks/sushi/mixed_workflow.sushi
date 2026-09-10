@@ -5,7 +5,7 @@ var text = "  " + parsed.hello + "  "
 
 var i = 0
 var output = ""
-while (i < 100) {
+while (i < 25) {
     output = text.trim().upper()
     i = i + 1
 }

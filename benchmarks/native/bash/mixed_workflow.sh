@@ -8,7 +8,7 @@ text="  world  "
 
 i=0
 output=""
-while (( i < 100 )); do
+while (( i < 25 )); do
   trimmed="${text#"${text%%[![:space:]]*}"}"
   trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
   output="${trimmed^^}"

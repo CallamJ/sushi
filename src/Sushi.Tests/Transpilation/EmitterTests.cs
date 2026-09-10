@@ -163,6 +163,8 @@ public class EmitterTests
 
         Assert.Contains("__sushi_string_contains", script);
         Assert.Contains("__sushi_string_match", script);
+        Assert.Contains("__sushi_regex_to_ere", script);
+        Assert.Contains("${pattern//\\\\d/[0-9]}", script);
         Assert.Contains("__sushi_require_string_receiver", script);
         Assert.Empty(diagnostics);
     }

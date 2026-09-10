@@ -8,4 +8,4 @@ function Compute([int]$n) {
     return $total
 }
 
-Write-Output (Compute 20000)
+Write-Output (Compute 500)

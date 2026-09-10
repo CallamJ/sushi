@@ -125,8 +125,6 @@ build_platform() {
         -o "$temp_dir" \
         -p:UseAppHost=true \
         -p:PublishSingleFile=true \
-        -p:PublishTrimmed=true \
-        -p:TrimMode=CopyUsed \
         -p:PublishReadyToRun=true; then
         echo -e "${RED}✗ Build failed${NC}"
         rm -rf "$temp_dir"

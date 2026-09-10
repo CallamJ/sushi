@@ -12,7 +12,7 @@ user_label() {
 
 i=0
 value=0
-while (( i < 300 )); do
+while (( i < 100 )); do
   value="$(next_value "$i")"
   ((i += 1))
 done

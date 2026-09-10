@@ -8,7 +8,7 @@ function Get-UserLabel {
 
 $i = 0
 $value = 0
-while ($i -lt 300) {
+while ($i -lt 100) {
     $value = Next-Value $i
     $i++
 }

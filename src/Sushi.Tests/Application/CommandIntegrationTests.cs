@@ -1,5 +1,9 @@
 namespace Sushi.Tests.Application;
 
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using System.CommandLine;
 using Sushi.Application;
 using Xunit;
@@ -24,7 +28,8 @@ public sealed class CommandIntegrationTests
         var sourcePath = CreateSource("var value =");
         try
         {
-            var exitCode = await CreateRoot().Parse(new[] { "check", sourcePath }).InvokeAsync();
+            var exitCode = await CreateRoot().Parse(new[] { "check", sourcePath })
+                .InvokeAsync(null, TestContext.Current.CancellationToken);
             Assert.NotEqual(0, exitCode);
         }
         finally
@@ -42,7 +47,7 @@ public sealed class CommandIntegrationTests
         {
             var exitCode = await CreateRoot()
                 .Parse(new[] { "transpile", sourcePath, "--target", "Bash" })
-                .InvokeAsync();
+                .InvokeAsync(null, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, exitCode);
             Assert.True(File.Exists(outputPath));
@@ -70,7 +75,7 @@ public sealed class CommandIntegrationTests
         {
             var exitCode = await CreateRoot()
                 .Parse(new[] { "run", sourcePath, "--target", "Bash", "expected value" })
-                .InvokeAsync();
+                .InvokeAsync(null, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, exitCode);
         }

@@ -42,6 +42,12 @@ internal static class BenchmarkCommand
             DefaultValueFactory = _ => 2
         };
 
+        Option<int> timeoutSecondsOption = new("--timeout-seconds")
+        {
+            Description = "Maximum runtime for each native or transpiled process.",
+            DefaultValueFactory = _ => 30
+        };
+
         Option<string> outputDirOption = new("--output-dir")
         {
             Description = "Directory for benchmark artifacts.",
@@ -80,6 +86,7 @@ internal static class BenchmarkCommand
             targetsOption,
             iterationsOption,
             warmupOption,
+            timeoutSecondsOption,
             outputDirOption,
             includeHttpOption,
             baselineOption,
@@ -93,6 +100,7 @@ internal static class BenchmarkCommand
             var targetCsv = parseResult.GetValue(targetsOption) ?? "bash,zsh,powershell";
             var iterations = parseResult.GetValue(iterationsOption);
             var warmup = parseResult.GetValue(warmupOption);
+            var timeoutSeconds = parseResult.GetValue(timeoutSecondsOption);
             var outputDir = parseResult.GetValue(outputDirOption) ?? Path.Combine("tmp", "benchmarks");
             var includeHttp = parseResult.GetValue(includeHttpOption);
             var baseline = parseResult.GetValue(baselineOption);
@@ -108,6 +116,12 @@ internal static class BenchmarkCommand
             if (warmup < 0)
             {
                 System.Console.Error.WriteLine("Warmup must be >= 0.");
+                return 2;
+            }
+
+            if (timeoutSeconds is < 1 or > 3600)
+            {
+                System.Console.Error.WriteLine("Timeout seconds must be between 1 and 3600.");
                 return 2;
             }
 
@@ -142,7 +156,7 @@ internal static class BenchmarkCommand
             }
 
             var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath)) ?? Directory.GetCurrentDirectory();
-            var run = Execute(manifest, manifestDirectory, targets, iterations, warmup, outputDir, includeHttp, strictOutput, filter, baseline);
+            var run = Execute(manifest, manifestDirectory, targets, iterations, warmup, timeoutSeconds, outputDir, includeHttp, strictOutput, filter, baseline);
             return run.ExitCode;
         });
 
@@ -155,6 +169,7 @@ internal static class BenchmarkCommand
         IReadOnlyList<TargetLanguage> targets,
         int iterations,
         int warmup,
+        int timeoutSeconds,
         string outputDir,
         bool includeHttp,
         bool strictOutput,
@@ -241,8 +256,8 @@ internal static class BenchmarkCommand
 
                     for (var i = 0; i < warmup; i++)
                     {
-                        _ = RunScript(absNative, runner, scenario.Args, mergedEnv);
-                        _ = RunScript(tempScriptPath, runner, scenario.Args, mergedEnv);
+                        _ = RunScript(absNative, runner, scenario.Args, mergedEnv, timeoutSeconds);
+                        _ = RunScript(tempScriptPath, runner, scenario.Args, mergedEnv, timeoutSeconds);
                     }
 
                     var nativeTimings = new List<double>(iterations);
@@ -257,13 +272,13 @@ internal static class BenchmarkCommand
 
                         if (transpileFirst)
                         {
-                            transpiledRun = RunScript(tempScriptPath, runner, scenario.Args, mergedEnv);
-                            nativeRun = RunScript(absNative, runner, scenario.Args, mergedEnv);
+                            transpiledRun = RunScript(tempScriptPath, runner, scenario.Args, mergedEnv, timeoutSeconds);
+                            nativeRun = RunScript(absNative, runner, scenario.Args, mergedEnv, timeoutSeconds);
                         }
                         else
                         {
-                            nativeRun = RunScript(absNative, runner, scenario.Args, mergedEnv);
-                            transpiledRun = RunScript(tempScriptPath, runner, scenario.Args, mergedEnv);
+                            nativeRun = RunScript(absNative, runner, scenario.Args, mergedEnv, timeoutSeconds);
+                            transpiledRun = RunScript(tempScriptPath, runner, scenario.Args, mergedEnv, timeoutSeconds);
                         }
 
                         nativeTimings.Add(nativeRun.ElapsedMs);
@@ -648,7 +663,12 @@ internal static class BenchmarkCommand
         }
     }
 
-    private static CapturedProcessResult RunScript(string scriptPath, Runner runner, IReadOnlyList<string> args, IReadOnlyDictionary<string, string> env)
+    private static CapturedProcessResult RunScript(
+        string scriptPath,
+        Runner runner,
+        IReadOnlyList<string> args,
+        IReadOnlyDictionary<string, string> env,
+        int timeoutSeconds)
     {
         var psi = new ProcessStartInfo
         {
@@ -684,7 +704,28 @@ internal static class BenchmarkCommand
         var watch = Stopwatch.StartNew();
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
+        if (!process.WaitForExit(checked(timeoutSeconds * 1000)))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Best effort termination.
+            }
+
+            process.WaitForExit();
+            Task.WaitAll(stdoutTask, stderrTask);
+            watch.Stop();
+            var timeoutError = stderrTask.Result;
+            if (!string.IsNullOrEmpty(timeoutError))
+            {
+                timeoutError += Environment.NewLine;
+            }
+            timeoutError += $"benchmark process timed out after {timeoutSeconds}s";
+            return new CapturedProcessResult(124, stdoutTask.Result, timeoutError, watch.Elapsed.TotalMilliseconds);
+        }
         Task.WaitAll(stdoutTask, stderrTask);
         watch.Stop();
 

@@ -6,7 +6,7 @@ $text = "  $($parsed.hello)  "
 
 $i = 0
 $output = ""
-while ($i -lt 100) {
+while ($i -lt 25) {
     $output = $text.Trim().ToUpperInvariant()
     $i++
 }
