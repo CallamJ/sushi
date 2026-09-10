@@ -37,6 +37,31 @@ jobs:
       - name: Run test suite
         run: dotnet run --project src/Sushi.Tests/Sushi.Tests.csproj --framework net9.0 --no-restore
 
+  package-smoke:
+    name: Linux package smoke test
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/packages.lock.json
+
+      - name: Build packaged executable
+        run: bash scripts/build.sh linux-x64
+
+      - name: Verify packaged executable
+        run: |
+          test -f publish/Sushi-linux_x64-64
+          publish/Sushi-linux_x64-64 --help >/dev/null
+
   m3-verification-bash:
     name: M3 Verification (Bash)
     runs-on: ubuntu-latest

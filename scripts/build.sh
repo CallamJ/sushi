@@ -1,7 +1,12 @@
 #!/bin/bash
 set -euo pipefail # Exit on error
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
 PROJECT_NAME="Sushi"
-OUTPUT_DIR="./publish"
+OUTPUT_DIR="${REPO_ROOT}/publish"
 CONFIGURATION="Release"
 # Color output
 RED='\033[0;31m'
@@ -25,14 +30,15 @@ show_help() {
     echo "  $0 win-x64 linux-x64        # Build Windows and Linux 64-bit"
     echo "  $0 osx-x64 osx-arm64        # Build both macOS versions"
     echo "  $0 win-x64 linux-x64 osx-arm64  # Build multiple platforms"
-    exit 0
+    exit "${1-0}"
 }
 # Check for help flag or no arguments
-if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]] || [ $# -eq 0 ]; then
-    if [ $# -eq 0 ]; then
-        echo -e "${RED}Error: No platforms specified${NC}"
-        echo ""
-    fi
+if [[ $# -eq 0 ]]; then
+    echo -e "${RED}Error: No platforms specified${NC}"
+    echo ""
+    show_help 2
+fi
+if [[ "${1-}" == "-h" ]] || [[ "${1-}" == "--help" ]]; then
     show_help
 fi
 BUILD_PLATFORMS=("$@")
@@ -51,10 +57,10 @@ get_output_filename() {
     local bits=""
     local extension=""
 
-    case $rid in
+    case "$rid" in
     win-x64)
         platform="win"
-        arch="x86"
+        arch="x64"
         bits="64"
         extension=".exe"
         ;;
@@ -72,7 +78,7 @@ get_output_filename() {
         ;;
     linux-x64)
         platform="linux"
-        arch="x86"
+        arch="x64"
         bits="64"
         ;;
     linux-arm64)
@@ -87,13 +93,17 @@ get_output_filename() {
         ;;
     osx-x64)
         platform="osx"
-        arch="x86"
+        arch="x64"
         bits="64"
         ;;
     osx-arm64)
         platform="osx"
         arch="arm"
         bits="64"
+        ;;
+    *)
+        echo "Unsupported runtime identifier: $rid" >&2
+        return 1
         ;;
     esac
 
@@ -108,49 +118,46 @@ build_platform() {
     echo ""
     echo -e "${YELLOW}Building for $description ($rid)...${NC}"
 
-    dotnet publish ./src/$PROJECT_NAME/$PROJECT_NAME.csproj \
+    if ! dotnet publish "./src/${PROJECT_NAME}/${PROJECT_NAME}.csproj" \
+        -c "$CONFIGURATION" \
         -r "$rid" \
         --self-contained \
+        -o "$temp_dir" \
         -p:UseAppHost=true \
-        -p:PublishSingleFile=True \
-        -p:PublishTrimmed=True \
+        -p:PublishSingleFile=true \
+        -p:PublishTrimmed=true \
         -p:TrimMode=CopyUsed \
-        -p:PublishReadyToRun=True
-
-    if [ $? -eq 0 ]; then
-        # Get source and destination filenames
-        if [[ "$rid" == win-* ]]; then
-            src_file="$temp_dir/${PROJECT_NAME}.exe"
-        else
-            src_file="$temp_dir/${PROJECT_NAME}"
-        fi
-
-        dest_file="$OUTPUT_DIR/$(get_output_filename "$rid")"
-
-        if [ -f "$src_file" ]; then
-            # Move and rename the executable
-            mv "$src_file" "$dest_file"
-
-            # Remove temporary directory
-            rm -rf "$temp_dir"
-
-            # Get file size
-            size=$(du -h "$dest_file" | cut -f1)
-            echo -e "${GREEN}✓ Built successfully ($size) -> $(basename "$dest_file")${NC}"
-        else
-            echo -e "${RED}✗ Build completed but executable not found${NC}"
-            rm -rf "$temp_dir"
-        fi
-    else
+        -p:PublishReadyToRun=true; then
         echo -e "${RED}✗ Build failed${NC}"
         rm -rf "$temp_dir"
         return 1
     fi
+
+    # Get source and destination filenames
+    if [[ "$rid" == win-* ]]; then
+        src_file="$temp_dir/${PROJECT_NAME}.exe"
+    else
+        src_file="$temp_dir/${PROJECT_NAME}"
+    fi
+
+    dest_file="$OUTPUT_DIR/$(get_output_filename "$rid")"
+
+    if [[ ! -f "$src_file" ]]; then
+        echo -e "${RED}✗ Build completed but executable not found: $src_file${NC}"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    mv "$src_file" "$dest_file"
+    rm -rf "$temp_dir"
+
+    size=$(du -h "$dest_file" | cut -f1)
+    echo -e "${GREEN}✓ Built successfully ($size) -> $(basename "$dest_file")${NC}"
 }
 
 get_platform_description() {
     local rid=$1
-    case $rid in
+    case "$rid" in
     win-x64) echo "Windows (64-bit)" ;;
     win-x86) echo "Windows (32-bit)" ;;
     win-arm64) echo "Windows ARM64" ;;
@@ -159,7 +166,10 @@ get_platform_description() {
     linux-arm) echo "Linux ARM" ;;
     osx-x64) echo "macOS Intel" ;;
     osx-arm64) echo "macOS Apple Silicon" ;;
-    *) echo "$rid" ;;
+    *)
+        echo "Unsupported runtime identifier: $rid" >&2
+        return 1
+        ;;
     esac
 }
 # Build selected platforms
