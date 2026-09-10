@@ -346,10 +346,11 @@ internal static class BenchmarkCommand
         File.WriteAllText(markdownPath, RenderSummaryMarkdown(result));
 
         var failed = rows.Count(r => r.Status == "failed");
-        System.Console.WriteLine($"Benchmark completed. Scenarios: {rows.Count}, failed: {failed}");
+        var regressions = rows.Count(r => r.BaselineDeltaPercent is > 20.0);
+        System.Console.WriteLine($"Benchmark completed. Scenarios: {rows.Count}, failed: {failed}, regressions: {regressions}");
         System.Console.WriteLine($"Artifacts: {outputDir}");
 
-        return new BenchmarkRun(failed > 0 ? 1 : 0, outputDir);
+        return new BenchmarkRun(failed > 0 || regressions > 0 ? 1 : 0, outputDir);
     }
 
     private static List<BenchmarkResultRow> LoadBaselineRows(string? baselinePathOrUrl)

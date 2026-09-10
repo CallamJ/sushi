@@ -173,9 +173,11 @@ fi
 if [[ "$CUSTOM_EXAMPLES" == "false" ]]; then
     while IFS= read -r example_path; do
         base_name="$(basename "$example_path")"
-        if [[ "$base_name" == "m4_structural_invalid_static.sushi" ]]; then
-            continue
-        fi
+        case "$base_name" in
+            imports.sushi|test_all_features.sushi|m4_structural_invalid_static.sushi)
+                continue
+                ;;
+        esac
         EXAMPLES+=("$example_path")
     done < <(find examples -maxdepth 1 -type f -name '*.sushi' | sort)
 fi

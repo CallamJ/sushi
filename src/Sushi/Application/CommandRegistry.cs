@@ -16,7 +16,6 @@ static class CommandRegistry
     {
         root.Subcommands.Add(TranspileCommand.Create());
         root.Subcommands.Add(CheckCommand.Create());
-        root.Subcommands.Add(FormatCommand.Create());
         root.Subcommands.Add(RunCommand.Create());
         root.Subcommands.Add(WatchCommand.Create());
         root.Subcommands.Add(BenchmarkCommand.Create());

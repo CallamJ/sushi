@@ -26,8 +26,11 @@ public sealed class PowerShellEmitter : IBackendEmitter
 
         WriteLine("Set-StrictMode -Version Latest");
         WriteLine("");
-        EmitRuntimeHelpers();
-        WriteLine("");
+        if (RuntimeDependencyAnalyzer.RequiresRuntime(program))
+        {
+            EmitRuntimeHelpers();
+            WriteLine("");
+        }
 
         foreach (var statement in program.Statements)
         {

@@ -9,10 +9,10 @@ text="  world  "
 i=0
 output=""
 while (( i < 100 )); do
-  trimmed="${text## }"
-  trimmed="${trimmed%% }"
+  trimmed="${text#"${text%%[![:space:]]*}"}"
+  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
   output="${trimmed^^}"
-  ((i++))
+  ((i += 1))
 done
 
 printf '%s\n' "$output"

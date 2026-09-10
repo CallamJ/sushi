@@ -33,12 +33,6 @@ static class CheckCommand
             DefaultValueFactory = _ => "plain"
         };
 
-        Option<bool> strictOption = new("--strict")
-        {
-            Description = "Enable strict type checking",
-            DefaultValueFactory = parseResult => false
-        };
-
         fileArgument.Validators.Add(result =>
         {
             var value = result.GetValueOrDefault<string>() ?? "";
@@ -57,8 +51,7 @@ static class CheckCommand
         {
             fileArgument,
             targetLanguageOption,
-            formatOption,
-            strictOption
+            formatOption
         };
 
         formatOption.Validators.Add(result =>
@@ -75,18 +68,13 @@ static class CheckCommand
             var filePath = parseResult.GetValue(fileArgument) ?? "";
             var target = parseResult.GetValue(targetLanguageOption);
             var format = (parseResult.GetValue(formatOption) ?? "plain").Trim().ToLowerInvariant();
-            var strict = parseResult.GetValue(strictOption);
-
             if (!CommandSupport.TryReadSourceFile(filePath, out var source))
             {
                 return 1;
             }
 
             var result = CommandSupport.Transpile(filePath, target, source);
-            var hasErrors = result.Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
-            var hasWarnings = result.Diagnostics.Any(d => d.Severity == DiagnosticSeverity.Warning);
-            var strictFailure = strict && hasWarnings;
-            var success = result.Success && !strictFailure;
+            var success = result.Success;
 
             if (format == "json")
             {
@@ -115,10 +103,6 @@ static class CheckCommand
             if (!success)
             {
                 CommandSupport.PrintDiagnostics(result, verbose: true);
-                if (strictFailure && !hasErrors)
-                {
-                    System.Console.Error.WriteLine("[ERROR] SUSHI2001 strict mode failed because warnings were emitted.");
-                }
                 return 1;
             }
 
@@ -134,4 +118,3 @@ static class CheckCommand
         return command;
     }
 }
-

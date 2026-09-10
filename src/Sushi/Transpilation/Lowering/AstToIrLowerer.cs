@@ -7,6 +7,7 @@ using Sushi.Transpilation.Intrinsics;
 public sealed class AstToIrLowerer
 {
     private const string UnsupportedSyntaxCode = "SUSHI1001";
+    private const string UndefinedIdentifierCode = "SUSHI1002";
     private const string UnsupportedCallCode = "SUSHI1003";
     private const string InvalidAssignmentTargetCode = "SUSHI1004";
     private const string UnresolvedNamedCallCode = "SUSHI1017";
@@ -37,10 +38,13 @@ public sealed class AstToIrLowerer
     private readonly Dictionary<string, ClassDeclarationNode> _classes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, EnumDeclarationNode> _enums = new(StringComparer.Ordinal);
     private readonly List<IrFunctionDeclarationStatement> _liftedFunctions = new();
+    private readonly HashSet<string> _globalVariables = new(StringComparer.Ordinal);
 
     private string _sourcePath = "";
     private string? _currentFunctionName;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
+    private HashSet<string> _definedVariables = new(StringComparer.Ordinal);
+    private bool _validateIdentifiers;
     private int _tempId;
     private int _lambdaId;
 
@@ -49,14 +53,20 @@ public sealed class AstToIrLowerer
     public IrProgram Lower(ProgramNode program, string sourcePath)
     {
         _sourcePath = sourcePath;
+        _diagnostics.Clear();
         _functionSignatures.Clear();
         _classes.Clear();
         _enums.Clear();
         _liftedFunctions.Clear();
+        _globalVariables.Clear();
         _tempId = 0;
         _lambdaId = 0;
         CollectTypes(program);
+        CollectGlobalVariables(program);
+        _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
+        _validateIdentifiers = false;
         CollectFunctionSignatures(program);
+        _validateIdentifiers = true;
 
         var output = new IrProgram();
 
@@ -81,8 +91,8 @@ public sealed class AstToIrLowerer
     {
         return node switch
         {
-            BoxDeclarationNode => null,
-            UseDeclarationNode => null,
+            BoxDeclarationNode => UnsupportedStatement(node, "Box declarations are parsed but not yet supported in transpilation"),
+            UseDeclarationNode => UnsupportedStatement(node, "Use/import declarations are parsed but not yet supported in transpilation"),
             FunctionDeclarationNode function => LowerFunction(function),
             ClassDeclarationNode classDeclaration => LowerClass(classDeclaration),
             EnumDeclarationNode enumDeclaration => LowerEnum(enumDeclaration),
@@ -99,8 +109,15 @@ public sealed class AstToIrLowerer
 
         var previousFunctionName = _currentFunctionName;
         var previousReturnType = _currentFunctionReturnType;
+        var previousVariables = _definedVariables;
         _currentFunctionName = node.Name;
         _currentFunctionReturnType = signature.ReturnType;
+        _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
+        foreach (var parameter in signature.Parameters)
+        {
+            _definedVariables.Add(parameter.Name);
+        }
+        AddAnonymousStructuralFieldNames(node.Parameters, signature.Parameters);
 
         var body = node.Body switch
         {
@@ -111,6 +128,7 @@ public sealed class AstToIrLowerer
 
         _currentFunctionName = previousFunctionName;
         _currentFunctionReturnType = previousReturnType;
+        _definedVariables = previousVariables;
 
         if (body == null)
         {
@@ -147,9 +165,11 @@ public sealed class AstToIrLowerer
                 return LowerBlock(block);
 
             case VariableDeclarationStatementNode declaration:
-                return new IrVariableDeclarationStatement(
-                    declaration.Name,
-                    declaration.Initializer != null ? LowerExpression(declaration.Initializer) : null);
+            {
+                var initializer = declaration.Initializer != null ? LowerExpression(declaration.Initializer) : null;
+                _definedVariables.Add(declaration.Name);
+                return new IrVariableDeclarationStatement(declaration.Name, initializer);
+            }
 
             case ExpressionStatementNode expressionStatement:
                 return new IrExpressionStatement(LowerExpression(expressionStatement.Expression));
@@ -230,18 +250,21 @@ public sealed class AstToIrLowerer
 
     private IrStatement LowerForRangeStatement(ForRangeStatementNode node)
     {
+        var startExpression = LowerExpression(node.Start);
+        var endExpression = LowerExpression(node.End);
         var stepExpression = node.Step != null
             ? LowerExpression(node.Step)
             : new IrLiteralExpression(1);
+        _definedVariables.Add(node.Variable);
         var iterator = new IrIdentifierExpression(node.Variable);
         var comparisonOperator = node.IsInclusive ? "<=" : "<";
 
         return new IrForStatement(
-            new IrVariableDeclarationStatement(node.Variable, LowerExpression(node.Start)),
+            new IrVariableDeclarationStatement(node.Variable, startExpression),
             new IrBinaryExpression(
                 iterator,
                 comparisonOperator,
-                LowerExpression(node.End)),
+                endExpression),
             new IrAssignmentExpression(
                 iterator,
                 "+=",
@@ -251,6 +274,13 @@ public sealed class AstToIrLowerer
 
     private IrStatement LowerForEachStatement(ForEachStatementNode node)
     {
+        var collectionExpression = LowerExpression(node.Collection);
+        _definedVariables.Add(node.ItemVariable);
+        if (!string.IsNullOrWhiteSpace(node.IndexVariable))
+        {
+            _definedVariables.Add(node.IndexVariable);
+        }
+
         var collectionTemp = CreateTempName("each_collection");
         var indexTemp = CreateTempName("each_index");
         var itemValue = new IrIndexExpression(
@@ -274,7 +304,7 @@ public sealed class AstToIrLowerer
 
         return new IrBlockStatement(new IrStatement[]
         {
-            new IrVariableDeclarationStatement(collectionTemp, LowerExpression(node.Collection)),
+            new IrVariableDeclarationStatement(collectionTemp, collectionExpression),
             new IrVariableDeclarationStatement(indexTemp, new IrLiteralExpression(0)),
             new IrWhileStatement(
                 new IrBinaryExpression(
@@ -318,6 +348,7 @@ public sealed class AstToIrLowerer
         {
             if (pattern.IsRest && pattern.Name != null)
             {
+                _definedVariables.Add(pattern.Name);
                 output.Add(new IrVariableDeclarationStatement(
                     pattern.Name,
                     new IrCallExpression(
@@ -355,6 +386,7 @@ public sealed class AstToIrLowerer
             }
             else if (pattern.Name != null)
             {
+                _definedVariables.Add(pattern.Name);
                 output.Add(new IrVariableDeclarationStatement(pattern.Name, currentValue));
             }
 
@@ -420,7 +452,7 @@ public sealed class AstToIrLowerer
         return node switch
         {
             LiteralExpressionNode literal => new IrLiteralExpression(literal.Value),
-            IdentifierExpressionNode identifier => new IrIdentifierExpression(identifier.Name),
+            IdentifierExpressionNode identifier => LowerIdentifier(identifier),
             ThisExpressionNode => new IrIdentifierExpression("this"),
             ParenthesizedExpressionNode parenthesized => LowerExpression(parenthesized.Expression),
             UnaryExpressionNode unary => new IrUnaryExpression(unary.Operator, LowerExpression(unary.Operand), unary.IsPrefix),
@@ -470,6 +502,8 @@ public sealed class AstToIrLowerer
                     node.Column);
                 return new IrLiteralExpression(null);
             }
+
+            ValidateIdentifier(identifier);
 
             return new IrAssignmentExpression(
                 new IrIdentifierExpression(identifier.Name),
@@ -695,6 +729,13 @@ public sealed class AstToIrLowerer
                 LowerParameterType(parameter, lambdaName)))
             .ToList();
 
+        var previousVariables = _definedVariables;
+        _definedVariables = new HashSet<string>(previousVariables, StringComparer.Ordinal);
+        foreach (var parameter in parameters)
+        {
+            _definedVariables.Add(parameter.Name);
+        }
+
         IrBlockStatement body;
         if (node.IsBlock)
         {
@@ -713,6 +754,8 @@ public sealed class AstToIrLowerer
         {
             body = new IrBlockStatement();
         }
+
+        _definedVariables = previousVariables;
 
         var lifted = new IrFunctionDeclarationStatement(
             lambdaName,
@@ -797,6 +840,82 @@ public sealed class AstToIrLowerer
         }
     }
 
+    private void CollectGlobalVariables(ProgramNode program)
+    {
+        foreach (var declaration in program.Declarations)
+        {
+            switch (declaration)
+            {
+                case VariableDeclarationStatementNode variable:
+                    _globalVariables.Add(variable.Name);
+                    break;
+                case ArrayDestructuringStatementNode destructuring:
+                    CollectPatternNames(destructuring.Patterns, _globalVariables);
+                    break;
+                case EnumDeclarationNode enumDeclaration:
+                    _globalVariables.Add(enumDeclaration.Name);
+                    break;
+            }
+        }
+    }
+
+    private static void CollectPatternNames(
+        IEnumerable<DestructuringPatternNode> patterns,
+        ISet<string> destination)
+    {
+        foreach (var pattern in patterns)
+        {
+            if (!string.IsNullOrWhiteSpace(pattern.Name))
+            {
+                destination.Add(pattern.Name);
+            }
+
+            if (pattern.NestedPatterns != null)
+            {
+                CollectPatternNames(pattern.NestedPatterns, destination);
+            }
+        }
+    }
+
+    private void AddAnonymousStructuralFieldNames(
+        IReadOnlyList<ParameterNode> sourceParameters,
+        IReadOnlyList<IrFunctionParameter> loweredParameters)
+    {
+        var count = Math.Min(sourceParameters.Count, loweredParameters.Count);
+        for (var i = 0; i < count; i++)
+        {
+            if (!string.Equals(sourceParameters[i].Name, "_", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var field in loweredParameters[i].DeclaredType.StructuralFields)
+            {
+                _definedVariables.Add(field.Name);
+            }
+        }
+    }
+
+    private IrExpression LowerIdentifier(IdentifierExpressionNode identifier)
+    {
+        ValidateIdentifier(identifier);
+        return new IrIdentifierExpression(identifier.Name);
+    }
+
+    private void ValidateIdentifier(IdentifierExpressionNode identifier)
+    {
+        if (!_validateIdentifiers || _definedVariables.Contains(identifier.Name))
+        {
+            return;
+        }
+
+        AddDiagnostic(
+            UndefinedIdentifierCode,
+            $"Undefined identifier '{identifier.Name}'.",
+            identifier.Line,
+            identifier.Column);
+    }
+
     private List<IrFunctionParameter> BuildParameterList(IEnumerable<ParameterNode> parameters, string functionName)
     {
         var parameterList = parameters.ToList();
@@ -837,9 +956,16 @@ public sealed class AstToIrLowerer
                 new("this", false, null, IrTypeRef.Primitive("object"))
             };
             parameters.AddRange(BuildParameterList(method.Parameters, methodName));
+            var previousVariables = _definedVariables;
+            _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal) { "this" };
+            foreach (var parameter in parameters)
+            {
+                _definedVariables.Add(parameter.Name);
+            }
             var body = method.Body is StatementNode statementBody
                 ? StatementToBlock(statementBody)
                 : new IrBlockStatement();
+            _definedVariables = previousVariables;
 
             statements.Add(new IrFunctionDeclarationStatement(
                 methodName,
@@ -862,6 +988,13 @@ public sealed class AstToIrLowerer
         var ctorSignature = _functionSignatures.TryGetValue(constructorName, out var signature)
             ? signature
             : new IrFunctionSignature(IrTypeRef.Primitive("object"), BuildParameterList(ctorParameters, constructorName));
+
+        var previousConstructorVariables = _definedVariables;
+        _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
+        foreach (var parameter in ctorSignature.Parameters)
+        {
+            _definedVariables.Add(parameter.Name);
+        }
 
         var objectProperties = new List<IrObjectProperty>
         {
@@ -902,6 +1035,7 @@ public sealed class AstToIrLowerer
             ctorSignature.Parameters,
             ctorBody,
             IrTypeRef.Primitive("object")));
+        _definedVariables = previousConstructorVariables;
 
         return new IrBlockStatement(statements);
     }
@@ -971,9 +1105,16 @@ public sealed class AstToIrLowerer
                 new("this", false, null, IrTypeRef.Primitive("object"))
             };
             parameters.AddRange(BuildParameterList(method.Parameters, methodName));
+            var previousVariables = _definedVariables;
+            _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal) { "this" };
+            foreach (var parameter in parameters)
+            {
+                _definedVariables.Add(parameter.Name);
+            }
             var body = method.Body is StatementNode statementBody
                 ? StatementToBlock(statementBody)
                 : new IrBlockStatement();
+            _definedVariables = previousVariables;
 
             statements.Add(new IrFunctionDeclarationStatement(
                 methodName,

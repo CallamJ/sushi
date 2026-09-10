@@ -1,4 +1,6 @@
 src/*/bin
 src/*/obj
+.idea/
+**/.idea/
 publish/
 tmp/

@@ -11,6 +11,6 @@ while (( i < 400 )); do
   else
     ok=0
   fi
-  ((i++))
+  ((i += 1))
 done
 print -r -- "$ok"

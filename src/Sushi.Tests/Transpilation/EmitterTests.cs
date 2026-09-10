@@ -31,6 +31,7 @@ public class EmitterTests
         Assert.Contains("#!/usr/bin/env bash", script);
         Assert.Contains("x=1", script);
         Assert.Contains("printf '%s\\n' \"${x:-}\"", script);
+        Assert.DoesNotContain("__sushi_j_reset", script);
         Assert.Empty(diagnostics);
     }
 
@@ -56,6 +57,7 @@ public class EmitterTests
         Assert.Contains("Set-StrictMode -Version Latest", script);
         Assert.Contains("$x = 1", script);
         Assert.Contains("Write-Host $x", script);
+        Assert.DoesNotContain("function __sushi_member", script);
         Assert.Empty(diagnostics);
     }
 

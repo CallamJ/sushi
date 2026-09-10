@@ -6,7 +6,7 @@ sum10() {
   local i=1
   while (( i <= 10 )); do
     total=$((total + i))
-    ((i++))
+    ((i += 1))
   done
   printf '%s' "$total"
 }
@@ -15,6 +15,6 @@ i=0
 total=0
 while (( i < 500 )); do
   total=$(( total + $(sum10) ))
-  ((i++))
+  ((i += 1))
 done
 printf '%s\n' "$total"

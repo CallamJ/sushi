@@ -6,9 +6,9 @@ i=0
 output=""
 while (( i < 200 )); do
   lowered="${(L)raw}"
-  lowered="${lowered## }"
-  lowered="${lowered%% }"
+  lowered="${lowered#"${lowered%%[![:space:]]*}"}"
+  lowered="${lowered%"${lowered##*[![:space:]]}"}"
   output="${lowered//gamma42/delta}"
-  ((i++))
+  ((i += 1))
 done
 print -r -- "$output"

@@ -41,6 +41,25 @@ Milestone 4 Phase 3 function contracts are now available:
 
 - .NET SDK 9.0+
 
+## Installation
+
+Tagged prereleases publish standalone executables for Linux x64, macOS x64,
+and Windows x64, plus a `Sushi.Tool` NuGet package on the GitHub release.
+
+To install a downloaded tool package locally:
+
+```bash
+dotnet tool install --global Sushi.Tool --add-source ./download-directory --prerelease
+sushi --help
+```
+
+To build a standalone executable from source:
+
+```bash
+scripts/build.sh linux-x64
+./publish/Sushi-linux_x64-64 --help
+```
+
 Default transpile target selection:
 
 - Windows: `Powershell7`
@@ -154,6 +173,13 @@ See `docs/runtime-prereqs-and-portability.md` for:
 - runtime dependency details per target
 - behavior differences between Bash, Zsh, and PowerShell emitters
 - current known limitations for M3 intrinsics
+
+Current tooling limitations:
+
+- `fmt` is not exposed until deterministic formatting is implemented.
+- `box` and `use` syntax is parser-only and produces an explicit transpilation
+  error instead of being silently ignored.
+- `check` rejects references to undefined variables in supported code paths.
 
 ## CI
 

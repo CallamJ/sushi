@@ -495,4 +495,54 @@ public class TranspilerTests
         Assert.Contains("__sushi_require_integer", result.EmittedCode);
         Assert.Contains("__sushi_json_index", result.EmittedCode);
     }
+
+    [Fact]
+    public void Transpile_UndefinedIdentifier_FailsWithSourceDiagnostic()
+    {
+        const string source = "println(missingValue)";
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "undefined.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.False(result.Success);
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Code == "SUSHI1002");
+        Assert.Equal(1, diagnostic.Span.Line);
+        Assert.Contains("missingValue", diagnostic.Message);
+    }
+
+    [Fact]
+    public void Transpile_FunctionParameter_IsDefined()
+    {
+        const string source = "identity(value) { return value }";
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "parameter.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.True(result.Success);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Code == "SUSHI1002");
+    }
+
+    [Theory]
+    [InlineData("box Example")]
+    [InlineData("use Example.Helpers")]
+    public void Transpile_ParsedButUnsupportedModuleSyntax_Fails(string source)
+    {
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "module.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Code == "SUSHI1001");
+    }
 }

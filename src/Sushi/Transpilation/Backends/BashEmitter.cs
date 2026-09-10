@@ -47,8 +47,11 @@ public sealed class BashEmitter : IBackendEmitter
             WriteLine("set -euo pipefail");
         }
         WriteLine("");
-        EmitRuntimeHelpers();
-        WriteLine("");
+        if (RuntimeDependencyAnalyzer.RequiresRuntime(program))
+        {
+            EmitRuntimeHelpers();
+            WriteLine("");
+        }
 
         foreach (var statement in program.Statements)
         {

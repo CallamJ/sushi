@@ -7,7 +7,7 @@ compute() {
   local total=0
   while (( i < n )); do
     total=$(( total + (i * 3) - 1 ))
-    ((i++))
+    ((i += 1))
   done
   print -r -- "$total"
 }
