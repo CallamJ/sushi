@@ -35,12 +35,14 @@ public sealed class PowerShellEmitter : IBackendEmitter
 
         WriteLine("Set-StrictMode -Version Latest");
         WriteLine("");
-        // PowerShell expressions still rely on shared helpers for dynamic
-        // addition, contracts, member/index access, and intrinsic dispatch.
-        // The Bash/Zsh dependency analyzer models their native fast paths and
-        // must not be used to prune PowerShell's runtime.
-        EmitRuntimeHelpers();
-        WriteLine("");
+        // Emit the runtime only when the program uses features that need it;
+        // simple native PowerShell scripts should remain small and readable.
+        if (RuntimeDependencyAnalyzer.RequiresRuntime(program) ||
+            RuntimeDependencyAnalyzer.RequiresPowerShellRuntime(program))
+        {
+            EmitRuntimeHelpers();
+            WriteLine("");
+        }
 
         foreach (var statement in program.Statements)
         {

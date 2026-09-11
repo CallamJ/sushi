@@ -2785,8 +2785,11 @@ __sushi_native_obj_to_json() {
         }
 
         EmitStatement(statement.Body, inFunction: true);
-        WriteLine("__sushi_result=''");
-        WriteLine("return 0");
+        if (!EndsWithReturn(statement.Body))
+        {
+            WriteLine("__sushi_result=''");
+            WriteLine("return 0");
+        }
         _currentFunctionName = previousFunctionName;
         _currentFunctionReturnType = previousReturnType;
         _knownIntegerVariables = previousKnownIntegers;
@@ -2794,6 +2797,9 @@ __sushi_native_obj_to_json() {
         _indent--;
         WriteLine("}");
     }
+
+    private static bool EndsWithReturn(IrBlockStatement block) =>
+        block.Statements.LastOrDefault() is IrReturnStatement;
 
     private void EmitReturn(IrReturnStatement statement, bool inFunction)
     {

@@ -57,7 +57,7 @@ public class EmitterTests
         Assert.Contains("Set-StrictMode -Version Latest", script);
         Assert.Contains("$x = 1", script);
         Assert.Contains("Write-Host $x", script);
-        Assert.Contains("function __sushi_member", script);
+        Assert.DoesNotContain("function __sushi_member", script);
         Assert.Empty(diagnostics);
     }
 

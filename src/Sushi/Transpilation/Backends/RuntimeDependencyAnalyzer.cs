@@ -5,6 +5,42 @@ using Sushi.Transpilation.Intrinsics;
 
 internal static class RuntimeDependencyAnalyzer
 {
+    public static bool RequiresPowerShellRuntime(IrProgram program)
+    {
+        return RequiresPowerShellRuntime(new IrBlockStatement(program.Statements));
+    }
+
+    private static bool RequiresPowerShellRuntime(IrStatement statement) => statement switch
+    {
+        IrBlockStatement block => block.Statements.Any(RequiresPowerShellRuntime),
+        IrVariableDeclarationStatement variable => variable.Initializer != null && RequiresPowerShellRuntime(variable.Initializer),
+        IrExpressionStatement expression => RequiresPowerShellRuntime(expression.Expression),
+        IrIfStatement conditional => RequiresPowerShellRuntime(conditional.Condition) || RequiresPowerShellRuntime(conditional.ThenBlock) || (conditional.ElseBlock != null && RequiresPowerShellRuntime(conditional.ElseBlock)),
+        IrWhileStatement loop => RequiresPowerShellRuntime(loop.Condition) || RequiresPowerShellRuntime(loop.Body),
+        IrForStatement loop => (loop.Initializer != null && RequiresPowerShellRuntime(loop.Initializer)) || (loop.Condition != null && RequiresPowerShellRuntime(loop.Condition)) || (loop.Increment != null && RequiresPowerShellRuntime(loop.Increment)) || RequiresPowerShellRuntime(loop.Body),
+        IrDoWhileStatement loop => RequiresPowerShellRuntime(loop.Body) || RequiresPowerShellRuntime(loop.Condition),
+        IrFunctionDeclarationStatement function =>
+            !function.ReturnType.IsAnyOrUnknown ||
+            function.Parameters.Any(p => !p.DeclaredType.IsAnyOrUnknown) ||
+            RequiresPowerShellRuntime(function.Body),
+        IrReturnStatement returned => returned.Expression != null && RequiresPowerShellRuntime(returned.Expression),
+        _ => false
+    };
+
+    private static bool RequiresPowerShellRuntime(IrExpression expression) => expression switch
+    {
+        IrIntrinsicCallExpression intrinsic => intrinsic.Id is not (IntrinsicId.Print or IntrinsicId.Println) || intrinsic.Arguments.Any(RequiresPowerShellRuntime),
+        IrMethodCallExpression method => true,
+        IrMemberAccessExpression or IrIndexExpression or IrObjectLiteralExpression => true,
+        IrAssignmentExpression assignment => RequiresPowerShellRuntime(assignment.Value),
+        IrArrayLiteralExpression array => array.Elements.Any(RequiresPowerShellRuntime),
+        IrCallExpression call => call.Arguments.Any(a => RequiresPowerShellRuntime(a.Value)),
+        IrUnaryExpression unary => RequiresPowerShellRuntime(unary.Operand),
+        IrBinaryExpression binary => RequiresPowerShellRuntime(binary.Left) || RequiresPowerShellRuntime(binary.Right),
+        IrConditionalExpression conditional => RequiresPowerShellRuntime(conditional.Condition) || RequiresPowerShellRuntime(conditional.TrueExpression) || RequiresPowerShellRuntime(conditional.FalseExpression),
+        _ => false
+    };
+
     public static bool RequiresRuntime(IrProgram program)
     {
         return RequiresRuntime(new IrBlockStatement(program.Statements), new HashSet<string>(StringComparer.Ordinal));
