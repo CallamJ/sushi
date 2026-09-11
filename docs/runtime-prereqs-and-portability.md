@@ -17,7 +17,7 @@ Default target selection:
 
 ### 1.2 For running Bash output (`-t Bash`)
 
-- Bash 4.0+ (native indexed and associative arrays)
+- Bash 4.3+ (native indexed/associative arrays and object namerefs)
 - `curl`
 - standard POSIX tools emitted for requested features (`mktemp`, `cat`, `find`, `timeout`)
 
@@ -112,6 +112,11 @@ Contract mismatch behavior:
 - arrays and objects lower directly to native shell collections or statically
   known field bundles; generated scripts contain no embedded helper library
 - generated Zsh enables zero-based array indexing for Bash parity
+- class and enum instances remain native objects: Bash uses associative arrays
+  and namerefs, Zsh uses associative arrays with compiler-managed references,
+  and PowerShell uses `PSCustomObject`
+- typed class values can cross function and method boundaries without JSON
+  serialization or stdout transport
 
 ### 2.7 Arithmetic numeric strictness
 
@@ -159,6 +164,8 @@ Regex contract:
 - HTTP behavior can vary by host networking/TLS policy.
 - Glob output format is not fully normalized cross-target yet.
 - structural field typing currently targets flat field contracts (no deep nested structural field contracts).
+- inheritance, reflection, dynamic member names, and mutation of enum singletons
+  are intentionally unsupported
 
 ## 4. Verification commands
 

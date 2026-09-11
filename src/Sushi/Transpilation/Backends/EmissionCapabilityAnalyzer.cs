@@ -38,6 +38,9 @@ internal static class EmissionCapabilityAnalyzer
         IrObjectLiteralExpression obj => obj.Properties.Any(property => UsesArrays(property.Value)),
         IrMemberAccessExpression member => UsesArrays(member.Target),
         IrCallExpression call => call.Arguments.Any(argument => UsesArrays(argument.Value)),
+        IrConstructionExpression construction => construction.Arguments.Any(argument => UsesArrays(argument.Value)),
+        IrResolvedMethodCallExpression method => UsesArrays(method.Target) || method.Arguments.Any(argument => UsesArrays(argument.Value)),
+        IrAdapterCallExpression adapter => UsesArrays(adapter.Value),
         IrUnaryExpression unary => UsesArrays(unary.Operand),
         IrBinaryExpression binary => UsesArrays(binary.Left) || UsesArrays(binary.Right),
         IrConditionalExpression conditional => UsesArrays(conditional.Condition) ||

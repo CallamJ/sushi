@@ -39,6 +39,13 @@ Milestone 4 Phase 3 function contracts are now available:
 - compile-time mismatch diagnostics for provable literal mismatches
 - target-native parameter typing without an embedded runtime library
 
+Modules and native object constructs are also available:
+
+- relative `use "./module.sushi" as alias` imports with private-by-default exports
+- classes with fields, constructors, methods, mutation, and type adapters
+- simple, direct-value, record, inline-property, and explicitly constructed enums
+- native associative arrays on Bash/Zsh and `PSCustomObject` on PowerShell—no JSON object runtime
+
 ## Prerequisites
 
 ### Build/transpile Sushi
@@ -80,7 +87,7 @@ branches are omitted from generated code.
 
 ### Run transpiled Bash scripts
 
-- Bash 4.0+ (arrays and associative arrays lower directly to native storage)
+- Bash 4.3+ (associative arrays and namerefs lower objects directly to native storage)
 - `curl` (required for `std.http.get/post/download` and native archive downloads)
 
 ### Run transpiled Zsh scripts
@@ -155,6 +162,31 @@ println(helpers.greet("Sushi"))
 
 Run the complete example with `just run examples/modules/app.sushi`. Imported
 modules are statically linked once and do not require source files at runtime.
+Only declarations prefixed with `export` are visible to importers, and exported
+variables are read-only outside their defining module. See
+[`docs/modules-and-objects.md`](docs/modules-and-objects.md) for the complete
+module, class, enum, and adapter model.
+
+## Classes and enums
+
+```sushi
+class Person {
+    string name
+    new(string name) { this.name = name }
+    string() -> this.name
+}
+
+enum Priority(int weight) {
+    Low(1), Normal(2), High(3)
+}
+
+var person = new Person("Ada")
+println(string(person))
+println(Priority.High.weight)
+```
+
+Run `just run examples/object_model.sushi` for constructors, methods, adapters,
+enum forms, typed object parameters/returns, and reference aliases.
 
 ## Benchmark examples
 

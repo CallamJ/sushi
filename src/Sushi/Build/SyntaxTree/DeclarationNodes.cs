@@ -19,7 +19,7 @@ public class ProgramNode : AstNode
 }
 
 /// <summary>
-/// Box (namespace) declaration: box People.Helpers;
+/// Module identity declaration: box People.Helpers
 /// </summary>
 public class BoxDeclarationNode : AstNode
 {
@@ -35,12 +35,12 @@ public class BoxDeclarationNode : AstNode
 }
 
 /// <summary>
-/// Use (import) declaration: use People.Person; or use People.Helpers.greet() -> greetPerson()
+/// Relative module import: use "./person.sushi" as person
 /// </summary>
 public class UseDeclarationNode : AstNode
 {
-    public string ImportPath { get; }      // e.g., "People.Person"
-    public string? Alias { get; }          // e.g., "greetPerson" (optional)
+    public string ImportPath { get; }      // e.g., "./person.sushi"
+    public string? Alias { get; }          // e.g., "person" (optional)
     
     public UseDeclarationNode(string importPath, string? alias, int line, int column) 
         : base(line, column)

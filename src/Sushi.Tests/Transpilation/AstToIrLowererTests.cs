@@ -46,6 +46,37 @@ public class AstToIrLowererTests
     }
 
     [Fact]
+    public void Lower_NewExpression_ProducesDedicatedConstructionIr()
+    {
+        const string source = "class Person { string name }\nvar person = new Person(\"Ada\")";
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(Parse(source), "test.sushi");
+        var declaration = Assert.IsType<IrVariableDeclarationStatement>(ir.Statements.Last());
+        var construction = Assert.IsType<IrConstructionExpression>(declaration.Initializer);
+        Assert.Equal("Person", construction.TypeName);
+    }
+
+    [Fact]
+    public void Lower_KnownMethodsAndAdapters_ProduceDedicatedIr()
+    {
+        const string source = """
+            class Person {
+                string name
+                string label() -> this.name
+                string() -> this.name
+            }
+            var person = new Person("Ada")
+            var label = person.label()
+            var text = string(person)
+            """;
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(Parse(source), "test.sushi");
+        var declarations = ir.Statements.OfType<IrVariableDeclarationStatement>().ToList();
+        Assert.IsType<IrResolvedMethodCallExpression>(declarations.Single(item => item.Name == "label").Initializer);
+        Assert.IsType<IrAdapterCallExpression>(declarations.Single(item => item.Name == "text").Initializer);
+    }
+
+    [Fact]
     public void Lower_UnresolvedNamedArgumentCall_ReportsDiagnostic()
     {
         const string source = """

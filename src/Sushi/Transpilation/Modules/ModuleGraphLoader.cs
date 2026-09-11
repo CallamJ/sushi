@@ -15,16 +15,18 @@ internal sealed class ModuleGraphLoader
     private readonly Dictionary<string, LoadedModule> _loaded = new(StringComparer.Ordinal);
     private readonly HashSet<string> _loading = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _boxes = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _dependencies = new(StringComparer.Ordinal);
     private readonly List<Diagnostic> _diagnostics;
 
     public ModuleGraphLoader(List<Diagnostic> diagnostics) => _diagnostics = diagnostics;
 
     public IReadOnlyList<LoadedModule> OrderedModules { get; private set; } = Array.Empty<LoadedModule>();
+    public IReadOnlyList<string> DependencyPaths => _dependencies.Order(StringComparer.Ordinal).ToArray();
 
     public LoadedModule? LoadRoot(string sourcePath, string sourceText)
     {
         var ordered = new List<LoadedModule>();
-        var rootPath = Path.GetFullPath(sourcePath);
+        var rootPath = CanonicalizePath(sourcePath);
         var root = Load(rootPath, sourceText, isRoot: true, ordered);
         OrderedModules = ordered;
         return root;
@@ -32,7 +34,7 @@ internal sealed class ModuleGraphLoader
 
     private LoadedModule? Load(string sourcePath, string? suppliedSource, bool isRoot, List<LoadedModule> ordered)
     {
-        sourcePath = Path.GetFullPath(sourcePath);
+        sourcePath = CanonicalizePath(sourcePath);
         if (_loaded.TryGetValue(sourcePath, out var existing)) return existing;
         if (!_loading.Add(sourcePath))
         {
@@ -59,7 +61,8 @@ internal sealed class ModuleGraphLoader
         }
         catch (Exception ex)
         {
-            Error("SUSHI1000", ex.Message, sourcePath);
+            var location = ParseExceptionLocation(ex.Message);
+            Error("SUSHI1000", ex.Message, sourcePath, location.Line, location.Column);
             _loading.Remove(sourcePath);
             return null;
         }
@@ -96,8 +99,9 @@ internal sealed class ModuleGraphLoader
                 Error("SUSHI1040", $"Import '{use.ImportPath}' must be a relative .sushi path.", sourcePath, use.Line, use.Column);
                 continue;
             }
-            var targetPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourcePath)!, use.ImportPath));
-            var alias = use.Alias ?? Path.GetFileNameWithoutExtension(targetPath).Replace('-', '_');
+            var targetPath = CanonicalizePath(Path.Combine(Path.GetDirectoryName(sourcePath)!, use.ImportPath));
+            _dependencies.Add(targetPath);
+            var alias = use.Alias ?? SanitizeAlias(Path.GetFileNameWithoutExtension(targetPath));
             if (imports.ContainsKey(alias) || localNames.Contains(alias))
             {
                 Error("SUSHI1044", $"Duplicate module alias '{alias}'.", sourcePath, use.Line, use.Column);
@@ -125,4 +129,28 @@ internal sealed class ModuleGraphLoader
 
     private void Error(string code, string message, string path, int line = 1, int column = 1) =>
         _diagnostics.Add(Diagnostic.Error(code, message, new SourceSpan(path, line, column)));
+
+    private static string CanonicalizePath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath)) return fullPath;
+        return new FileInfo(fullPath).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? fullPath;
+    }
+
+    private static string SanitizeAlias(string value)
+    {
+        var characters = value.Select(character => char.IsLetterOrDigit(character) || character == '_' ? character : '_').ToArray();
+        var alias = new string(characters);
+        if (alias.Length == 0) return "module";
+        return char.IsLetter(alias[0]) || alias[0] == '_' ? alias : "_" + alias;
+    }
+
+    private static (int Line, int Column) ParseExceptionLocation(string message)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(message, @"(?:at|@)\s+(?<line>\d+):(?<column>\d+)(?!.*\d+:\d+)");
+        return match.Success && int.TryParse(match.Groups["line"].Value, out var line) &&
+               int.TryParse(match.Groups["column"].Value, out var column)
+            ? (line, column)
+            : (1, 1);
+    }
 }

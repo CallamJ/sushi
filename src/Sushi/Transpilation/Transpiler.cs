@@ -18,26 +18,48 @@ public sealed class Transpiler
         var targetProfile = request.TargetProfile ?? GetLegacyProfile(request.TargetLanguage);
         var moduleLoader = new ModuleGraphLoader(diagnostics);
         var root = moduleLoader.LoadRoot(request.SourcePath, request.SourceText);
-        var dependencies = moduleLoader.OrderedModules
-            .Where(module => root == null || module.SourcePath != root.SourcePath)
-            .Select(module => module.SourcePath)
-            .ToArray();
+        var dependencies = moduleLoader.DependencyPaths;
         if (root == null || diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return new TranspileResult { Success = false, Diagnostics = diagnostics, DependencyPaths = dependencies };
 
         var ir = new IrProgram();
         foreach (var module in moduleLoader.OrderedModules)
         {
-            var prefix = module == root ? "" : $"sushi_module_{SanitizeModuleName(module.BoxName!)}_";
+            var prefix = module == root ? "" : $"__sushi_module_{SanitizeModuleName(module.BoxName!)}_";
             var externalSymbols = new Dictionary<string, string>(StringComparer.Ordinal);
+            var externalFunctions = new Dictionary<string, Sushi.Build.SyntaxTree.FunctionDeclarationNode>(StringComparer.Ordinal);
+            var externalClasses = new Dictionary<string, Sushi.Build.SyntaxTree.ClassDeclarationNode>(StringComparer.Ordinal);
+            var externalEnums = new Dictionary<string, Sushi.Build.SyntaxTree.EnumDeclarationNode>(StringComparer.Ordinal);
             foreach (var import in module.Imports)
             {
-                var importedPrefix = $"sushi_module_{SanitizeModuleName(import.Value.BoxName!)}_";
-                foreach (var exported in import.Value.Exports.Keys)
-                    externalSymbols[$"{import.Key}.{exported}"] = importedPrefix + exported;
+                var importedPrefix = $"__sushi_module_{SanitizeModuleName(import.Value.BoxName!)}_";
+                foreach (var exported in import.Value.Exports)
+                {
+                    var emittedName = importedPrefix + exported.Key;
+                    externalSymbols[$"{import.Key}.{exported.Key}"] = emittedName;
+                    switch (exported.Value)
+                    {
+                        case Sushi.Build.SyntaxTree.FunctionDeclarationNode function:
+                            externalFunctions[emittedName] = function;
+                            break;
+                        case Sushi.Build.SyntaxTree.ClassDeclarationNode @class:
+                            externalClasses[emittedName] = @class;
+                            break;
+                        case Sushi.Build.SyntaxTree.EnumDeclarationNode @enum:
+                            externalEnums[emittedName] = @enum;
+                            break;
+                    }
+                }
             }
 
-            var lowerer = new AstToIrLowerer(targetProfile, prefix, externalSymbols, module.Imports.Keys.ToHashSet(StringComparer.Ordinal));
+            var lowerer = new AstToIrLowerer(
+                targetProfile,
+                prefix,
+                externalSymbols,
+                module.Imports.Keys.ToHashSet(StringComparer.Ordinal),
+                externalFunctions,
+                externalClasses,
+                externalEnums);
             var moduleIr = lowerer.Lower(module.Program, module.SourcePath);
             diagnostics.AddRange(lowerer.Diagnostics);
             ir.Statements.AddRange(moduleIr.Statements);

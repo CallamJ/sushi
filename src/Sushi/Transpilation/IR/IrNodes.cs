@@ -313,6 +313,65 @@ public sealed class IrCallExpression : IrExpression
     }
 }
 
+public sealed class IrConstructionExpression : IrExpression
+{
+    public string TypeName { get; }
+    public string ConstructorName { get; }
+    public List<IrCallArgument> Arguments { get; }
+
+    public IrConstructionExpression(string typeName, string constructorName, IEnumerable<IrCallArgument> arguments)
+    {
+        TypeName = typeName;
+        ConstructorName = constructorName;
+        Arguments = arguments.ToList();
+    }
+}
+
+public sealed class IrResolvedMethodCallExpression : IrExpression
+{
+    public string TypeName { get; }
+    public string MethodName { get; }
+    public string Callee { get; }
+    public IrExpression Target { get; }
+    public List<IrCallArgument> Arguments { get; }
+
+    public IrResolvedMethodCallExpression(
+        string typeName,
+        string methodName,
+        string callee,
+        IrExpression target,
+        IEnumerable<IrCallArgument> arguments)
+    {
+        TypeName = typeName;
+        MethodName = methodName;
+        Callee = callee;
+        Target = target;
+        Arguments = arguments.ToList();
+    }
+
+    public IrCallExpression AsFunctionCall() => new(
+        Callee,
+        new[] { new IrCallArgument(null, Target, 1, 1) }.Concat(Arguments));
+}
+
+public sealed class IrAdapterCallExpression : IrExpression
+{
+    public string SourceTypeName { get; }
+    public string TargetTypeName { get; }
+    public string Callee { get; }
+    public IrExpression Value { get; }
+
+    public IrAdapterCallExpression(string sourceTypeName, string targetTypeName, string callee, IrExpression value)
+    {
+        SourceTypeName = sourceTypeName;
+        TargetTypeName = targetTypeName;
+        Callee = callee;
+        Value = value;
+    }
+
+    public IrCallExpression AsFunctionCall() => new(Callee, new[] { Value });
+}
+
 public sealed class IrMethodCallExpression : IrExpression
 {
     public IrExpression Target { get; }
@@ -394,11 +453,13 @@ public sealed class IrMemberAccessExpression : IrExpression
 {
     public IrExpression Target { get; }
     public string MemberName { get; }
+    public IrTypeRef ValueType { get; }
 
-    public IrMemberAccessExpression(IrExpression target, string memberName)
+    public IrMemberAccessExpression(IrExpression target, string memberName, IrTypeRef? valueType = null)
     {
         Target = target;
         MemberName = memberName;
+        ValueType = valueType ?? IrTypeRef.Any;
     }
 }
 

@@ -1088,6 +1088,14 @@ function __sushi_call_method {
                 WriteLine(EmitCallCommand(call));
                 return;
 
+            case IrResolvedMethodCallExpression method:
+                WriteLine(EmitCallCommand(method.AsFunctionCall()));
+                return;
+
+            case IrAdapterCallExpression adapter:
+                WriteLine(EmitCallCommand(adapter.AsFunctionCall()));
+                return;
+
             case IrAssignmentExpression assignment:
                 if (assignment.Operator == "=" && assignment.Value is IrIntrinsicCallExpression intrinsic &&
                     EmitNativeIntrinsicDeclaration(SanitizeName(assignment.Target.Name), intrinsic))
@@ -1220,6 +1228,10 @@ function __sushi_call_method {
                 EmitIntrinsicValue(intrinsicCall),
             IrCallExpression call =>
                 $"({EmitCallCommand(call)})",
+            IrConstructionExpression construction =>
+                $"({SanitizeName(construction.ConstructorName)} {string.Join(" ", construction.Arguments.Select(argument => EmitValueExpression(argument.Value)))})",
+            IrResolvedMethodCallExpression method => $"({EmitCallCommand(method.AsFunctionCall())})",
+            IrAdapterCallExpression adapter => $"({EmitCallCommand(adapter.AsFunctionCall())})",
             IrMethodCallExpression methodCall =>
                 EmitMethodCallExpression(methodCall),
             IrAssignmentExpression assignment =>
@@ -1240,6 +1252,8 @@ function __sushi_call_method {
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
                 IsDefinitelyInteger(binary.Left) && IsDefinitelyInteger(binary.Right),
             IrCallExpression call => _integerReturningFunctions.Contains(call.Callee),
+            IrResolvedMethodCallExpression method => _integerReturningFunctions.Contains(method.Callee),
+            IrAdapterCallExpression adapter => _integerReturningFunctions.Contains(adapter.Callee),
             _ => false
         };
     }
@@ -1298,7 +1312,7 @@ function __sushi_call_method {
                 "string" => "[string]",
                 "array" => "[object[]]",
                 "object" => "[object]",
-                _ => ""
+                _ => "[object]"
             },
             _ => ""
         };

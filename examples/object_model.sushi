@@ -1,0 +1,73 @@
+class Person {
+    string name
+    int age = 0
+
+    new(string name, int age = 0) {
+        this.name = name
+        this.age = age
+    }
+
+    birthday() {
+        this.age += 1
+    }
+
+    string describe() -> this.name + " is " + this.age
+    Person copy() -> new Person(this.name, this.age)
+    string() -> this.name
+}
+
+enum Priority(int weight) {
+    Low(1),
+    Normal(2),
+    High(3);
+
+    isUrgent() -> this.weight > 2
+    string() -> this.name
+}
+
+enum Result {
+    Ok("completed"),
+    Error("failed");
+
+    new(string message) {
+        this.message = message
+    }
+
+    string() -> this.message
+}
+
+enum ExitCode {
+    Ok = 0,
+    Failed = 1
+}
+
+enum Axis {
+    X { offset: 10 },
+    Y { offset: 20 }
+}
+
+Person identity(Person value) {
+    return value
+}
+
+var person = new Person("Ada", 36)
+person.birthday()
+println(person.describe())
+println(string(person))
+println(Priority.High.name)
+println(Priority.High.weight)
+println(Priority.High.isUrgent())
+println(string(Priority.Normal))
+println(Priority.High == Priority.High)
+println(Priority.Low != Priority.High)
+println(string(Result.Ok))
+println(ExitCode.Failed.value)
+println(Axis.Y.offset)
+var returned = identity(person)
+println(returned.name)
+var alias = person
+alias.birthday()
+println(person.age)
+println(string(new Person("Grace", 1)))
+var copy = person.copy()
+println(copy.describe())
