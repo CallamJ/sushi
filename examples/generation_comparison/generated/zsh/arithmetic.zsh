@@ -8,5 +8,4 @@ double() {
     return 0
 }
 double 21 || { __sushi_status=$?; exit "$__sushi_status"; }
-__sushi_value_1="${__sushi_result-}"
-printf '%s\n' "${__sushi_value_1-}"
+printf '%s\n' "${__sushi_result-}"

@@ -26,6 +26,7 @@ public sealed class BashEmitter : IBackendEmitter
     private Dictionary<string, IrArrayLiteralExpression> _arrayInitializers = new(StringComparer.Ordinal);
     private Dictionary<string, IrFunctionDeclarationStatement> _functions = new(StringComparer.Ordinal);
     private HashSet<string> _integerArrayVariables = new(StringComparer.Ordinal);
+    private bool _captureFunctionResult;
 
     public BashEmitter()
     {
@@ -54,6 +55,7 @@ public sealed class BashEmitter : IBackendEmitter
             .OfType<IrFunctionDeclarationStatement>()
             .ToDictionary(function => function.Name, StringComparer.Ordinal);
         _integerArrayVariables.Clear();
+        _captureFunctionResult = false;
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -2937,6 +2939,18 @@ __sushi_native_obj_to_json() {
                         return;
                     }
 
+                    if (intrinsicCall.Arguments.FirstOrDefault() is IrCallExpression directCall &&
+                        directCall.Arguments.All(argument => argument.Value is IrLiteralExpression or IrIdentifierExpression))
+                    {
+                        _captureFunctionResult = true;
+                        var directValue = PrepareValue(directCall, inFunction);
+                        _captureFunctionResult = false;
+                        WriteLine(intrinsicCall.Id == IntrinsicId.Println
+                            ? $"printf '%s\\n' {directValue}"
+                            : $"printf '%s' {directValue}");
+                        return;
+                    }
+
                     var value = intrinsicCall.Arguments.Count == 0
                         ? "''"
                         : PrepareValue(intrinsicCall.Arguments[0], inFunction);
@@ -3499,6 +3513,10 @@ __sushi_native_obj_to_json() {
                     ? $"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)}"
                     : SanitizeFunctionName(call.Callee);
                 WriteLine($"{command} || {{ __sushi_status=$?; exit \"$__sushi_status\"; }}");
+                if (_captureFunctionResult)
+                {
+                    return "\"${__sushi_result-}\"";
+                }
                 var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
                 if (_integerReturningFunctions.Contains(call.Callee))
                 {
