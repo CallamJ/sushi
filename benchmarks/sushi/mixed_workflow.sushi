@@ -1,7 +1,6 @@
-var payload = std.json.stringify({ hello: "world", n: 1 })
+var user = { hello: "world", n: 1 }
 var run = std.process.run("dotnet", ["--version"], allowFailure: true)
-var parsed = std.json.parse(payload)
-var text = "  " + parsed.hello + "  "
+var text = "  " + user.hello + "  "
 
 var i = 0
 var output = ""

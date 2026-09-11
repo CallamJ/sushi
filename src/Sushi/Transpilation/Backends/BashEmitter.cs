@@ -9,6 +9,7 @@ using Sushi.Transpilation.Intrinsics;
 public sealed class BashEmitter : IBackendEmitter
 {
     private const string UnsupportedEmitCode = "SUSHI1100";
+    private const string AmbiguousShapeCode = "SUSHI1030";
 
     private readonly StringBuilder _builder = new();
     private readonly bool _zshMode;
@@ -20,6 +21,11 @@ public sealed class BashEmitter : IBackendEmitter
     private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
     private HashSet<string> _integerReturningFunctions = new(StringComparer.Ordinal);
     private Dictionary<string, string> _nativeArrayVariables = new(StringComparer.Ordinal);
+    private HashSet<string> _nativeObjectVariables = new(StringComparer.Ordinal);
+    private HashSet<string> _recordVariables = new(StringComparer.Ordinal);
+    private Dictionary<string, IrArrayLiteralExpression> _arrayInitializers = new(StringComparer.Ordinal);
+    private Dictionary<string, IrFunctionDeclarationStatement> _functions = new(StringComparer.Ordinal);
+    private HashSet<string> _integerArrayVariables = new(StringComparer.Ordinal);
 
     public BashEmitter()
     {
@@ -40,6 +46,14 @@ public sealed class BashEmitter : IBackendEmitter
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
         _knownIntegerVariables.Clear();
+        _nativeArrayVariables.Clear();
+        _nativeObjectVariables.Clear();
+        _recordVariables.Clear();
+        _arrayInitializers.Clear();
+        _functions = program.Statements
+            .OfType<IrFunctionDeclarationStatement>()
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        _integerArrayVariables.Clear();
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -52,22 +66,18 @@ public sealed class BashEmitter : IBackendEmitter
         {
             WriteLine("set -eu");
             WriteLine("set -o pipefail");
-            WriteLine("setopt typesetsilent");
-            WriteLine("setopt ksharrays");
+            if (EmissionCapabilityAnalyzer.UsesArrays(program))
+            {
+                WriteLine("setopt ksharrays");
+            }
         }
         else
         {
             WriteLine("set -euo pipefail");
         }
-        WriteLine("__sushi_result=''");
-        WriteLine("__sushi_kind='auto'");
-        WriteLine("");
-        EmitCoreRuntimeHelpers();
-        WriteLine("");
-        if (RuntimeDependencyAnalyzer.RequiresRuntime(program))
+        if (program.Statements.OfType<IrFunctionDeclarationStatement>().Any())
         {
-            EmitRuntimeHelpers();
-            WriteLine("");
+            WriteLine("__sushi_result=''");
         }
 
         foreach (var statement in program.Statements)
@@ -2582,8 +2592,51 @@ __sushi_native_obj_to_json() {
             case IrVariableDeclarationStatement variable:
             {
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);
-                var value = PrepareValue(initializer, inFunction);
                 var name = SanitizeVariableName(variable.Name);
+                if (initializer is IrArrayLiteralExpression array)
+                {
+                    var values = array.Elements.Any(element => element is IrObjectLiteralExpression)
+                        ? new List<string>()
+                        : array.Elements.Select(element => PrepareValue(element, inFunction)).ToList();
+                    WriteLine($"{(inFunction ? "local " : "declare ")}-a {name}=({string.Join(" ", values)})");
+                    _nativeArrayVariables[name] = name;
+                    _arrayInitializers[name] = array;
+                    _nativeObjectVariables.Remove(name);
+                    _recordVariables.Remove(name);
+                    break;
+                }
+
+                if (initializer is IrObjectLiteralExpression obj)
+                {
+                    var entries = _zshMode
+                        ? obj.Properties.SelectMany(property => new[]
+                        {
+                            Escape.BashSingleQuoted(property.Name),
+                            PrepareValue(property.Value, inFunction)
+                        })
+                        : obj.Properties.Select(property =>
+                            $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
+                    WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=({string.Join(" ", entries)})");
+                    _nativeObjectVariables.Add(name);
+                    _nativeArrayVariables.Remove(name);
+                    _arrayInitializers.Remove(name);
+                    _recordVariables.Remove(name);
+                    break;
+                }
+
+                if (initializer is IrIntrinsicCallExpression intrinsic &&
+                    EmitNativeIntrinsicDeclaration(name, intrinsic, inFunction))
+                {
+                    break;
+                }
+
+                if (initializer is IrMethodCallExpression method &&
+                    EmitNativeMethodDeclaration(name, method, inFunction))
+                {
+                    break;
+                }
+
+                var value = PrepareValue(initializer, inFunction);
                 WriteLine($"{(inFunction ? "local " : "")}{name}={value}");
                 SetKnownInteger(name, IsDefinitelyInteger(initializer));
                 SetKnownArray(name, initializer is IrArrayLiteralExpression);
@@ -2653,6 +2706,17 @@ __sushi_native_obj_to_json() {
 
     private void EmitWhileStatement(IrWhileStatement statement, bool inFunction)
     {
+        if (CanEmitDirectLoopCondition(statement.Condition))
+        {
+            var directCondition = PrepareCondition(statement.Condition, inFunction);
+            WriteLine($"while {directCondition}; do");
+            _indent++;
+            EmitStatement(statement.Body, inFunction);
+            _indent--;
+            WriteLine("done");
+            return;
+        }
+
         WriteLine("while true; do");
         _indent++;
         var condition = PrepareCondition(statement.Condition, inFunction);
@@ -2665,6 +2729,19 @@ __sushi_native_obj_to_json() {
         _indent--;
         WriteLine("done");
     }
+
+    private bool CanEmitDirectLoopCondition(IrExpression expression) => expression switch
+    {
+        IrLiteralExpression => true,
+        IrIdentifierExpression => true,
+        IrUnaryExpression { Operator: "!" } unary => CanEmitDirectLoopCondition(unary.Operand),
+        IrBinaryExpression binary when binary.Operator is "<" or ">" or "<=" or ">=" =>
+            CanEmitInlineInteger(binary.Left) && CanEmitInlineInteger(binary.Right),
+        IrBinaryExpression binary when binary.Operator is "==" or "!=" =>
+            binary.Left is IrLiteralExpression or IrIdentifierExpression &&
+            binary.Right is IrLiteralExpression or IrIdentifierExpression,
+        _ => false
+    };
 
     private void EmitForStatement(IrForStatement statement, bool inFunction)
     {
@@ -2719,10 +2796,16 @@ __sushi_native_obj_to_json() {
         var previousReturnType = _currentFunctionReturnType;
         var previousKnownIntegers = _knownIntegerVariables;
         var previousNativeArrays = _nativeArrayVariables;
+        var previousNativeObjects = _nativeObjectVariables;
+        var previousRecords = _recordVariables;
+        var previousIntegerArrays = _integerArrayVariables;
         _currentFunctionName = statement.Name;
         _currentFunctionReturnType = statement.ReturnType;
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
         _nativeArrayVariables = new Dictionary<string, string>(StringComparer.Ordinal);
+        _nativeObjectVariables = new HashSet<string>(StringComparer.Ordinal);
+        _recordVariables = new HashSet<string>(StringComparer.Ordinal);
+        _integerArrayVariables = new HashSet<string>(StringComparer.Ordinal);
 
         var argIndex = 1;
         foreach (var parameter in statement.Parameters)
@@ -2730,46 +2813,38 @@ __sushi_native_obj_to_json() {
             var param = SanitizeVariableName(parameter.Name);
             if (parameter.IsVarargs)
             {
-                var varargsArray = $"__sushi_varargs_{param}";
-                var flatVarargsArray = $"__sushi_flat_varargs_{param}";
-                WriteLine($"local -a {varargsArray}=(\"${{@:{argIndex}}}\")");
-                WriteLine($"local -a {flatVarargsArray}=()");
-                WriteLine("local __sushi_vararg_candidate");
-                WriteLine($"for __sushi_vararg_candidate in \"${{{varargsArray}[@]}}\"; do");
-                _indent++;
-                WriteLine("if __sushi_is_array_handle \"$__sushi_vararg_candidate\"; then");
-                _indent++;
-                WriteLine("local __sushi_vararg_expanded");
-                WriteLine("while IFS= read -r __sushi_vararg_expanded; do");
-                _indent++;
-                WriteLine($"{flatVarargsArray}+=(\"$__sushi_vararg_expanded\")");
-                _indent--;
-                WriteLine("done < <(__sushi_array_each_raw \"$__sushi_vararg_candidate\")");
-                _indent--;
-                WriteLine("elif typeset -f __sushi_is_json_array >/dev/null 2>&1 && __sushi_is_json_array \"$__sushi_vararg_candidate\"; then");
-                _indent++;
-                WriteLine("local __sushi_vararg_expanded");
-                WriteLine("while IFS= read -r __sushi_vararg_expanded; do");
-                _indent++;
-                WriteLine($"{flatVarargsArray}+=(\"$__sushi_vararg_expanded\")");
-                _indent--;
-                WriteLine("done < <(__sushi_json_array_each_raw \"$__sushi_vararg_candidate\")");
-                _indent--;
-                WriteLine("else");
-                _indent++;
-                WriteLine($"{flatVarargsArray}+=(\"$__sushi_vararg_candidate\")");
-                _indent--;
-                WriteLine("fi");
-                _indent--;
-                WriteLine("done");
-                WriteLine($"__sushi_array_new \"${{{flatVarargsArray}[@]}}\"");
-                WriteLine($"local {param}=\"${{__sushi_result-}}\"");
-                _nativeArrayVariables[param] = flatVarargsArray;
-                EmitVarargsContractCheck(parameter, param, statement.Name, flatVarargsArray);
+                WriteLine($"local -a {param}=(\"${{@:{argIndex}}}\")");
+                _nativeArrayVariables[param] = param;
+                if (parameter.DeclaredType.Name == "int") _integerArrayVariables.Add(param);
             }
             else
             {
-                WriteLine($"local {param}=\"${argIndex}\"");
+                if (parameter.DeclaredType.Kind == IrTypeKind.Structural)
+                {
+                    foreach (var field in parameter.DeclaredType.StructuralFields)
+                    {
+                        var fieldName = $"{param}_{SanitizeVariableName(field.Name)}";
+                        var prefix = field.Type.Name == "int" ? "local -i " : "local ";
+                        WriteLine($"{prefix}{fieldName}=\"${argIndex}\"");
+                        argIndex++;
+                    }
+                    _recordVariables.Add(param);
+                    continue;
+                }
+                else if (parameter.DeclaredType.Name is "array" or "object")
+                {
+                    WriteLine($"local -n {param}=\"${argIndex}\"");
+                    if (parameter.DeclaredType.Name == "array") _nativeArrayVariables[param] = param;
+                    else _nativeObjectVariables.Add(param);
+                }
+                else if (parameter.DeclaredType.Name == "int")
+                {
+                    WriteLine($"local -i {param}=\"${argIndex}\"");
+                }
+                else
+                {
+                    WriteLine($"local {param}=\"${argIndex}\"");
+                }
                 argIndex++;
                 EmitContractCheckForValue(
                     parameter.DeclaredType,
@@ -2794,6 +2869,9 @@ __sushi_native_obj_to_json() {
         _currentFunctionReturnType = previousReturnType;
         _knownIntegerVariables = previousKnownIntegers;
         _nativeArrayVariables = previousNativeArrays;
+        _nativeObjectVariables = previousNativeObjects;
+        _recordVariables = previousRecords;
+        _integerArrayVariables = previousIntegerArrays;
         _indent--;
         WriteLine("}");
     }
@@ -2864,10 +2942,6 @@ __sushi_native_obj_to_json() {
                 {
                     var op = unary.Operator == "++" ? "+" : "-";
                     var name = SanitizeVariableName(identifier.Name);
-                    if (!_knownIntegerVariables.Contains(name))
-                    {
-                        WriteLine($"__sushi_validate_integer \"${{{name}:-}}\" {Escape.BashSingleQuoted($"variable '{identifier.Name}'")}");
-                    }
                     WriteLine($"{name}=$(( {name} {op} 1 ))");
                     _knownIntegerVariables.Add(name);
                     return;
@@ -2878,6 +2952,12 @@ __sushi_native_obj_to_json() {
                 if (methodCall.MethodName == "push" && methodCall.Target is IrIdentifierExpression targetIdentifier)
                 {
                     var targetName = SanitizeVariableName(targetIdentifier.Name);
+                    if (_nativeArrayVariables.TryGetValue(targetName, out var nativeArray))
+                    {
+                        var values = methodCall.Arguments.Select(argument => PrepareValue(argument.Value, inFunction));
+                        WriteLine($"{nativeArray}+=({string.Join(" ", values)})");
+                        return;
+                    }
                     var value = PrepareValue(methodCall, inFunction);
                     WriteLine($"{targetName}={value}");
                     return;
@@ -2906,6 +2986,46 @@ __sushi_native_obj_to_json() {
     private void EmitPreparedAssignment(IrAssignmentExpression assignment, bool inFunction)
     {
         var name = SanitizeVariableName(assignment.Target.Name);
+        if (assignment.Operator == "=")
+        {
+            if (assignment.Value is IrArrayLiteralExpression array)
+            {
+                var values = array.Elements.Any(element => element is IrObjectLiteralExpression)
+                    ? new List<string>()
+                    : array.Elements.Select(element => PrepareValue(element, inFunction)).ToList();
+                WriteLine($"{name}=({string.Join(" ", values)})");
+                _nativeArrayVariables[name] = name;
+                _arrayInitializers[name] = array;
+                _nativeObjectVariables.Remove(name);
+                _recordVariables.Remove(name);
+                return;
+            }
+
+            if (assignment.Value is IrObjectLiteralExpression obj)
+            {
+                var entries = _zshMode
+                    ? obj.Properties.SelectMany(property => new[]
+                    {
+                        Escape.BashSingleQuoted(property.Name),
+                        PrepareValue(property.Value, inFunction)
+                    })
+                    : obj.Properties.Select(property =>
+                        $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
+                WriteLine($"{name}=({string.Join(" ", entries)})");
+                _nativeObjectVariables.Add(name);
+                _nativeArrayVariables.Remove(name);
+                _arrayInitializers.Remove(name);
+                _recordVariables.Remove(name);
+                return;
+            }
+
+            if (assignment.Value is IrIntrinsicCallExpression intrinsic &&
+                EmitNativeIntrinsicDeclaration(name, intrinsic, inFunction))
+            {
+                return;
+            }
+        }
+
         var value = PrepareValue(assignment.Value, inFunction);
         if (assignment.Operator == "=")
         {
@@ -2916,17 +3036,277 @@ __sushi_native_obj_to_json() {
         }
 
         var right = DeclareTemp(value, inFunction);
-        if (!_knownIntegerVariables.Contains(name))
-        {
-            WriteLine($"__sushi_validate_integer \"${{{name}:-}}\" {Escape.BashSingleQuoted($"variable '{assignment.Target.Name}'")}");
-        }
-        if (!IsDefinitelyInteger(assignment.Value))
-        {
-            WriteLine($"__sushi_validate_integer \"${{{right}:-}}\" 'arithmetic operand'");
-        }
-
         WriteLine($"{name}=$(( {name} {assignment.Operator[0]} {right} ))");
         _knownIntegerVariables.Add(name);
+    }
+
+    private bool EmitNativeIntrinsicDeclaration(
+        string name,
+        IrIntrinsicCallExpression intrinsic,
+        bool inFunction)
+    {
+        var declaration = inFunction ? "local " : "";
+        var arrayDeclaration = inFunction ? "local " : "declare ";
+        switch (intrinsic.Id)
+        {
+            case IntrinsicId.FsGlob:
+            {
+                var pattern = PrepareValue(intrinsic.Arguments[0], inFunction);
+                var cwd = intrinsic.Arguments.Count > 1 ? intrinsic.Arguments[1] : new IrLiteralExpression(null);
+                if (cwd is IrLiteralExpression { Value: null })
+                {
+                    if (_zshMode)
+                    {
+                        WriteLine($"{declaration}{name}_pattern={pattern}");
+                        WriteLine($"{arrayDeclaration}-a {name}=(${{~{name}_pattern}}(N))");
+                    }
+                    else
+                    {
+                        WriteLine($"{arrayDeclaration}-a {name}=()");
+                        WriteLine($"mapfile -t {name} < <(compgen -G {pattern} || true)");
+                    }
+                }
+                else
+                {
+                    var root = PrepareValue(cwd, inFunction);
+                    WriteLine($"{arrayDeclaration}-a {name}=()");
+                    WriteLine($"while IFS= read -r __sushi_path; do {name}+=(\"$__sushi_path\"); done < <(cd -- {root} && compgen -G {pattern} || true)");
+                }
+                _nativeArrayVariables[name] = name;
+                _arrayInitializers.Remove(name);
+                return true;
+            }
+
+            case IntrinsicId.ProcessArgs:
+                WriteLine($"{arrayDeclaration}-a {name}=(\"$@\")");
+                _nativeArrayVariables[name] = name;
+                _arrayInitializers.Remove(name);
+                return true;
+
+            case IntrinsicId.StringMatch:
+            {
+                var value = PrepareValue(intrinsic.Arguments[0], inFunction);
+                var pattern = PrepareRegex(intrinsic.Arguments[1], inFunction);
+                WriteLine($"{declaration}{name}_ok='false'");
+                WriteLine($"{declaration}{name}_value=''");
+                WriteLine($"{declaration}{name}_index=-1");
+                WriteLine($"{arrayDeclaration}-a {name}_groups=()");
+                WriteLine($"if [[ {value} =~ {pattern} ]]; then");
+                _indent++;
+                WriteLine($"{name}_ok='true'");
+                WriteLine($"{name}_value=\"${{BASH_REMATCH[0]-}}\"");
+                WriteLine($"{name}_groups=(\"${{BASH_REMATCH[@]}}\")");
+                _indent--;
+                WriteLine("fi");
+                _recordVariables.Add(name);
+                return true;
+            }
+
+            case IntrinsicId.StringSplit:
+            {
+                var value = PrepareValue(intrinsic.Arguments[0], inFunction);
+                var separator = PrepareValue(intrinsic.Arguments[1], inFunction);
+                WriteLine($"{arrayDeclaration}-a {name}=()");
+                if (_zshMode)
+                {
+                    WriteLine($"{name}=(${{(s:{separator}:)${{:-{value}}}}})");
+                }
+                else
+                {
+                    WriteLine($"IFS={separator} read -r -a {name} <<< {value}");
+                }
+                _nativeArrayVariables[name] = name;
+                return true;
+            }
+
+            case IntrinsicId.ProcessRun:
+                EmitNativeProcessRun(name, intrinsic.Arguments, inFunction);
+                _recordVariables.Add(name);
+                return true;
+
+            case IntrinsicId.ProcessPipeline:
+                EmitNativeProcessPipeline(name, intrinsic.Arguments, inFunction);
+                _recordVariables.Add(name);
+                return true;
+
+            case IntrinsicId.HttpGet:
+            case IntrinsicId.HttpPost:
+                EmitNativeHttp(name, intrinsic, inFunction);
+                _recordVariables.Add(name);
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private bool EmitNativeMethodDeclaration(string name, IrMethodCallExpression method, bool inFunction)
+    {
+        if (method.Target is not IrIdentifierExpression identifier ||
+            !_nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var source))
+        {
+            return false;
+        }
+        var declaration = inFunction ? "local " : "declare ";
+        switch (method.MethodName)
+        {
+            case "push":
+                WriteLine($"{declaration}-a {name}=(\"${{{source}[@]}}\" {string.Join(" ", method.Arguments.Select(a => PrepareValue(a.Value, inFunction)))})");
+                _nativeArrayVariables[name] = name;
+                return true;
+            case "map" when method.Arguments.Count == 1:
+            case "filter" when method.Arguments.Count == 1:
+            {
+                var callback = PrepareValue(method.Arguments[0].Value, inFunction);
+                WriteLine($"{declaration}-a {name}=()");
+                WriteLine($"for __sushi_item in \"${{{source}[@]}}\"; do");
+                _indent++;
+                WriteLine($"{callback} \"$__sushi_item\"");
+                if (method.MethodName == "map")
+                {
+                    WriteLine($"{name}+=(\"${{__sushi_result-}}\")");
+                }
+                else
+                {
+                    WriteLine($"[[ -n \"${{__sushi_result-}}\" && \"${{__sushi_result-}}\" != false ]] && {name}+=(\"$__sushi_item\")");
+                }
+                _indent--;
+                WriteLine("done");
+                _nativeArrayVariables[name] = name;
+                return true;
+            }
+            case "reduce" when method.Arguments.Count >= 1:
+            {
+                var callback = PrepareValue(method.Arguments[0].Value, inFunction);
+                var seed = method.Arguments.Count > 1 ? PrepareValue(method.Arguments[1].Value, inFunction) : $"\"${{{source}[0]-}}\"";
+                var start = method.Arguments.Count > 1 ? 0 : 1;
+                WriteLine($"{declaration}{name}={seed}");
+                WriteLine($"for ((__sushi_i={start}; __sushi_i<${{#{source}[@]}}; __sushi_i++)); do");
+                _indent++;
+                WriteLine($"{callback} \"${{{name}-}}\" \"${{{source}[__sushi_i]}}\"");
+                WriteLine($"{name}=\"${{__sushi_result-}}\"");
+                _indent--;
+                WriteLine("done");
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
+    private string PrepareRegex(IrExpression expression, bool inFunction)
+    {
+        if (expression is IrLiteralExpression { Value: string pattern })
+        {
+            return Escape.BashSingleQuoted(pattern
+                .Replace("\\d", "[0-9]", StringComparison.Ordinal)
+                .Replace("\\s", "[[:space:]]", StringComparison.Ordinal)
+                .Replace("\\w", "[[:alnum:]_]", StringComparison.Ordinal));
+        }
+        return PrepareValue(expression, inFunction);
+    }
+
+    private void EmitNativeProcessRun(string name, IReadOnlyList<IrExpression> arguments, bool inFunction)
+    {
+        var declaration = inFunction ? "local " : "";
+        var command = PrepareValue(arguments[0], inFunction);
+        var commandParts = new List<string> { command };
+        if (arguments.Count > 1 && arguments[1] is IrArrayLiteralExpression args)
+        {
+            commandParts.AddRange(args.Elements.Select(arg => PrepareValue(arg, inFunction)));
+        }
+        else if (arguments.Count > 1 && arguments[1] is IrIdentifierExpression argsIdentifier &&
+                 _nativeArrayVariables.TryGetValue(SanitizeVariableName(argsIdentifier.Name), out var argsName))
+        {
+            commandParts.Add($"\"${{{argsName}[@]}}\"");
+        }
+
+        var invocation = string.Join(" ", commandParts);
+        if (arguments.Count > 5 && arguments[5] is IrLiteralExpression { Value: int timeoutMs } && timeoutMs > 0)
+        {
+            invocation = $"timeout {Escape.BashSingleQuoted((timeoutMs / 1000d).ToString("0.###", CultureInfo.InvariantCulture) + "s")} {invocation}";
+        }
+        if (arguments.Count > 2 && arguments[2] is not IrLiteralExpression { Value: null })
+        {
+            invocation = $"(cd -- {PrepareValue(arguments[2], inFunction)} && {invocation})";
+        }
+        if (arguments.Count > 4 && arguments[4] is not IrLiteralExpression { Value: null })
+        {
+            invocation += $" <<< {PrepareValue(arguments[4], inFunction)}";
+        }
+
+        WriteLine($"{declaration}{name}_stderr_file=$(mktemp)");
+        WriteLine($"if {name}_stdout=$({invocation} 2>\"${{{name}_stderr_file}}\"); then {name}_code=0; else {name}_code=$?; fi");
+        WriteLine($"{declaration}{name}_stderr=$(<\"${{{name}_stderr_file}}\")");
+        WriteLine($"rm -f -- \"${{{name}_stderr_file}}\"");
+        WriteLine($"{declaration}{name}_ok=$([[ ${{{name}_code}} -eq 0 ]] && printf true || printf false)");
+        WriteLine($"{declaration}{name}_command={command}");
+        WriteLine($"{declaration}{name}_timedOut=$([[ ${{{name}_code}} -eq 124 ]] && printf true || printf false)");
+        if (arguments.Count <= 6 || arguments[6] is not IrLiteralExpression { Value: true })
+        {
+            WriteLine($"(( {name}_code == 0 )) || exit \"${{{name}_code}}\"");
+        }
+    }
+
+    private void EmitNativeProcessPipeline(string name, IReadOnlyList<IrExpression> arguments, bool inFunction)
+    {
+        var stagesExpression = arguments[0];
+        IrArrayLiteralExpression? stages = stagesExpression as IrArrayLiteralExpression;
+        if (stages == null && stagesExpression is IrIdentifierExpression identifier)
+        {
+            _arrayInitializers.TryGetValue(SanitizeVariableName(identifier.Name), out stages);
+        }
+        if (stages == null)
+        {
+            _context.Error(AmbiguousShapeCode, "Process pipeline stages must have a statically known array shape");
+            return;
+        }
+
+        var commands = new List<string>();
+        foreach (var stage in stages.Elements.OfType<IrObjectLiteralExpression>())
+        {
+            var commandProperty = stage.Properties.FirstOrDefault(property => property.Name == "command");
+            var argsProperty = stage.Properties.FirstOrDefault(property => property.Name == "args");
+            if (commandProperty == null) continue;
+            var parts = new List<string> { PrepareValue(commandProperty.Value, inFunction) };
+            if (argsProperty?.Value is IrArrayLiteralExpression stageArgs)
+            {
+                parts.AddRange(stageArgs.Elements.Select(arg => PrepareValue(arg, inFunction)));
+            }
+            commands.Add(string.Join(" ", parts));
+        }
+        var invocation = string.Join(" | ", commands);
+        var declaration = inFunction ? "local " : "";
+        WriteLine($"{declaration}{name}_stderr_file=$(mktemp)");
+        WriteLine($"if {name}_stdout=$({invocation} 2>\"${{{name}_stderr_file}}\"); then {name}_code=0; else {name}_code=$?; fi");
+        WriteLine($"{declaration}{name}_stderr=$(<\"${{{name}_stderr_file}}\")");
+        WriteLine($"rm -f -- \"${{{name}_stderr_file}}\"");
+        WriteLine($"{declaration}{name}_ok=$([[ ${{{name}_code}} -eq 0 ]] && printf true || printf false)");
+        WriteLine($"{declaration}{name}_command='pipeline'");
+        WriteLine($"{declaration}{name}_timedOut='false'");
+        if (arguments.Count <= 5 || arguments[5] is not IrLiteralExpression { Value: true })
+        {
+            WriteLine($"(( {name}_code == 0 )) || exit \"${{{name}_code}}\"");
+        }
+    }
+
+    private void EmitNativeHttp(string name, IrIntrinsicCallExpression intrinsic, bool inFunction)
+    {
+        var declaration = inFunction ? "local " : "";
+        var url = PrepareValue(intrinsic.Arguments[0], inFunction);
+        var method = intrinsic.Id == IntrinsicId.HttpPost ? "POST" : "GET";
+        WriteLine($"{declaration}{name}_body_file=$(mktemp)");
+        var curl = $"curl -sS -o \"${{{name}_body_file}}\" -w '%{{http_code}}' -X {method}";
+        if (intrinsic.Id == IntrinsicId.HttpPost)
+        {
+            curl += $" -H 'Content-Type: '" + PrepareValue(intrinsic.Arguments[3], inFunction) + $" --data {PrepareValue(intrinsic.Arguments[1], inFunction)}";
+        }
+        WriteLine($"if {name}_status=$({curl} {url}); then {name}_transport_ok=true; else {name}_transport_ok=false; {name}_status=0; fi");
+        WriteLine($"{declaration}{name}_body=$(<\"${{{name}_body_file}}\")");
+        WriteLine($"rm -f -- \"${{{name}_body_file}}\"");
+        WriteLine($"{declaration}{name}_ok=$([[ ${{{name}_transport_ok}} == true && ${{{name}_status}} -ge 200 && ${{{name}_status}} -lt 300 ]] && printf true || printf false)");
+        WriteLine($"{declaration}{name}_url={url}");
+        WriteLine($"{declaration}{name}_headers=''");
     }
 
     private string PrepareValue(IrExpression expression, bool inFunction)
@@ -2975,29 +3355,45 @@ __sushi_native_obj_to_json() {
 
             case IrMemberAccessExpression member:
             {
-                var target = DeclareTemp(PrepareValue(member.Target, inFunction), inFunction);
-                var result = DeclareTemp("''", inFunction);
-                WriteLine($"if [[ \"${{{target}-}}\" == @o:__sushi_object_* ]]; then");
-                _indent++;
-                WriteLine($"__sushi_native_obj_get_into \"${{{target}-}}\" {Escape.BashSingleQuoted(member.MemberName)}");
-                WriteLine($"{result}=\"${{__sushi_result-}}\"");
-                _indent--;
-                WriteLine("else");
-                _indent++;
-                WriteLine($"{result}=\"$(__sushi_json_member \"${{{target}-}}\" {Escape.BashSingleQuoted(member.MemberName)})\"");
-                _indent--;
-                WriteLine("fi");
-                return $"\"${{{result}-}}\"";
+                if (member.Target is IrIntrinsicCallExpression recordIntrinsic)
+                {
+                    var recordName = $"__sushi_record_{++_valueTempId}";
+                    if (EmitNativeIntrinsicDeclaration(recordName, recordIntrinsic, inFunction))
+                    {
+                        return $"\"${{{recordName}_{SanitizeVariableName(member.MemberName)}-}}\"";
+                    }
+                }
+                if (member.Target is IrIdentifierExpression directIdentifier)
+                {
+                    var directName = SanitizeVariableName(directIdentifier.Name);
+                    if (_nativeObjectVariables.Contains(directName))
+                    {
+                        return $"\"${{{directName}[{EmitObjectSubscript(member.MemberName)}]-}}\"";
+                    }
+                    if (_recordVariables.Contains(directName))
+                    {
+                        return $"\"${{{directName}_{SanitizeVariableName(member.MemberName)}-}}\"";
+                    }
+                }
+
+                _context.Error(AmbiguousShapeCode, $"Member '{member.MemberName}' requires a statically known object shape");
+                return "''";
             }
 
             case IrIndexExpression index when index.Target is IrIdentifierExpression identifier &&
                                              _nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var arrayName):
             {
-                var indexValue = DeclareTemp(PrepareValue(index.Index, inFunction), inFunction);
-                if (!IsDefinitelyInteger(index.Index))
+                if (arrayName.Length > 0 && IsDefinitelyInteger(index.Index))
                 {
-                    WriteLine($"__sushi_validate_integer \"${{{indexValue}:-}}\" 'array index'");
+                    var directIndex = index.Index switch
+                    {
+                        IrIdentifierExpression indexIdentifier => SanitizeVariableName(indexIdentifier.Name),
+                        IrLiteralExpression literal => Convert.ToString(literal.Value, CultureInfo.InvariantCulture) ?? "0",
+                        _ => EmitArithmeticExpression(index.Index)
+                    };
+                    return $"\"${{{arrayName}[{directIndex}]-}}\"";
                 }
+                var indexValue = DeclareTemp(PrepareValue(index.Index, inFunction), inFunction);
                 if (arrayName.Length > 0)
                 {
                     WriteLine($"if (( {indexValue} < 0 )); then {indexValue}=$(( ${{#{arrayName}[@]}} + {indexValue} )); fi");
@@ -3005,11 +3401,13 @@ __sushi_native_obj_to_json() {
                     return $"\"${{{directResult}-}}\"";
                 }
 
-                var targetName = SanitizeVariableName(identifier.Name);
-                WriteLine($"__sushi_array_get_into \"${{{targetName}-}}\" \"${{{indexValue}-}}\"");
-                var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
-                return $"\"${{{result}-}}\"";
+                _context.Error(AmbiguousShapeCode, "Array index requires native array storage");
+                return "''";
             }
+
+            case IrIndexExpression:
+                _context.Error(AmbiguousShapeCode, "Indexing requires a statically known native array or object shape");
+                return "''";
 
             case IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%":
                 return PrepareArithmetic(binary, inFunction);
@@ -3018,16 +3416,49 @@ __sushi_native_obj_to_json() {
             {
                 var operand = PrepareValue(unary.Operand, inFunction);
                 var operandTemp = DeclareTemp(operand, inFunction);
-                if (!IsDefinitelyInteger(unary.Operand))
-                {
-                    WriteLine($"__sushi_validate_integer \"${{{operandTemp}:-}}\" 'arithmetic operand'");
-                }
                 return $"$(( {unary.Operator}{operandTemp} ))";
             }
 
             case IrCallExpression call when !call.Callee.StartsWith("__sushi_", StringComparison.Ordinal):
             {
-                var arguments = call.Arguments.Select(argument => PrepareValue(argument.Value, inFunction)).ToList();
+                var arguments = new List<string>();
+                _functions.TryGetValue(call.Callee, out var function);
+                for (var index = 0; index < call.Arguments.Count; index++)
+                {
+                    var argument = call.Arguments[index].Value;
+                    var parameter = function != null && index < function.Parameters.Count
+                        ? function.Parameters[index]
+                        : null;
+                    if (argument is IrObjectLiteralExpression objectLiteral &&
+                        parameter?.DeclaredType.Kind == IrTypeKind.Structural)
+                    {
+                        foreach (var field in parameter.DeclaredType.StructuralFields)
+                        {
+                            var property = objectLiteral.Properties.FirstOrDefault(item => item.Name == field.Name);
+                            arguments.Add(property == null ? "''" : PrepareValue(property.Value, inFunction));
+                        }
+                    }
+                    else if (argument is IrIdentifierExpression aggregateIdentifier &&
+                             parameter?.DeclaredType.Kind == IrTypeKind.Structural)
+                    {
+                        var aggregateName = SanitizeVariableName(aggregateIdentifier.Name);
+                        foreach (var field in parameter.DeclaredType.StructuralFields)
+                        {
+                            arguments.Add(_nativeObjectVariables.Contains(aggregateName)
+                                ? $"\"${{{aggregateName}[{EmitObjectSubscript(field.Name)}]-}}\""
+                                : $"\"${{{aggregateName}_{SanitizeVariableName(field.Name)}-}}\"");
+                        }
+                    }
+                    else if (argument is IrIdentifierExpression aggregateIdentifier2 &&
+                             parameter != null && parameter.DeclaredType.Name is "array" or "object")
+                    {
+                        arguments.Add(Escape.BashSingleQuoted(SanitizeVariableName(aggregateIdentifier2.Name)));
+                    }
+                    else
+                    {
+                        arguments.Add(PrepareValue(argument, inFunction));
+                    }
+                }
                 var command = arguments.Count > 0
                     ? $"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)}"
                     : SanitizeFunctionName(call.Callee);
@@ -3049,11 +3480,23 @@ __sushi_native_obj_to_json() {
             case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.ProcessPipeline:
                 return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_process_pipeline_into", 7);
 
-            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.JsonParse:
-                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_json_parse_into", 1);
-
-            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.JsonStringify:
-                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_json_stringify_into", 2);
+            case IrIntrinsicCallExpression intrinsic when intrinsic.Id is IntrinsicId.IoWriteText or IntrinsicId.EnvSet or IntrinsicId.ProcessExit or IntrinsicId.OsChdir:
+            {
+                var command = intrinsic.Id switch
+                {
+                    IntrinsicId.IoWriteText => EmitIoWriteText(
+                        PrepareValue(intrinsic.Arguments[0], inFunction),
+                        PrepareValue(intrinsic.Arguments[1], inFunction),
+                        PrepareValue(intrinsic.Arguments[2], inFunction)),
+                    IntrinsicId.EnvSet => EmitEnvSet(
+                        PrepareValue(intrinsic.Arguments[0], inFunction),
+                        PrepareValue(intrinsic.Arguments[1], inFunction)),
+                    IntrinsicId.ProcessExit => $"exit {PrepareValue(intrinsic.Arguments[0], inFunction)}",
+                    _ => $"cd -- {PrepareValue(intrinsic.Arguments[0], inFunction)}"
+                };
+                WriteLine(command);
+                return "''";
+            }
 
             case IrIntrinsicCallExpression intrinsic when IsInlineStringIntrinsic(intrinsic.Id):
                 return PrepareStringIntrinsic(intrinsic, inFunction);
@@ -3079,6 +3522,20 @@ __sushi_native_obj_to_json() {
             default:
                 return CaptureValue(EmitValueExpression(expression), inFunction);
         }
+    }
+
+    private void EmitNativeObject(string name, IrObjectLiteralExpression obj, bool inFunction)
+    {
+        var entries = _zshMode
+            ? obj.Properties.SelectMany(property => new[]
+            {
+                Escape.BashSingleQuoted(property.Name),
+                PrepareValue(property.Value, inFunction)
+            })
+            : obj.Properties.Select(property =>
+                $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
+        WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=({string.Join(" ", entries)})");
+        _nativeObjectVariables.Add(name);
     }
 
     private string PrepareIntrinsicInto(
@@ -3116,6 +3573,11 @@ __sushi_native_obj_to_json() {
 
     private string PrepareArithmetic(IrBinaryExpression binary, bool inFunction)
     {
+        if (binary.Operator == "+" && ContainsStringLiteral(binary) && TryEmitInlineString(binary, out var inlineString))
+        {
+            return $"\"{inlineString}\"";
+        }
+
         if (CanEmitInlineInteger(binary))
         {
             return $"$(( {EmitInlineInteger(binary)} ))";
@@ -3129,30 +3591,81 @@ __sushi_native_obj_to_json() {
 
         if (binary.Operator == "+" && !IsDefinitelyInteger(binary))
         {
-            WriteLine($"if __sushi_j_is_integer \"${{{left}-}}\" && __sushi_j_is_integer \"${{{right}-}}\"; then");
-            _indent++;
-            WriteLine($"{result}=$(( {left} + {right} ))");
-            _indent--;
-            WriteLine("else");
-            _indent++;
             WriteLine($"{result}=\"${{{left}-}}${{{right}-}}\"");
-            _indent--;
-            WriteLine("fi");
             return $"\"${{{result}-}}\"";
-        }
-
-        if (!IsDefinitelyInteger(binary.Left))
-        {
-            WriteLine($"__sushi_validate_integer \"${{{left}:-}}\" 'arithmetic operand'");
-        }
-        if (!IsDefinitelyInteger(binary.Right))
-        {
-            WriteLine($"__sushi_validate_integer \"${{{right}:-}}\" 'arithmetic operand'");
         }
         WriteLine($"{result}=$(( {left} {binary.Operator} {right} ))");
         _knownIntegerVariables.Add(result);
         return $"\"${{{result}-}}\"";
     }
+
+    private bool TryEmitInlineString(IrExpression expression, out string value)
+    {
+        switch (expression)
+        {
+            case IrLiteralExpression { Value: string text }:
+                value = EscapeBashDoubleQuotedContent(text);
+                return true;
+            case IrLiteralExpression { Value: char character }:
+                value = EscapeBashDoubleQuotedContent(character.ToString());
+                return true;
+            case IrIdentifierExpression identifier:
+                value = $"${{{SanitizeVariableName(identifier.Name)}:-}}";
+                return true;
+            case IrMemberAccessExpression { Target: IrIdentifierExpression target } member:
+            {
+                var targetName = SanitizeVariableName(target.Name);
+                if (_nativeObjectVariables.Contains(targetName))
+                {
+                    value = $"${{{targetName}[{EmitObjectSubscript(member.MemberName)}]-}}";
+                    return true;
+                }
+                if (_recordVariables.Contains(targetName))
+                {
+                    value = $"${{{targetName}_{SanitizeVariableName(member.MemberName)}-}}";
+                    return true;
+                }
+                break;
+            }
+            case IrIndexExpression { Target: IrIdentifierExpression target, Index: IrLiteralExpression { Value: int index } }:
+            {
+                var targetName = SanitizeVariableName(target.Name);
+                if (_nativeArrayVariables.ContainsKey(targetName))
+                {
+                    value = $"${{{targetName}[{index}]-}}";
+                    return true;
+                }
+                break;
+            }
+            case IrBinaryExpression { Operator: "+" } binary:
+                if (TryEmitInlineString(binary.Left, out var left) && TryEmitInlineString(binary.Right, out var right))
+                {
+                    value = left + right;
+                    return true;
+                }
+                break;
+        }
+
+        value = "";
+        return false;
+    }
+
+    private static bool ContainsStringLiteral(IrExpression expression) => expression switch
+    {
+        IrLiteralExpression { Value: string or char } => true,
+        IrBinaryExpression { Operator: "+" } binary =>
+            ContainsStringLiteral(binary.Left) || ContainsStringLiteral(binary.Right),
+        _ => false
+    };
+
+    private static string EscapeBashDoubleQuotedContent(string value) => value
+        .Replace("\\", "\\\\", StringComparison.Ordinal)
+        .Replace("\"", "\\\"", StringComparison.Ordinal)
+        .Replace("$", "\\$", StringComparison.Ordinal)
+        .Replace("`", "\\`", StringComparison.Ordinal);
+
+    private string EmitObjectSubscript(string memberName) =>
+        _zshMode ? memberName : Escape.BashSingleQuoted(memberName);
 
     private string PrepareCondition(IrExpression expression, bool inFunction)
     {
@@ -3201,8 +3714,29 @@ __sushi_native_obj_to_json() {
             return $"(( {left} {relational.Operator} {right} ))";
         }
 
+        if (expression is IrIdentifierExpression identifier)
+        {
+            var name = SanitizeVariableName(identifier.Name);
+            return _knownIntegerVariables.Contains(name)
+                ? $"(( {name} != 0 ))"
+                : $"[[ -n \"${{{name}:-}}\" ]]";
+        }
+
+        if (expression is IrLiteralExpression literal)
+        {
+            return literal.Value switch
+            {
+                null => "false",
+                bool boolean => boolean ? "true" : "false",
+                sbyte or byte or short or ushort or int or uint or long or ulong =>
+                    Convert.ToInt64(literal.Value, CultureInfo.InvariantCulture) == 0 ? "false" : "true",
+                string text => text.Length == 0 ? "false" : "true",
+                _ => "true"
+            };
+        }
+
         var value = PrepareValue(expression, inFunction);
-        return $"__sushi_truthy {value}";
+        return $"[[ -n {value} ]]";
     }
 
     private string PrepareStringIntrinsic(IrIntrinsicCallExpression call, bool inFunction)
@@ -3217,8 +3751,6 @@ __sushi_native_obj_to_json() {
         chain.Reverse();
 
         var result = DeclareTemp(PrepareValue(receiverExpression, inFunction), inFunction);
-        WriteLine($"__sushi_validate_string_receiver \"${{{result}-}}\" {Escape.BashSingleQuoted(chain[0].CanonicalName)}");
-
         foreach (var operation in chain)
         {
             switch (operation.Id)
@@ -3256,10 +3788,8 @@ __sushi_native_obj_to_json() {
                 }
                 case IntrinsicId.StringIsMatch:
                 {
-                    var pattern = DeclareTemp(PrepareValue(operation.Arguments[1], inFunction), inFunction);
-                    WriteLine($"__sushi_regex_to_ere_into \"${{{pattern}-}}\"");
-                    WriteLine($"{pattern}=\"${{__sushi_result-}}\"");
-                    WriteLine($"if [[ \"${{{result}-}}\" =~ ${{{pattern}}} ]]; then {result}='true'; else {result}='false'; fi");
+                    var pattern = PrepareRegex(operation.Arguments[1], inFunction);
+                    WriteLine($"if [[ \"${{{result}-}}\" =~ {pattern} ]]; then {result}='true'; else {result}='false'; fi");
                     break;
                 }
             }
@@ -3288,6 +3818,8 @@ __sushi_native_obj_to_json() {
         {
             IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
             IrIdentifierExpression identifier => _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
+            IrIndexExpression { Target: IrIdentifierExpression identifier } =>
+                _integerArrayVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
                 IsDefinitelyInteger(binary.Left) && IsDefinitelyInteger(binary.Right),
@@ -3504,35 +4036,8 @@ __sushi_native_obj_to_json() {
 
     private void EmitContractCheckForValue(IrTypeRef type, string valueExpression, string context)
     {
-        if (type.IsAnyOrUnknown)
-        {
-            return;
-        }
-
-        var contextLiteral = Escape.BashSingleQuoted(context);
-        if (type.Kind == IrTypeKind.Structural)
-        {
-            var structuralSpec = Escape.BashSingleQuoted(EncodeStructuralSpec(type));
-            WriteLine($"__sushi_struct_check {valueExpression} {structuralSpec} {contextLiteral} || exit 2");
-            return;
-        }
-
-        if (type.Kind == IrTypeKind.Primitive &&
-            type.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            WriteLine($"__sushi_validate_integer {valueExpression} {contextLiteral}");
-            return;
-        }
-
-        if (type.Kind == IrTypeKind.Primitive &&
-            type.Name?.Equals("bool", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            WriteLine($"if [[ {valueExpression} != 'true' && {valueExpression} != 'false' ]]; then printf 'Type contract violation: %s expected bool\\n' {contextLiteral} >&2; exit 2; fi");
-            return;
-        }
-
-        var typeLiteral = Escape.BashSingleQuoted(EncodeRuntimeType(type));
-        WriteLine($"__sushi_type_check {valueExpression} {typeLiteral} {contextLiteral} || exit 2");
+        // Type errors that can be proven statically are reported by lowering.
+        // Bash and Zsh otherwise use their native value model.
     }
 
     private static string EncodeRuntimeType(IrTypeRef type)
@@ -3654,8 +4159,6 @@ __sushi_native_obj_to_json() {
             IntrinsicId.ProcessPipeline => $"{EmitProcessPipelineInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.ProcessFail => $"{EmitProcessFailInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.ProcessRequireSuccess => $"{EmitProcessRequireSuccessInvocation(call.Arguments)} >/dev/null",
-            IntrinsicId.JsonParse => $"{EmitJsonParseInvocation(call.Arguments)} >/dev/null",
-            IntrinsicId.JsonStringify => $"{EmitJsonStringifyInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.FsGlob => $"{EmitFsGlobInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.HttpGet => $"{EmitHttpGetInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.HttpPost => $"{EmitHttpPostInvocation(call.Arguments)} >/dev/null",
@@ -3695,8 +4198,6 @@ __sushi_native_obj_to_json() {
             IntrinsicId.ProcessPipeline => $"\"$({EmitProcessPipelineInvocation(call.Arguments)})\"",
             IntrinsicId.ProcessFail => $"\"$({EmitProcessFailInvocation(call.Arguments)})\"",
             IntrinsicId.ProcessRequireSuccess => $"\"$({EmitProcessRequireSuccessInvocation(call.Arguments)})\"",
-            IntrinsicId.JsonParse => $"\"$({EmitJsonParseInvocation(call.Arguments)})\"",
-            IntrinsicId.JsonStringify => $"\"$({EmitJsonStringifyInvocation(call.Arguments)})\"",
             IntrinsicId.FsGlob => $"\"$({EmitFsGlobInvocation(call.Arguments)})\"",
             IntrinsicId.HttpGet => $"\"$({EmitHttpGetInvocation(call.Arguments)})\"",
             IntrinsicId.HttpPost => $"\"$({EmitHttpPostInvocation(call.Arguments)})\"",
@@ -3767,6 +4268,11 @@ __sushi_native_obj_to_json() {
         var path = Arg(arguments, 0);
         var text = Arg(arguments, 1);
         var append = Arg(arguments, 2);
+        return EmitIoWriteText(path, text, append);
+    }
+
+    private static string EmitIoWriteText(string path, string text, string append)
+    {
         return "__sushi_path=$(printf '%s' " + path + "); " +
                "__sushi_dir=$(dirname -- \"$__sushi_path\"); " +
                "if [[ \"$__sushi_dir\" != \".\" && ! -d \"$__sushi_dir\" ]]; then mkdir -p -- \"$__sushi_dir\"; fi; " +
@@ -3777,6 +4283,11 @@ __sushi_native_obj_to_json() {
     {
         var name = Arg(arguments, 0);
         var value = Arg(arguments, 1);
+        return EmitEnvSet(name, value);
+    }
+
+    private static string EmitEnvSet(string name, string value)
+    {
         return $"__sushi_env_name=$(printf '%s' {name}); __sushi_env_value=$(printf '%s' {value}); export \"$__sushi_env_name=$__sushi_env_value\"";
     }
 
@@ -3845,16 +4356,6 @@ __sushi_native_obj_to_json() {
     private string EmitProcessRequireSuccessInvocation(IReadOnlyList<IrExpression> arguments)
     {
         return $"__sushi_process_require_success {Arg(arguments, 0)}";
-    }
-
-    private string EmitJsonParseInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"__sushi_json_parse {Arg(arguments, 0)}";
-    }
-
-    private string EmitJsonStringifyInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"__sushi_json_stringify {Arg(arguments, 0)} {Arg(arguments, 1)}";
     }
 
     private string EmitFsGlobInvocation(IReadOnlyList<IrExpression> arguments)

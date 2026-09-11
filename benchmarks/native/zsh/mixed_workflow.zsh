@@ -1,10 +1,10 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-payload='{"hello":"world","n":1}'
+typeset -A user=(hello world n 1)
 dotnet --version >/dev/null 2>&1
 run_code="$?"
-text="  world  "
+text="  ${user[hello]}  "
 
 i=0
 output=""

@@ -17,15 +17,15 @@ Default target selection:
 
 ### 1.2 For running Bash output (`-t Bash`)
 
-- Bash 4.3+ (`local -n` namerefs are used by native array storage)
+- Bash 4.0+ (native indexed and associative arrays)
 - `curl`
-- standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`, `find`)
+- standard POSIX tools emitted for requested features (`mktemp`, `cat`, `find`, `timeout`)
 
 ### 1.3 For running Zsh output (`-t Zsh`)
 
-- Zsh 5.0+ (runtime object storage uses in-memory object handles)
+- Zsh 5.0+ (native indexed and associative arrays)
 - `curl`
-- standard POSIX tools used by helpers (`mktemp`, `awk`, `cat`, `tee`, `find`)
+- standard POSIX tools emitted for requested features (`mktemp`, `cat`, `find`, `timeout`)
 
 ### 1.4 For running PowerShell output (`-t Powershell7`)
 
@@ -56,13 +56,11 @@ Notes:
 Runs stage descriptors in order. Stage `stdout` becomes the next stage `stdin`.
 Returns the same object shape as `std.process.run`, from the final stage.
 
-### 2.3 `std.json.parse(...)` and `std.json.stringify(...)`
+### 2.3 JSON
 
-- `parse`: parses JSON text into dynamic object/array values.
-- invalid JSON returns a non-throwing fallback:
-  - Bash/Zsh helpers return raw text
-  - PowerShell helper returns raw text
-- `stringify`: emits compact JSON by default and sorts object keys lexicographically at every depth.
+JSON parsing and serialization are not built into Sushi. Calls under
+`std.json.*` are rejected as unknown intrinsics (`SUSHI1301`). JSON support is
+planned as an optional program dependency.
 
 ### 2.4 `std.fs.glob(pattern, cwd?)`
 
@@ -74,7 +72,7 @@ Returns the same object shape as `std.process.run`, from the final stage.
 Portability guidance:
 
 - treat glob results as opaque paths
-- prefer `std.path.*` helpers for composing paths
+- prefer `std.path.*` operations for composing paths
 
 ### 2.5 `std.http.get/post`
 
@@ -84,17 +82,17 @@ Returns object fields:
 - `ok` (bool)
 - `headers` (map/object)
 - `body` (string)
-- `json` (parsed JSON or null)
 - `url` (string)
 
 Network/runtime failure contract:
 
-- helpers return `status = 0` and `ok = false` instead of throwing through Sushi
+- transport failures return `status = 0` and `ok = false`
   script code.
 
 ### 2.6 Function type contracts (M4 Phase 3)
 
-Sushi now emits type contract checks for typed user functions:
+Sushi statically checks typed user functions and lowers parameter types to each
+target's native facilities:
 
 - primitive parameter types: `string`, `int`, `float`, `bool`, `array`, `object`
 - structural parameter types: `object { ... }`
@@ -103,7 +101,7 @@ Sushi now emits type contract checks for typed user functions:
 Contract mismatch behavior:
 
 - compile-time diagnostics are emitted for statically-provable mismatches
-- runtime mismatches print a contract violation message and exit with code `2`
+- values not rejected statically follow the target shell's native coercion
 
 ### 2.6.1 Bash/Zsh function and collection ABI
 
@@ -111,10 +109,8 @@ Contract mismatch behavior:
   an internal result slot; return values are not transported through stdout
 - this preserves caller-visible mutations and prevents command substitution
   from swallowing a failing status
-- arrays and objects use opaque handles backed by native shell collections;
-  JSON parsing, globbing, and process results stay native after crossing their
-  API boundary, and conversion to compact JSON happens only during stringify
-  or another explicit serialization boundary
+- arrays and objects lower directly to native shell collections or statically
+  known field bundles; generated scripts contain no embedded helper library
 - generated Zsh enables zero-based array indexing for Bash parity
 
 ### 2.7 Arithmetic numeric strictness
@@ -122,8 +118,8 @@ Contract mismatch behavior:
 For Bash/Zsh and PowerShell outputs, numeric arithmetic is strict:
 
 - no implicit fallback coercion to `0` for non-numeric operands
-- index/member/call expression operands used in arithmetic are runtime-validated
-- non-numeric arithmetic operands fail with contract violation and exit code `2`
+- arithmetic lowers directly when its value shape is known
+- ambiguous arithmetic, indexing, and member access fail with `SUSHI1030`
 - invalid top-level `break`, `continue`, and `return` are rejected during
   checking (`SUSHI1027`, `SUSHI1028`, and `SUSHI1029`)
 
@@ -162,7 +158,6 @@ Regex contract:
 
 - HTTP behavior can vary by host networking/TLS policy.
 - Glob output format is not fully normalized cross-target yet.
-- Bash/Zsh JSON operations are pure-shell in emitted scripts (no `jq`/`perl` dependency).
 - structural field typing currently targets flat field contracts (no deep nested structural field contracts).
 
 ## 4. Verification commands

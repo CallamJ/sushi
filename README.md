@@ -12,7 +12,6 @@ Sushi is in beta development. Core parsing/transpilation is in progress, and
 Milestone 3 runtime intrinsics are now available for:
 
 - process execution and pipelines
-- JSON parse/stringify
 - file globbing
 - HTTP GET/POST
 
@@ -33,7 +32,7 @@ Milestone 4 Phase 3 function contracts are now available:
 - typed function parameters (e.g. `int`, `string`, `bool`, `array`, `object`)
 - structural object parameters (e.g. `object { string name, int age } user`)
 - compile-time mismatch diagnostics for provable literal mismatches
-- runtime contract checks in emitted Bash/Zsh/PowerShell scripts (exit code `2`)
+- target-native parameter typing without an embedded runtime library
 
 ## Prerequisites
 
@@ -68,12 +67,12 @@ Default transpile target selection:
 
 ### Run transpiled Bash scripts
 
-- Bash 4.3+ (native array storage uses namerefs)
+- Bash 4.0+ (arrays and associative arrays lower directly to native storage)
 - `curl` (required for `std.http.get/post`)
 
 ### Run transpiled Zsh scripts
 
-- Zsh 5.0+ (runtime object storage uses in-memory object handles)
+- Zsh 5.0+ (arrays and associative arrays lower directly to native storage)
 - `curl` (required for `std.http.get/post`)
 
 ### Run transpiled PowerShell scripts
@@ -188,9 +187,13 @@ Current tooling limitations:
 - `box` and `use` syntax is parser-only and produces an explicit transpilation
   error instead of being silently ignored.
 - `check` rejects references to undefined variables in supported code paths.
-- Bash and Zsh functions return values through an internal result slot. Calls
-  execute in the current shell, so variable mutations are retained and runtime
-  contract failures propagate with exit code `2`.
+- Generated scripts contain no embedded Sushi helper library. Bash and Zsh
+  scalar functions use a result slot, while arrays, records, intrinsics, and
+  control flow lower directly to target-native constructs.
+- Operations whose value shape cannot be determined statically fail checking
+  with `SUSHI1030` instead of adding runtime type dispatch.
+- JSON is not part of the built-in standard library; it is reserved for a
+  future optional dependency.
 
 ## CI
 

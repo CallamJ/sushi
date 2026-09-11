@@ -100,7 +100,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void PowerShellEmitter_EmitsStringIntrinsicHelpers()
+    public void PowerShellEmitter_LowersStringIntrinsicsDirectly()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -127,15 +127,14 @@ public class EmitterTests
         var emitter = new PowerShellEmitter();
         var script = emitter.Emit(program, new EmitContext("strings.sushi", diagnostics));
 
-        Assert.Contains("function __sushi_require_string_receiver", script);
-        Assert.Contains("function __sushi_string_match", script);
-        Assert.Contains("__sushi_string_match -value", script);
-        Assert.Contains("__sushi_string_split -value", script);
+        Assert.Contains("[regex]::Match", script);
+        Assert.Contains(".Split(", script);
+        Assert.DoesNotContain("function __sushi_", script);
         Assert.Empty(diagnostics);
     }
 
     [Fact]
-    public void BashEmitter_EmitsStringIntrinsicHelpers()
+    public void BashEmitter_LowersStringIntrinsicsDirectly()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -161,16 +160,14 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("strings.sushi", diagnostics));
 
-        Assert.Contains("__sushi_string_contains", script);
-        Assert.Contains("__sushi_string_match", script);
-        Assert.Contains("__sushi_regex_to_ere", script);
-        Assert.Contains("${pattern//\\\\d/[0-9]}", script);
-        Assert.Contains("__sushi_require_string_receiver", script);
+        Assert.Contains("[[", script);
+        Assert.Contains("BASH_REMATCH", script);
+        Assert.DoesNotContain("__sushi_string_", script);
         Assert.Empty(diagnostics);
     }
 
     [Fact]
-    public void BashEmitter_EmitsMemoryBackedObjectRuntimeHelpers()
+    public void BashEmitter_UsesNativeAssociativeArraysForObjects()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -188,15 +185,9 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("objects.sushi", diagnostics));
 
-        Assert.Contains("__sushi_is_obj_handle()", script);
-        Assert.Contains("@o:\\{*|@o:__sushi_object_*) return 0", script);
-        Assert.Contains("__sushi_obj_to_json()", script);
-        Assert.Contains("__sushi_json_object_from_compact", script);
-        Assert.Contains("__sushi_native_obj_new", script);
-        Assert.Contains("__sushi_native_obj_get_into", script);
-        Assert.Contains("__sushi_native_obj_set_kind", script);
-        Assert.Contains("__sushi_native_obj_to_json_into", script);
-        Assert.DoesNotContain("stdout_json=\"$(__sushi_json_quote", script);
+        Assert.Contains("declare -A obj=", script);
+        Assert.Contains("${obj['name']-}", script);
+        Assert.DoesNotContain("__sushi_native_obj", script);
         Assert.Empty(diagnostics);
     }
 
@@ -251,7 +242,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void PowerShellEmitter_EmitsProcessRunAndJsonHelpers()
+    public void PowerShellEmitter_LowersProcessRunDirectly()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -273,27 +264,21 @@ public class EmitterTests
                     new IrLiteralExpression(0),
                     new IrLiteralExpression(true),
                     new IrLiteralExpression(false)
-                })),
-            new IrVariableDeclarationStatement("obj", new IrIntrinsicCallExpression(
-                "std.json.parse",
-                IntrinsicId.JsonParse,
-                new IrExpression[] { new IrLiteralExpression("{\"x\":1}") }))
+                }))
         });
 
         var diagnostics = new List<Diagnostic>();
         var emitter = new PowerShellEmitter();
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
-        Assert.Contains("function __sushi_process_run", script);
-        Assert.Contains("function __sushi_json_parse", script);
-        Assert.Contains("function __sushi_json_sort_value", script);
-        Assert.Contains("__sushi_process_run -command", script);
-        Assert.Contains("__sushi_json_parse -text", script);
+        Assert.Contains("Start-Process -FilePath", script);
+        Assert.Contains("[pscustomobject]@{ code=", script);
+        Assert.DoesNotContain("function __sushi_", script);
         Assert.Empty(diagnostics);
     }
 
     [Fact]
-    public void BashEmitter_EmitsHttpAndGlobHelpers()
+    public void BashEmitter_LowersHttpAndGlobDirectly()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -319,13 +304,9 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
-        Assert.Contains("__sushi_http_get", script);
-        Assert.Contains("__sushi_fs_glob", script);
-        Assert.Contains("__sushi_http_request()", script);
-        Assert.Contains("__sushi_j_parse_value", script);
-        Assert.DoesNotContain("perl ", script);
-        Assert.DoesNotContain("| jq", script);
-        Assert.DoesNotContain("jq -", script);
+        Assert.Contains("curl -sS", script);
+        Assert.Contains("mapfile -t files", script);
+        Assert.DoesNotContain("__sushi_http_", script);
         Assert.Empty(diagnostics);
     }
 
@@ -351,7 +332,7 @@ public class EmitterTests
         Assert.Contains("#!/usr/bin/env zsh", script);
         Assert.Contains("set -eu", script);
         Assert.Contains("set -o pipefail", script);
-        Assert.Contains("setopt typesetsilent", script);
+        Assert.DoesNotContain("setopt ksharrays", script);
         Assert.Empty(diagnostics);
     }
 
@@ -380,9 +361,8 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("timeout.sushi", diagnostics));
 
-        Assert.Contains("timeout_enabled=true", script);
-        Assert.Contains("sleep \"$timeout_seconds\"", script);
-        Assert.Contains("exit_code=124", script);
+        Assert.Contains("timeout '0.25s'", script);
+        Assert.Contains("result_timedOut=", script);
         Assert.Empty(diagnostics);
     }
 
@@ -411,9 +391,8 @@ public class EmitterTests
         var emitter = new PowerShellEmitter();
         var script = emitter.Emit(program, new EmitContext("timeout.sushi", diagnostics));
 
-        Assert.Contains("if ($timeoutMs -gt 0)", script);
-        Assert.Contains("WaitForExit($timeoutMs)", script);
-        Assert.Contains("$timedOut = $true", script);
+        Assert.Contains("WaitForExit(250)", script);
+        Assert.Contains("$result_timedOut = $true", script);
         Assert.Empty(diagnostics);
     }
 
@@ -440,9 +419,8 @@ public class EmitterTests
         var script = emitter.Emit(program, new EmitContext("varargs.sushi", diagnostics));
 
         Assert.Contains("local head=\"$1\"", script);
-        Assert.Contains("local -a __sushi_varargs_rest=(\"${@:2}\")", script);
-        Assert.Contains("__sushi_array_new \"${__sushi_flat_varargs_rest[@]}\"", script);
-        Assert.Contains("local rest=\"${__sushi_result-}\"", script);
+        Assert.Contains("local -a rest=(\"${@:2}\")", script);
+        Assert.DoesNotContain("__sushi_array_new", script);
         Assert.Empty(diagnostics);
     }
 
@@ -503,11 +481,11 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("contracts.sushi", diagnostics));
 
-        Assert.Contains("__sushi_type_check", script);
-        Assert.Contains("__sushi_struct_check", script);
-        Assert.Contains("__sushi_validate_integer \"${count:-}\"", script);
+        Assert.Contains("local user_name=\"$1\"", script);
+        Assert.Contains("local -i user_age=\"$2\"", script);
+        Assert.Contains("local -i count=\"$3\"", script);
         Assert.Contains("__sushi_result=", script);
-        Assert.Contains("return value of function", script);
+        Assert.DoesNotContain("__sushi_type_check", script);
         Assert.Empty(diagnostics);
     }
 
@@ -539,12 +517,9 @@ public class EmitterTests
         var emitter = new PowerShellEmitter();
         var script = emitter.Emit(program, new EmitContext("contracts.sushi", diagnostics));
 
-        Assert.Contains("function __sushi_type_check", script);
-        Assert.Contains("function __sushi_struct_check", script);
-        Assert.Contains("__sushi_type_check -value $count", script);
-        Assert.Contains("__sushi_struct_check -value $user", script);
+        Assert.Contains("param([pscustomobject]$user, [int]$count)", script);
         Assert.Contains("$__sushi_return_value =", script);
-        Assert.Contains("__sushi_type_check -value $__sushi_return_value", script);
+        Assert.DoesNotContain("function __sushi_", script);
         Assert.Empty(diagnostics);
     }
 
@@ -567,10 +542,10 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("arith.sushi", diagnostics));
 
-        Assert.Contains("__sushi_validate_integer", script);
-        Assert.Contains("__sushi_json_index", script);
+        Assert.DoesNotContain("__sushi_validate_integer", script);
+        Assert.DoesNotContain("__sushi_json_index", script);
         Assert.DoesNotContain("${total:-0}", script);
-        Assert.Empty(diagnostics);
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Code == "SUSHI1030");
     }
 
     [Fact]
@@ -592,9 +567,40 @@ public class EmitterTests
         var diagnostics = new List<Diagnostic>();
         var script = new BashEmitter().Emit(program, new EmitContext("array.sushi", diagnostics));
 
-        Assert.Contains("__sushi_array_new", script);
-        Assert.Contains("__sushi_array_get_into", script);
-        Assert.DoesNotContain("__sushi_j_reset", script);
+        Assert.Contains("declare -a values=('first' 'second')", script);
+        Assert.Contains("${values[0]-}", script);
+        Assert.DoesNotContain("__sushi_array_", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void BashEmitter_ReassignsArraysWithoutRevivingRuntimeHelpers()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("values", new IrArrayLiteralExpression(new IrExpression[]
+            {
+                new IrLiteralExpression("first")
+            })),
+            new IrExpressionStatement(new IrAssignmentExpression(
+                new IrIdentifierExpression("values"),
+                "=",
+                new IrArrayLiteralExpression(new IrExpression[]
+                {
+                    new IrLiteralExpression("second")
+                }))),
+            new IrExpressionStatement(new IrIntrinsicCallExpression(
+                "println",
+                IntrinsicId.Println,
+                new[] { new IrIndexExpression(new IrIdentifierExpression("values"), new IrLiteralExpression(0)) }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new BashEmitter().Emit(program, new EmitContext("array.sushi", diagnostics));
+
+        Assert.Contains("values=('second')", script);
+        Assert.Contains("${values[0]-}", script);
+        Assert.DoesNotContain("__sushi_array_", script);
         Assert.Empty(diagnostics);
     }
 

@@ -6,7 +6,8 @@ println(cleaned)
 
 var parts = cleaned.split(",", limit: 2)
 println("split:")
-println(std.json.stringify(parts, indent: 2))
+println(parts[0])
+println(parts[1])
 
 println("contains 'world':")
 println(cleaned.contains("world"))
@@ -26,4 +27,6 @@ println(cleaned.isMatch("\\d+"))
 
 var match = cleaned.match("([a-z]+)(\\d+)")
 println("match object:")
-println(std.json.stringify(match, indent: 2))
+println(match.ok)
+println(match.value)
+println(match.index)

@@ -1,9 +1,0 @@
-var source = "{\"name\":\"sushi\",\"count\":42}"
-var i = 0
-var text = ""
-while (i < 20) {
-    var value = std.json.parse(source)
-    text = std.json.stringify(value)
-    i = i + 1
-}
-println(text)

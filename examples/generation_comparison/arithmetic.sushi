@@ -1,0 +1,5 @@
+int double(int value) {
+    return value * 2
+}
+
+println(double(21))

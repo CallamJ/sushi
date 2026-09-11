@@ -139,13 +139,10 @@ public class TranspilerTests
     public void Transpile_Milestone3Apis_Succeeds()
     {
         const string source = """
-            var payload = { hello: "world" }
-            var text = std.json.stringify(payload)
-            var parsed = std.json.parse(text)
             var files = std.fs.glob("*.sushi")
             var response = std.http.get("https://example.com")
             var result = std.process.run("pwsh", ["-NoProfile", "-Command", "Write-Output hi"], allowFailure: true)
-            println(parsed.hello)
+            println(result.code)
             """;
 
         var transpiler = new Transpiler();
@@ -158,13 +155,13 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("__sushi_json_stringify", result.EmittedCode);
-        Assert.Contains("__sushi_http_get", result.EmittedCode);
-        Assert.Contains("__sushi_process_run", result.EmittedCode);
+        Assert.Contains("Invoke-WebRequest", result.EmittedCode);
+        Assert.Contains("Start-Process", result.EmittedCode);
+        Assert.DoesNotContain("function __sushi_", result.EmittedCode);
     }
 
     [Fact]
-    public void Transpile_Bash_JsonParseMemberAccess_UsesObjectRuntime()
+    public void Transpile_JsonIntrinsic_IsNoLongerBuiltIn()
     {
         const string source = """
             var parsed = std.json.parse("{\"name\":\"sushi\",\"count\":2}")
@@ -179,24 +176,21 @@ public class TranspilerTests
             TargetLanguage = TargetLanguage.Bash
         });
 
-        Assert.True(result.Success);
-        Assert.NotNull(result.EmittedCode);
-        Assert.Contains("__sushi_json_object_from_compact", result.EmittedCode);
-        Assert.Contains("__sushi_is_obj_handle", result.EmittedCode);
-        Assert.Contains("__sushi_json_member", result.EmittedCode);
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1301");
     }
 
     [Theory]
     [InlineData(TargetLanguage.Bash)]
     [InlineData(TargetLanguage.Zsh)]
-    public void Transpile_ShellCollectionBoundaries_UseParentShellNativeHandles(TargetLanguage target)
+    public void Transpile_ShellCollections_UseNativeStorageWithoutRuntime(TargetLanguage target)
     {
         const string source = """
-            var parsed = std.json.parse("{\"name\":\"sushi\",\"count\":2}")
+            var parsed = { name: "sushi", count: 2 }
             var files = std.fs.glob("src/**/*.cs")
             var stages = [{ command: "printf", args: ["hello"] }]
             var result = std.process.pipeline(stages, allowFailure: true)
-            println(std.json.stringify(parsed))
+            println(parsed.name)
             println(result.code)
             """;
 
@@ -209,11 +203,9 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("__sushi_json_parse_into", result.EmittedCode);
-        Assert.Contains("__sushi_json_stringify_into", result.EmittedCode);
-        Assert.Contains("__sushi_fs_glob_into", result.EmittedCode);
-        Assert.Contains("__sushi_process_pipeline_into", result.EmittedCode);
-        Assert.Contains("__sushi_native_obj_get_into", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_json_", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_process_pipeline", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_native_obj", result.EmittedCode);
     }
 
     [Fact]
@@ -266,9 +258,8 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("local -a __sushi_varargs_rest", result.EmittedCode);
-        Assert.Contains("__sushi_array_new \"${__sushi_flat_varargs_rest[@]}\"", result.EmittedCode);
-        Assert.Contains("local rest=\"${__sushi_result-}\"", result.EmittedCode);
+        Assert.Contains("local -a rest=(\"${@:2}\")", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_array_new", result.EmittedCode);
     }
 
     [Fact]
@@ -427,7 +418,8 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("__sushi_struct_check", result.EmittedCode);
+        Assert.Contains("user_name", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_struct_check", result.EmittedCode);
     }
 
     [Fact]
@@ -523,7 +515,7 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("__sushi_flat_varargs_values", result.EmittedCode);
+        Assert.Contains("local -a values=(\"${@:1}\")", result.EmittedCode);
         Assert.DoesNotContain("__sushi_json_index", result.EmittedCode);
     }
 

@@ -1,8 +1,7 @@
-$payload = @{ hello = "world"; n = 1 } | ConvertTo-Json -Compress
+$user = [pscustomobject]@{ hello = "world"; n = 1 }
 & dotnet --version | Out-Null
 $code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
-$parsed = $payload | ConvertFrom-Json
-$text = "  $($parsed.hello)  "
+$text = "  $($user.hello)  "
 
 $i = 0
 $output = ""

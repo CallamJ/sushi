@@ -33,12 +33,11 @@ public class IntrinsicRegistryTests
         var registry = IntrinsicRegistry.CreateDefault();
 
         Assert.True(registry.TryResolve("std.process.run", out var processRun));
-        Assert.True(registry.TryResolve("std.json.parse", out var jsonParse));
+        Assert.False(registry.TryResolve("std.json.parse", out _));
         Assert.True(registry.TryResolve("std.fs.glob", out var fsGlob));
         Assert.True(registry.TryResolve("std.http.get", out var httpGet));
 
         Assert.Equal(IntrinsicId.ProcessRun, processRun.Id);
-        Assert.Equal(IntrinsicId.JsonParse, jsonParse.Id);
         Assert.Equal(IntrinsicId.FsGlob, fsGlob.Id);
         Assert.Equal(IntrinsicId.HttpGet, httpGet.Id);
     }

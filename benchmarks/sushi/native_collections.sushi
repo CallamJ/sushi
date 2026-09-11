@@ -1,0 +1,3 @@
+var values = [10, 20, 30]
+var user = { name: "sushi" }
+println(user.name + ":" + values[1])

@@ -116,8 +116,7 @@ All gates must be true before tagging a beta release.
 - [ ] `std.os.chdir(path)`
 
 ### 6.6 Additional beta-level practical APIs
-- [x] `std.json.parse(text)` (maps to Sushi dynamic object/array values)
-- [x] `std.json.stringify(value)`
+- [ ] JSON support through an optional program dependency (not built in)
 - [x] `std.fs.glob(pattern)` (portable behavior contract documented)
 - [x] `std.http.get(url, headers?)`
 - [x] `std.http.post(url, body, headers?)`
@@ -230,7 +229,7 @@ Acceptance criteria:
 
 ## Milestone 3: Shell Interop + Practical APIs (Week 4-6)
 - [x] Implement robust external command execution APIs.
-- [x] Implement JSON helpers and basic HTTP/glob support.
+- [x] Remove built-in JSON pending an optional dependency design; lower HTTP/glob natively.
 - [x] Add example scripts that rely on these features.
 
 Acceptance criteria:

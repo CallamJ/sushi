@@ -57,27 +57,25 @@ if (pipelineResult.stdout != "") {
 }
 
 var payload = { tool: "sushi", count: 3, ok: true }
-var jsonText = std.json.stringify(payload)
-var parsed = std.json.parse(jsonText)
 
-if (parsed.tool == "sushi") {
-    println("PASS json.parse field")
+if (payload.tool == "sushi") {
+    println("PASS object string field")
 } else {
-    println("FAIL json.parse field")
+    println("FAIL object string field")
     failures += 1
 }
 
-if (parsed.count == 3) {
-    println("PASS json.parse numeric field")
+if (payload.count == 3) {
+    println("PASS object numeric field")
 } else {
-    println("FAIL json.parse numeric field")
+    println("FAIL object numeric field")
     failures += 1
 }
 
-if (parsed.ok == true) {
-    println("PASS json.parse bool field")
+if (payload.ok == true) {
+    println("PASS object bool field")
 } else {
-    println("FAIL json.parse bool field")
+    println("FAIL object bool field")
     failures += 1
 }
 

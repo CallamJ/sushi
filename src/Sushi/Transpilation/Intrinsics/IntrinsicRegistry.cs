@@ -188,18 +188,6 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.OsChdir,
                 new[] { new IntrinsicParameter("path") }),
             new IntrinsicSignature(
-                "std.json.parse",
-                IntrinsicId.JsonParse,
-                new[] { new IntrinsicParameter("text") }),
-            new IntrinsicSignature(
-                "std.json.stringify",
-                IntrinsicId.JsonStringify,
-                new[]
-                {
-                    new IntrinsicParameter("value"),
-                    new IntrinsicParameter("indent", hasDefaultValue: true, defaultValue: 0)
-                }),
-            new IntrinsicSignature(
                 "std.fs.glob",
                 IntrinsicId.FsGlob,
                 new[]

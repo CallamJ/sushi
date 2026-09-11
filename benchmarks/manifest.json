@@ -30,17 +30,17 @@
       "expected": { "exitCode": 0, "stdout": "37487500\n", "stderr": "" }
     },
     {
-      "id": "json_roundtrip",
-      "name": "JSON parse/stringify",
-      "source": "sushi/json_roundtrip.sushi",
+      "id": "native_collections",
+      "name": "Native array and object access",
+      "source": "sushi/native_collections.sushi",
       "native": {
-        "bash": "native/bash/json_roundtrip.sh",
-        "zsh": "native/zsh/json_roundtrip.zsh",
-        "powershell": "native/powershell/json_roundtrip.ps1"
+        "bash": "native/bash/native_collections.sh",
+        "zsh": "native/zsh/native_collections.zsh",
+        "powershell": "native/powershell/native_collections.ps1"
       },
-      "tags": ["json", "core"],
+      "tags": ["collections", "core"],
       "maxRuntimeRatioMedian": { "bash": 5.0, "zsh": 5.0, "powershell": 5.0 },
-      "expected": { "exitCode": 0, "stdout": "{\"count\":42,\"name\":\"sushi\"}\n", "stderr": "" }
+      "expected": { "exitCode": 0, "stdout": "sushi:20\n", "stderr": "" }
     },
     {
       "id": "glob_scan",

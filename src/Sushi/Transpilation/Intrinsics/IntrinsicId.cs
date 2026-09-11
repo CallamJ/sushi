@@ -30,8 +30,6 @@ public enum IntrinsicId
     ProcessRequireSuccess,
     OsCwd,
     OsChdir,
-    JsonParse,
-    JsonStringify,
     FsGlob,
     HttpGet,
     HttpPost

@@ -9,6 +9,7 @@ using Sushi.Transpilation.Intrinsics;
 public sealed class PowerShellEmitter : IBackendEmitter
 {
     private const string UnsupportedEmitCode = "SUSHI1200";
+    private const string AmbiguousShapeCode = "SUSHI1030";
 
     private readonly StringBuilder _builder = new();
     private EmitContext _context = null!;
@@ -17,6 +18,7 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
     private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
     private HashSet<string> _integerReturningFunctions = new(StringComparer.Ordinal);
+    private Dictionary<string, IrArrayLiteralExpression> _arrayInitializers = new(StringComparer.Ordinal);
 
     public string Emit(IrProgram program, EmitContext context)
     {
@@ -26,6 +28,7 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
+        _arrayInitializers.Clear();
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -35,15 +38,6 @@ public sealed class PowerShellEmitter : IBackendEmitter
 
         WriteLine("Set-StrictMode -Version Latest");
         WriteLine("");
-        // Emit the runtime only when the program uses features that need it;
-        // simple native PowerShell scripts should remain small and readable.
-        if (RuntimeDependencyAnalyzer.RequiresRuntime(program) ||
-            RuntimeDependencyAnalyzer.RequiresPowerShellRuntime(program))
-        {
-            EmitRuntimeHelpers();
-            WriteLine("");
-        }
-
         foreach (var statement in program.Statements)
         {
             EmitStatement(statement);
@@ -747,6 +741,21 @@ function __sushi_call_method {
             case IrVariableDeclarationStatement variable:
             {
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);
+                var variableName = SanitizeName(variable.Name);
+                if (initializer is IrArrayLiteralExpression array)
+                {
+                    _arrayInitializers[variableName] = array;
+                }
+                else
+                {
+                    _arrayInitializers.Remove(variableName);
+                }
+                if (initializer is IrIntrinsicCallExpression intrinsic &&
+                    EmitNativeIntrinsicDeclaration(variableName, intrinsic))
+                {
+                    SetKnownInteger(variableName, false);
+                    break;
+                }
                 WriteLine($"${SanitizeName(variable.Name)} = {EmitValueExpression(initializer)}");
                 SetKnownInteger(SanitizeName(variable.Name), IsDefinitelyInteger(initializer));
                 break;
@@ -881,7 +890,7 @@ function __sushi_call_method {
 
         var regularParameters = statement.Parameters
             .Where(parameter => !parameter.IsVarargs)
-            .Select(parameter => $"${SanitizeName(parameter.Name)}")
+            .Select(EmitPowerShellParameter)
             .ToList();
         var varargsParameter = statement.Parameters.FirstOrDefault(parameter => parameter.IsVarargs);
 
@@ -950,6 +959,131 @@ function __sushi_call_method {
         WriteLine("}");
     }
 
+    private bool EmitNativeIntrinsicDeclaration(string name, IrIntrinsicCallExpression intrinsic)
+    {
+        switch (intrinsic.Id)
+        {
+            case IntrinsicId.FsGlob:
+            {
+                var pattern = EmitValueExpression(intrinsic.Arguments[0]);
+                var cwd = intrinsic.Arguments.Count > 1 ? intrinsic.Arguments[1] : new IrLiteralExpression(null);
+                if (cwd is IrLiteralExpression { Value: null })
+                {
+                    WriteLine($"${name} = @(Get-ChildItem -Path {pattern} -File | ForEach-Object FullName)");
+                }
+                else
+                {
+                    WriteLine($"${name} = @(& {{ Push-Location -LiteralPath {EmitValueExpression(cwd)}; try {{ Get-ChildItem -Path {pattern} -File | ForEach-Object FullName }} finally {{ Pop-Location }} }})");
+                }
+                return true;
+            }
+
+            case IntrinsicId.ProcessArgs:
+                WriteLine($"${name} = @($args)");
+                return true;
+
+            case IntrinsicId.ProcessRun:
+                EmitNativeProcessRun(name, intrinsic.Arguments);
+                return true;
+
+            case IntrinsicId.ProcessPipeline:
+                EmitNativeProcessPipeline(name, intrinsic.Arguments);
+                return true;
+
+            case IntrinsicId.HttpGet:
+            case IntrinsicId.HttpPost:
+                EmitNativeHttp(name, intrinsic);
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private void EmitNativeProcessRun(string name, IReadOnlyList<IrExpression> arguments)
+    {
+        var command = EmitValueExpression(arguments[0]);
+        var args = arguments.Count > 1 && arguments[1] is IrArrayLiteralExpression array
+            ? string.Join(", ", array.Elements.Select(EmitValueExpression))
+            : arguments.Count > 1 ? $"@({EmitValueExpression(arguments[1])})" : "";
+        WriteLine($"${name}_stdout_file = New-TemporaryFile");
+        WriteLine($"${name}_stderr_file = New-TemporaryFile");
+        var timeoutMs = arguments.Count > 5 && arguments[5] is IrLiteralExpression { Value: int timeout } ? timeout : 0;
+        var invocation = $"Start-Process -FilePath ([string]({command})) -ArgumentList @({args}) -PassThru -NoNewWindow -RedirectStandardOutput ${name}_stdout_file -RedirectStandardError ${name}_stderr_file";
+        if (arguments.Count > 2 && arguments[2] is not IrLiteralExpression { Value: null })
+        {
+            invocation += $" -WorkingDirectory {EmitValueExpression(arguments[2])}";
+        }
+        if (timeoutMs > 0)
+        {
+            WriteLine($"${name}_process = {invocation}");
+            WriteLine($"${name}_timedOut = $false");
+            WriteLine($"if (-not ${name}_process.WaitForExit({timeoutMs})) {{ ${name}_timedOut = $true; ${name}_process.Kill($true); ${name}_process.WaitForExit() }}");
+        }
+        else
+        {
+            WriteLine($"${name}_process = {invocation} -Wait");
+            WriteLine($"${name}_timedOut = $false");
+        }
+        WriteLine($"${name}_code = $(if (${name}_timedOut) {{ 124 }} else {{ ${name}_process.ExitCode }})");
+        WriteLine($"${name} = [pscustomobject]@{{ code=${name}_code; stdout=(Get-Content -Raw -LiteralPath ${name}_stdout_file); stderr=(Get-Content -Raw -LiteralPath ${name}_stderr_file); ok=(${name}_code -eq 0); command=[string]({command}); timedOut=${name}_timedOut }}");
+        WriteLine($"Remove-Item -Force ${name}_stdout_file, ${name}_stderr_file");
+        if (arguments.Count <= 6 || arguments[6] is not IrLiteralExpression { Value: true })
+        {
+            WriteLine($"if (-not ${name}.ok) {{ exit ${name}.code }}");
+        }
+    }
+
+    private void EmitNativeProcessPipeline(string name, IReadOnlyList<IrExpression> arguments)
+    {
+        IrArrayLiteralExpression? stages = arguments[0] as IrArrayLiteralExpression;
+        if (stages == null && arguments[0] is IrIdentifierExpression identifier)
+        {
+            _arrayInitializers.TryGetValue(SanitizeName(identifier.Name), out stages);
+        }
+        if (stages == null)
+        {
+            _context.Error(AmbiguousShapeCode, "Process pipeline stages must have a statically known array shape");
+            return;
+        }
+        var commands = new List<string>();
+        foreach (var stage in stages.Elements.OfType<IrObjectLiteralExpression>())
+        {
+            var command = stage.Properties.FirstOrDefault(property => property.Name == "command")?.Value;
+            var args = stage.Properties.FirstOrDefault(property => property.Name == "args")?.Value as IrArrayLiteralExpression;
+            if (command == null) continue;
+            var rendered = new List<string> { $"& {EmitValueExpression(command)}" };
+            if (args != null) rendered.AddRange(args.Elements.Select(EmitValueExpression));
+            commands.Add(string.Join(" ", rendered));
+        }
+        WriteLine($"${name}_stdout = @({string.Join(" | ", commands)}) -join [Environment]::NewLine");
+        WriteLine($"${name}_code = $LASTEXITCODE");
+        WriteLine($"${name} = [pscustomobject]@{{ code=${name}_code; stdout=${name}_stdout; stderr=''; ok=(${name}_code -eq 0); command='pipeline'; timedOut=$false }}");
+        if (arguments.Count <= 5 || arguments[5] is not IrLiteralExpression { Value: true })
+        {
+            WriteLine($"if (-not ${name}.ok) {{ exit ${name}.code }}");
+        }
+    }
+
+    private void EmitNativeHttp(string name, IrIntrinsicCallExpression intrinsic)
+    {
+        var url = EmitValueExpression(intrinsic.Arguments[0]);
+        var method = intrinsic.Id == IntrinsicId.HttpPost ? "Post" : "Get";
+        var extras = intrinsic.Id == IntrinsicId.HttpPost
+            ? $" -Body {EmitValueExpression(intrinsic.Arguments[1])} -ContentType ([string]({EmitValueExpression(intrinsic.Arguments[3])}))"
+            : "";
+        WriteLine("try {");
+        _indent++;
+        WriteLine($"${name}_response = Invoke-WebRequest -Method {method} -Uri {url}{extras}");
+        WriteLine($"${name} = [pscustomobject]@{{ status=[int]${name}_response.StatusCode; ok=([int]${name}_response.StatusCode -ge 200 -and [int]${name}_response.StatusCode -lt 300); headers=${name}_response.Headers; body=[string]${name}_response.Content; url=[string]${name}_response.BaseResponse.RequestMessage.RequestUri }}");
+        _indent--;
+        WriteLine("} catch {");
+        _indent++;
+        WriteLine($"${name} = [pscustomobject]@{{ status=0; ok=$false; headers=@{{}}; body=''; url=[string]({url}) }}");
+        _indent--;
+        WriteLine("}");
+    }
+
     private void EmitExpressionStatement(IrExpression expression)
     {
         switch (expression)
@@ -963,6 +1097,12 @@ function __sushi_call_method {
                 return;
 
             case IrAssignmentExpression assignment:
+                if (assignment.Operator == "=" && assignment.Value is IrIntrinsicCallExpression intrinsic &&
+                    EmitNativeIntrinsicDeclaration(SanitizeName(assignment.Target.Name), intrinsic))
+                {
+                    SetKnownInteger(SanitizeName(assignment.Target.Name), false);
+                    return;
+                }
                 WriteLine(EmitAssignmentExpression(assignment));
                 return;
 
@@ -1017,9 +1157,26 @@ function __sushi_call_method {
 
     private string EmitMethodCallExpression(IrMethodCallExpression call)
     {
-        var values = string.Join(", ", call.Arguments.Select(argument => EmitValueExpression(argument.Value)));
-        var argArray = call.Arguments.Count > 0 ? $"@({values})" : "@()";
-        return $"(__sushi_call_method -target {EmitValueExpression(call.Target)} -method {Escape.PowerShellSingleQuoted(call.MethodName)} -argValues {argArray})";
+        var target = EmitValueExpression(call.Target);
+        var arguments = call.Arguments.Select(argument => EmitValueExpression(argument.Value)).ToList();
+        return call.MethodName switch
+        {
+            "length" => $"@({target}).Count",
+            "push" => $"@(@({target}) + @({string.Join(", ", arguments)}))",
+            "map" when arguments.Count == 1 => $"@(@({target}) | ForEach-Object {{ & {arguments[0]} $_ }})",
+            "filter" when arguments.Count == 1 => $"@(@({target}) | Where-Object {{ [bool](& {arguments[0]} $_) }})",
+            "reduce" when arguments.Count >= 1 => EmitPowerShellReduce(target, arguments),
+            "ordinal" => $"({target}).ordinal",
+            "value" => $"({target}).value",
+            _ => _context.ErrorAndReturn(AmbiguousShapeCode, $"Method '{call.MethodName}' requires a statically known native lowering", "$null")
+        };
+    }
+
+    private static string EmitPowerShellReduce(string target, IReadOnlyList<string> arguments)
+    {
+        var initial = arguments.Count > 1 ? arguments[1] : "$items[0]";
+        var start = arguments.Count > 1 ? "0" : "1";
+        return $"$($items=@({target}); $acc={initial}; for($i={start}; $i -lt $items.Count; $i++) {{ $acc=& {arguments[0]} $acc $items[$i] }}; $acc)";
     }
 
     private string EmitConditionExpression(IrExpression expression)
@@ -1051,8 +1208,8 @@ function __sushi_call_method {
             IrIdentifierExpression identifier => $"${SanitizeName(identifier.Name)}",
             IrArrayLiteralExpression array => EmitArrayLiteral(array),
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
-            IrMemberAccessExpression member => $"(__sushi_member -target {EmitValueExpression(member.Target)} -name {Escape.PowerShellSingleQuoted(member.MemberName)})",
-            IrIndexExpression index => $"(__sushi_index -target {EmitValueExpression(index.Target)} -index {EmitValueExpression(index.Index)})",
+            IrMemberAccessExpression member => $"({EmitValueExpression(member.Target)}).{SanitizeName(member.MemberName)}",
+            IrIndexExpression index => $"({EmitValueExpression(index.Target)})[{EmitValueExpression(index.Index)}]",
             IrUnaryExpression unary when unary.Operator is "!" =>
                 $"(-not {EmitValueExpression(unary.Operand)})",
             IrUnaryExpression unary when unary.Operator is "-" or "+" =>
@@ -1060,9 +1217,7 @@ function __sushi_call_method {
             IrConditionalExpression conditional =>
                 $"$(if ({EmitConditionExpression(conditional.Condition)}) {{ {EmitValueExpression(conditional.TrueExpression)} }} else {{ {EmitValueExpression(conditional.FalseExpression)} }})",
             IrBinaryExpression binary when binary.Operator == "+" =>
-                IsDefinitelyInteger(binary)
-                    ? $"({EmitValueExpression(binary.Left)} + {EmitValueExpression(binary.Right)})"
-                    : $"(__sushi_add {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})",
+                $"({EmitValueExpression(binary.Left)} + {EmitValueExpression(binary.Right)})",
             IrBinaryExpression binary =>
                 $"({EmitValueExpression(binary.Left)} {MapBinaryOperator(binary.Operator)} {EmitValueExpression(binary.Right)})",
             IrIntrinsicCallExpression intrinsicCall =>
@@ -1128,21 +1283,28 @@ function __sushi_call_method {
 
     private void EmitContractCheckForValue(IrTypeRef type, string valueExpression, string context)
     {
-        if (type.IsAnyOrUnknown)
-        {
-            return;
-        }
+        // Parameter annotations provide native PowerShell typing; statically
+        // provable mismatches are diagnosed before emission.
+    }
 
-        var contextLiteral = Escape.PowerShellSingleQuoted(context);
-        if (type.Kind == IrTypeKind.Structural)
+    private static string EmitPowerShellParameter(IrFunctionParameter parameter)
+    {
+        var annotation = parameter.DeclaredType.Kind switch
         {
-            var specLiteral = Escape.PowerShellSingleQuoted(EncodeStructuralSpec(type));
-            WriteLine($"if (-not (__sushi_struct_check -value {valueExpression} -spec {specLiteral} -context {contextLiteral})) {{ exit 2 }}");
-            return;
-        }
-
-        var typeLiteral = Escape.PowerShellSingleQuoted(EncodeRuntimeType(type));
-        WriteLine($"if (-not (__sushi_type_check -value {valueExpression} -type {typeLiteral} -context {contextLiteral})) {{ exit 2 }}");
+            IrTypeKind.Structural => "[pscustomobject]",
+            IrTypeKind.Primitive => parameter.DeclaredType.Name?.ToLowerInvariant() switch
+            {
+                "int" => "[int]",
+                "float" => "[double]",
+                "bool" => "[bool]",
+                "string" => "[string]",
+                "array" => "[object[]]",
+                "object" => "[object]",
+                _ => ""
+            },
+            _ => ""
+        };
+        return $"{annotation}${SanitizeName(parameter.Name)}";
     }
 
     private static string EncodeRuntimeType(IrTypeRef type)
@@ -1238,8 +1400,6 @@ function __sushi_call_method {
             IntrinsicId.ProcessPipeline => $"$null = {EmitProcessPipeline(call.Arguments)}",
             IntrinsicId.ProcessFail => $"$null = {EmitProcessFail(call.Arguments)}",
             IntrinsicId.ProcessRequireSuccess => $"$null = {EmitProcessRequireSuccess(call.Arguments)}",
-            IntrinsicId.JsonParse => $"$null = {EmitJsonParse(call.Arguments)}",
-            IntrinsicId.JsonStringify => $"$null = {EmitJsonStringify(call.Arguments)}",
             IntrinsicId.FsGlob => $"$null = {EmitFsGlob(call.Arguments)}",
             IntrinsicId.HttpGet => $"$null = {EmitHttpGet(call.Arguments)}",
             IntrinsicId.HttpPost => $"$null = {EmitHttpPost(call.Arguments)}",
@@ -1279,8 +1439,6 @@ function __sushi_call_method {
             IntrinsicId.ProcessPipeline => EmitProcessPipeline(call.Arguments),
             IntrinsicId.ProcessFail => EmitProcessFail(call.Arguments),
             IntrinsicId.ProcessRequireSuccess => EmitProcessRequireSuccess(call.Arguments),
-            IntrinsicId.JsonParse => EmitJsonParse(call.Arguments),
-            IntrinsicId.JsonStringify => EmitJsonStringify(call.Arguments),
             IntrinsicId.FsGlob => EmitFsGlob(call.Arguments),
             IntrinsicId.HttpGet => EmitHttpGet(call.Arguments),
             IntrinsicId.HttpPost => EmitHttpPost(call.Arguments),
@@ -1296,58 +1454,52 @@ function __sushi_call_method {
 
     private string EmitStringTrim(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_string_trim -value {Arg(arguments, 0)})";
+        return $"([string]({Arg(arguments, 0)})).Trim()";
     }
 
     private string EmitStringLower(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_string_lower -value {Arg(arguments, 0)})";
+        return $"([string]({Arg(arguments, 0)})).ToLowerInvariant()";
     }
 
     private string EmitStringUpper(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_string_upper -value {Arg(arguments, 0)})";
+        return $"([string]({Arg(arguments, 0)})).ToUpperInvariant()";
     }
 
     private string EmitStringSplit(IReadOnlyList<IrExpression> arguments)
     {
-        return "(__sushi_string_split " +
-               "-value " + Arg(arguments, 0) + " " +
-               "-sep " + Arg(arguments, 1) + " " +
-               "-limit ([int](" + Arg(arguments, 2) + ")))";
+        return $"@(([string]({Arg(arguments, 0)})).Split([string]({Arg(arguments, 1)}), [int]({Arg(arguments, 2)})))";
     }
 
     private string EmitStringContains(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_string_contains -value {Arg(arguments, 0)} -needle {Arg(arguments, 1)})";
+        return $"([string]({Arg(arguments, 0)})).Contains([string]({Arg(arguments, 1)}))";
     }
 
     private string EmitStringStartsWith(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_string_starts_with -value {Arg(arguments, 0)} -prefix {Arg(arguments, 1)})";
+        return $"([string]({Arg(arguments, 0)})).StartsWith([string]({Arg(arguments, 1)}))";
     }
 
     private string EmitStringEndsWith(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_string_ends_with -value {Arg(arguments, 0)} -suffix {Arg(arguments, 1)})";
+        return $"([string]({Arg(arguments, 0)})).EndsWith([string]({Arg(arguments, 1)}))";
     }
 
     private string EmitStringReplace(IReadOnlyList<IrExpression> arguments)
     {
-        return "(__sushi_string_replace " +
-               "-value " + Arg(arguments, 0) + " " +
-               "-oldValue " + Arg(arguments, 1) + " " +
-               "-newValue " + Arg(arguments, 2) + ")";
+        return $"([string]({Arg(arguments, 0)})).Replace([string]({Arg(arguments, 1)}), [string]({Arg(arguments, 2)}))";
     }
 
     private string EmitStringIsMatch(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_string_is_match -value {Arg(arguments, 0)} -pattern {Arg(arguments, 1)})";
+        return $"[regex]::IsMatch([string]({Arg(arguments, 0)}), [string]({Arg(arguments, 1)}))";
     }
 
     private string EmitStringMatch(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_string_match -value {Arg(arguments, 0)} -pattern {Arg(arguments, 1)})";
+        return $"$($m=[regex]::Match([string]({Arg(arguments, 0)}), [string]({Arg(arguments, 1)})); [pscustomobject]@{{ ok=$m.Success; value=$m.Value; index=$m.Index; groups=@($m.Groups | ForEach-Object Value) }})";
     }
 
     private string EmitIoWriteText(IReadOnlyList<IrExpression> arguments)
@@ -1424,16 +1576,6 @@ function __sushi_call_method {
     private string EmitProcessRequireSuccess(IReadOnlyList<IrExpression> arguments)
     {
         return $"(__sushi_process_require_success -result {Arg(arguments, 0)})";
-    }
-
-    private string EmitJsonParse(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"(__sushi_json_parse -text {Arg(arguments, 0)})";
-    }
-
-    private string EmitJsonStringify(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"(__sushi_json_stringify -value {Arg(arguments, 0)} -indent ([int]({Arg(arguments, 1)})))";
     }
 
     private string EmitFsGlob(IReadOnlyList<IrExpression> arguments)
