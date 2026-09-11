@@ -128,9 +128,9 @@ dotnet run --project src/Sushi -- benchmark --targets bash,zsh,powershell
 `benchmark-native-vs-transpiled.sh` compares transpiled outputs against scripts
 in:
 
-- `native/bash/<example>.sh`
-- `native/zsh/<example>.zsh`
-- `native/powershell/<example>.ps1`
+- `benchmarks/native/bash/<example>.sh`
+- `benchmarks/native/zsh/<example>.zsh`
+- `benchmarks/native/powershell/<example>.ps1`
 
 ## Benchmark system (manifest-driven)
 

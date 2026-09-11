@@ -174,7 +174,7 @@ if [[ "$CUSTOM_EXAMPLES" == "false" ]]; then
     while IFS= read -r example_path; do
         base_name="$(basename "$example_path")"
         case "$base_name" in
-            imports.sushi|test_all_features.sushi|m4_structural_invalid_static.sushi)
+            imports.sushi|m4_structural_invalid_static.sushi)
                 continue
                 ;;
         esac

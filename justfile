@@ -25,7 +25,7 @@ build: restore
 test: restore
     dotnet run --project {{tests}} --framework {{tfm}} --no-restore
 
-# Run the CLI with arbitrary args, e.g. `just cli -- --help`
+# Run the CLI with arbitrary args, e.g. `just cli --help`
 cli *args:
     dotnet run --project {{cli}} --no-restore -- {{args}}
 
