@@ -6,6 +6,57 @@ using Xunit;
 
 public class TranspilerTests
 {
+    [Theory]
+    [InlineData(TargetLanguage.Bash)]
+    [InlineData(TargetLanguage.Zsh)]
+    [InlineData(TargetLanguage.Powershell7)]
+    public void Transpile_TruthinessOperator_IsExplicitAndNative(TargetLanguage target)
+    {
+        const string source = """
+            var empty = ""
+            var text = "false"
+            var zero = 0
+            var values = []
+            if (?empty) { std.process.exit(1) }
+            if (!?text) { std.process.exit(2) }
+            if (?zero) { std.process.exit(3) }
+            if (!?values) { std.process.exit(4) }
+            """;
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "truthiness.sushi",
+            TargetLanguage = target
+        });
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.EmittedCode);
+        Assert.DoesNotContain("__sushi_truthy", result.EmittedCode);
+    }
+
+    [Fact]
+    public void Transpile_ConditionRequiresBool_AndTruthinessRequiresKnownType()
+    {
+        const string source = """
+            var text = "ready"
+            if (text) { println(text) }
+            value() { return "ready" }
+            if (?value()) { println("never") }
+            """;
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "strict-conditions.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1046");
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1047");
+    }
+
     [Fact]
     public void Transpile_Bash_BasicScript_Succeeds()
     {

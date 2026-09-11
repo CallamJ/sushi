@@ -28,6 +28,8 @@ public sealed class AstToIrLowerer
     private const string MissingAdapterCode = "SUSHI1033";
     private const string UnknownTypeCode = "SUSHI1034";
     private const string ReadOnlyExportCode = "SUSHI1045";
+    private const string BooleanContextCode = "SUSHI1046";
+    private const string UnknownTruthinessCode = "SUSHI1047";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -59,6 +61,7 @@ public sealed class AstToIrLowerer
     private readonly Dictionary<string, string> _topLevelSymbols = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _knownObjectTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _functionObjectReturnTypes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IrTypeRef> _knownVariableTypes = new(StringComparer.Ordinal);
 
     private string _sourcePath = "";
     private string? _currentFunctionName;
@@ -103,6 +106,7 @@ public sealed class AstToIrLowerer
         _topLevelSymbols.Clear();
         _knownObjectTypes.Clear();
         _functionObjectReturnTypes.Clear();
+        _knownVariableTypes.Clear();
         _tempId = 0;
         _lambdaId = 0;
         _loopDepth = 0;
@@ -165,6 +169,7 @@ public sealed class AstToIrLowerer
         var previousReturnType = _currentFunctionReturnType;
         var previousVariables = _definedVariables;
         var previousObjectTypes = new Dictionary<string, string>(_knownObjectTypes, StringComparer.Ordinal);
+        var previousVariableTypes = new Dictionary<string, IrTypeRef>(_knownVariableTypes, StringComparer.Ordinal);
         var previousLoopDepth = _loopDepth;
         _currentFunctionName = emittedName;
         _currentFunctionReturnType = signature.ReturnType;
@@ -174,6 +179,7 @@ public sealed class AstToIrLowerer
         foreach (var parameter in signature.Parameters)
         {
             _definedVariables.Add(parameter.Name);
+            _knownVariableTypes[parameter.Name] = parameter.DeclaredType;
         }
         TrackParameterObjectTypes(node.Parameters, signature.Parameters);
         AddAnonymousStructuralFieldNames(node.Parameters, signature.Parameters);
@@ -191,6 +197,7 @@ public sealed class AstToIrLowerer
         _loopDepth = previousLoopDepth;
         _definedVariables = previousVariables;
         RestoreKnownObjectTypes(previousObjectTypes);
+        RestoreKnownVariableTypes(previousVariableTypes);
 
         if (body == null)
         {
@@ -231,6 +238,9 @@ public sealed class AstToIrLowerer
                 TrackVariableObjectType(declaration.Name, declaration.Type, declaration.Initializer);
                 var initializer = declaration.Initializer != null ? LowerExpression(declaration.Initializer) : null;
                 var declarationName = _functionDepth == 0 ? ResolveTopLevel(declaration.Name) : declaration.Name;
+                TrackVariableType(declaration.Name, declaration.Type, initializer);
+                if (declarationName != declaration.Name)
+                    _knownVariableTypes[declarationName] = _knownVariableTypes[declaration.Name];
                 _definedVariables.Add(declaration.Name);
                 _definedVariables.Add(declarationName);
                 return new IrVariableDeclarationStatement(declarationName, initializer);
@@ -242,6 +252,7 @@ public sealed class AstToIrLowerer
             case IfStatementNode ifStatement:
             {
                 var condition = LowerExpression(ifStatement.Condition);
+                condition = RequireBooleanCondition(condition, ifStatement.Line, ifStatement.Column, "if condition");
                 if (condition is IrLiteralExpression { Value: bool value })
                 {
                     return value
@@ -256,21 +267,32 @@ public sealed class AstToIrLowerer
             }
 
             case WhileStatementNode whileStatement:
+            {
+                var condition = LowerExpression(whileStatement.Condition);
+                condition = RequireBooleanCondition(condition, whileStatement.Line, whileStatement.Column, "while condition");
                 return new IrWhileStatement(
-                    LowerExpression(whileStatement.Condition),
+                    condition,
                     LowerLoopBody(whileStatement.Body));
+            }
 
             case ForStatementNode forStatement:
+            {
+                var condition = forStatement.Condition != null ? LowerExpression(forStatement.Condition) : null;
+                if (condition != null)
+                    condition = RequireBooleanCondition(condition, forStatement.Line, forStatement.Column, "for condition");
                 return new IrForStatement(
                     forStatement.Initializer != null ? LowerStatement(forStatement.Initializer) : null,
-                    forStatement.Condition != null ? LowerExpression(forStatement.Condition) : null,
+                    condition,
                     forStatement.Increment != null ? LowerExpression(forStatement.Increment) : null,
                     LowerLoopBody(forStatement.Body));
+            }
 
             case DoWhileStatementNode doWhile:
-                return new IrDoWhileStatement(
-                    LowerLoopBody(doWhile.Body),
-                    LowerExpression(doWhile.Condition));
+            {
+                var condition = LowerExpression(doWhile.Condition);
+                condition = RequireBooleanCondition(condition, doWhile.Line, doWhile.Column, "do-while condition");
+                return new IrDoWhileStatement(LowerLoopBody(doWhile.Body), condition);
+            }
 
             case ForRangeStatementNode forRange:
                 return LowerForRangeStatement(forRange);
@@ -563,6 +585,58 @@ public sealed class AstToIrLowerer
         return $"__sushi_{prefix}_{_tempId}";
     }
 
+    private IrExpression LowerUnary(UnaryExpressionNode unary)
+    {
+        var operand = LowerExpression(unary.Operand);
+        if (unary.Operator == "!")
+            ValidateBooleanContext(operand, unary.Line, unary.Column, "operand of '!'");
+        return new IrUnaryExpression(unary.Operator, operand, unary.IsPrefix);
+    }
+
+    private IrExpression LowerTruthiness(UnaryExpressionNode unary)
+    {
+        var operand = LowerExpression(unary.Operand);
+        if (operand is IrLiteralExpression { Value: null })
+            return new IrTruthinessExpression(operand, IrTypeRef.Primitive("null"));
+        if (!TryInferStaticType(operand, out var type) || type.IsAnyOrUnknown)
+        {
+            AddDiagnostic(
+                UnknownTruthinessCode,
+                "Truthiness requires a statically known type; add a type annotation.",
+                unary.Line,
+                unary.Column);
+            return new IrTruthinessExpression(operand, IrTypeRef.Unknown);
+        }
+        return new IrTruthinessExpression(operand, type);
+    }
+
+    private IrExpression LowerConditionalCondition(ConditionalExpressionNode conditional)
+    {
+        var condition = LowerExpression(conditional.Condition);
+        return RequireBooleanCondition(condition, conditional.Line, conditional.Column, "conditional expression condition");
+    }
+
+    private IrExpression RequireBooleanCondition(IrExpression expression, int line, int column, string context)
+    {
+        ValidateBooleanContext(expression, line, column, context);
+        if (expression is IrTruthinessExpression or IrLiteralExpression { Value: bool }) return expression;
+        return new IrTruthinessExpression(expression, IrTypeRef.Primitive("bool"));
+    }
+
+    private void ValidateBooleanContext(IrExpression expression, int line, int column, string context)
+    {
+        if (TryInferStaticType(expression, out var type) &&
+            type.Kind == IrTypeKind.Primitive &&
+            string.Equals(type.Name, "bool", StringComparison.Ordinal))
+            return;
+
+        AddDiagnostic(
+            BooleanContextCode,
+            $"{context} requires a bool expression; use '?expression' to test truthiness.",
+            line,
+            column);
+    }
+
     private IrExpression LowerExpression(ExpressionNode node)
     {
         return node switch
@@ -571,10 +645,11 @@ public sealed class AstToIrLowerer
             IdentifierExpressionNode identifier => LowerIdentifier(identifier),
             ThisExpressionNode => new IrIdentifierExpression("this"),
             ParenthesizedExpressionNode parenthesized => LowerExpression(parenthesized.Expression),
-            UnaryExpressionNode unary => new IrUnaryExpression(unary.Operator, LowerExpression(unary.Operand), unary.IsPrefix),
+            UnaryExpressionNode unary when unary.Operator == "?" => LowerTruthiness(unary),
+            UnaryExpressionNode unary => LowerUnary(unary),
             BinaryExpressionNode binary => LowerBinary(binary),
             ConditionalExpressionNode conditional => new IrConditionalExpression(
-                LowerExpression(conditional.Condition),
+                LowerConditionalCondition(conditional),
                 LowerExpression(conditional.TrueExpression),
                 LowerExpression(conditional.FalseExpression)),
             ArrayLiteralExpressionNode array => new IrArrayLiteralExpression(array.Elements.Select(LowerExpression)),
@@ -649,7 +724,14 @@ public sealed class AstToIrLowerer
                         LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'"));
             }
         }
-        return new IrMemberAccessExpression(LowerExpression(member.Object), member.MemberName);
+        var target = LowerExpression(member.Object);
+        if (TryInferStaticType(target, out var targetType) && targetType.Kind == IrTypeKind.Structural)
+        {
+            var field = targetType.StructuralFields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+            if (field != null)
+                return new IrMemberAccessExpression(target, member.MemberName, field.Type);
+        }
+        return new IrMemberAccessExpression(target, member.MemberName);
     }
 
     private IrExpression LowerInterpolatedString(InterpolatedStringExpressionNode node)
@@ -776,13 +858,17 @@ public sealed class AstToIrLowerer
 
             ValidateIdentifier(identifier);
 
+            var assignmentValue = LowerExpression(node.Right);
             if (node.Operator == "=")
+            {
                 TrackVariableObjectType(identifier.Name, null, node.Right);
+                TrackVariableType(identifier.Name, null, assignmentValue);
+            }
 
             return new IrAssignmentExpression(
                 new IrIdentifierExpression(identifier.Name),
                 node.Operator,
-                LowerExpression(node.Right));
+                assignmentValue);
         }
 
         if (node.Operator is "==" or "===" or "!=" or "!==" &&
@@ -801,6 +887,11 @@ public sealed class AstToIrLowerer
 
         var left = LowerExpression(node.Left);
         var right = LowerExpression(node.Right);
+        if (node.Operator is "&&" or "||")
+        {
+            ValidateBooleanContext(left, node.Left.Line, node.Left.Column, $"left operand of '{node.Operator}'");
+            ValidateBooleanContext(right, node.Right.Line, node.Right.Column, $"right operand of '{node.Operator}'");
+        }
         if (left is IrLiteralExpression leftLiteral && right is IrLiteralExpression rightLiteral)
         {
             if (node.Operator is "==" or "===")
@@ -882,7 +973,8 @@ public sealed class AstToIrLowerer
                 return new IrIntrinsicCallExpression(
                     signature.CanonicalName,
                     signature.Id,
-                    binding.OrderedArguments);
+                    binding.OrderedArguments,
+                    signature.ReturnType);
             }
 
             if (_externalSymbols.TryGetValue(calleePath, out var externalCallee))
@@ -1001,7 +1093,8 @@ public sealed class AstToIrLowerer
                 return new IrIntrinsicCallExpression(
                     stringSignature.CanonicalName,
                     stringSignature.Id,
-                    binding.OrderedArguments);
+                    binding.OrderedArguments,
+                    stringSignature.ReturnType);
             }
 
             if (loweredArguments.Any(argument => argument.Name != null))
@@ -1367,6 +1460,26 @@ public sealed class AstToIrLowerer
     {
         _knownObjectTypes.Clear();
         foreach (var item in snapshot) _knownObjectTypes[item.Key] = item.Value;
+    }
+
+    private void RestoreKnownVariableTypes(Dictionary<string, IrTypeRef> snapshot)
+    {
+        _knownVariableTypes.Clear();
+        foreach (var item in snapshot) _knownVariableTypes[item.Key] = item.Value;
+    }
+
+    private void TrackVariableType(string name, string? declaredType, IrExpression? initializer)
+    {
+        var declared = LowerDeclaredType(declaredType, 1, 1, $"variable '{name}'");
+        if (!declared.IsAnyOrUnknown)
+        {
+            _knownVariableTypes[name] = declared;
+            return;
+        }
+        if (initializer != null && TryInferStaticType(initializer, out var inferred))
+            _knownVariableTypes[name] = inferred;
+        else
+            _knownVariableTypes.Remove(name);
     }
 
     private void TrackVariableObjectType(string name, string? declaredType, ExpressionNode? initializer)
@@ -2476,6 +2589,22 @@ public sealed class AstToIrLowerer
                 type = IrTypeRef.Primitive(objectType);
                 return true;
 
+            case IrIdentifierExpression identifier when _knownVariableTypes.TryGetValue(identifier.Name, out var variableType):
+                type = variableType;
+                return !type.IsAnyOrUnknown;
+
+            case IrTruthinessExpression:
+                type = IrTypeRef.Primitive("bool");
+                return true;
+
+            case IrUnaryExpression { Operator: "!" }:
+                type = IrTypeRef.Primitive("bool");
+                return true;
+
+            case IrBinaryExpression { Operator: "==" or "!=" or "<" or ">" or "<=" or ">=" or "&&" or "||" }:
+                type = IrTypeRef.Primitive("bool");
+                return true;
+
             case IrCallExpression call when _functionSignatures.TryGetValue(call.Callee, out var signature) &&
                                                 !signature.ReturnType.IsAnyOrUnknown:
                 type = signature.ReturnType;
@@ -2486,6 +2615,10 @@ public sealed class AstToIrLowerer
                      !methodSignature.ReturnType.IsAnyOrUnknown:
                 type = methodSignature.ReturnType;
                 return true;
+
+            case IrIntrinsicCallExpression intrinsic:
+                type = intrinsic.ReturnType;
+                return !type.IsAnyOrUnknown;
 
             case IrConditionalExpression conditional:
                 if (TryInferStaticType(conditional.TrueExpression, out var trueType) &&

@@ -1185,6 +1185,9 @@ function __sushi_call_method {
 
     private string EmitConditionExpression(IrExpression expression)
     {
+        if (expression is IrTruthinessExpression truthiness)
+            return EmitTruthinessExpression(truthiness);
+
         if (expression is IrLiteralExpression literal && literal.Value is bool booleanValue)
         {
             return booleanValue ? "$true" : "$false";
@@ -1216,6 +1219,7 @@ function __sushi_call_method {
             IrIndexExpression index => $"({EmitValueExpression(index.Target)})[{EmitValueExpression(index.Index)}]",
             IrUnaryExpression unary when unary.Operator is "!" =>
                 $"(-not {EmitValueExpression(unary.Operand)})",
+            IrTruthinessExpression truthiness => EmitTruthinessExpression(truthiness),
             IrUnaryExpression unary when unary.Operator is "-" or "+" =>
                 $"({unary.Operator}{EmitValueExpression(unary.Operand)})",
             IrConditionalExpression conditional =>
@@ -1241,6 +1245,26 @@ function __sushi_call_method {
             _ => "$null"
         };
     }
+
+    private string EmitTruthinessExpression(IrTruthinessExpression expression)
+    {
+        var type = expression.OperandType.Name;
+        if (type == "null") return "$false";
+        var value = EmitValueExpression(expression.Operand);
+        if (type == "array" || type == "object" || IsNamedObjectType(expression.OperandType))
+            return $"($null -ne [object]({value}))";
+        return type switch
+        {
+            "bool" => $"([string]({value}) -eq 'true')",
+            "int" or "float" => $"([double]({value}) -ne 0)",
+            "string" => $"(-not [string]::IsNullOrEmpty({value}))",
+            _ => "$false"
+        };
+    }
+
+    private static bool IsNamedObjectType(IrTypeRef type) =>
+        type.Kind == IrTypeKind.Primitive && type.Name is not null &&
+        type.Name is not ("string" or "int" or "float" or "bool" or "array" or "object" or "any");
 
     private bool IsDefinitelyInteger(IrExpression expression)
     {

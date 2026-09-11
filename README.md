@@ -85,6 +85,22 @@ default output name unambiguous (for example, `script.bash-linux.sh`); pass
 `std.target.platform()` are compile-time values, so unselected conditional
 branches are omitted from generated code.
 
+### Conditions and truthiness
+
+Conditions require a `bool`. Use the prefix `?` operator to explicitly convert
+a known value to a boolean; it does not catch evaluation errors:
+
+```sushi
+var token = std.env.get("SUSHI_TOKEN")
+if (?token) { println("token configured") }
+if (!?token) { println("token missing") }
+if (std.env.has("SUSHI_TOKEN")) { println("variable exists") }
+```
+
+`?` treats `null`, empty strings, and numeric zero as false. Non-empty strings
+(including `"false"`), non-zero numbers, and non-null arrays or objects are
+true. Add type annotations to values whose type cannot be inferred.
+
 ### Run transpiled Bash scripts
 
 - Bash 4.3+ (associative arrays and namerefs lower objects directly to native storage)

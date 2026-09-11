@@ -110,15 +110,6 @@ __sushi_validate_integer() {
   exit 2
 }
 
-__sushi_truthy() {
-  local value="${1-}"
-  case "$value" in
-    ''|false|FALSE|False|null|NULL|Null) return 1 ;;
-  esac
-  if __sushi_j_is_integer "$value"; then (( value != 0 )); return $?; fi
-  return 0
-}
-
 __sushi_validate_string_receiver() {
   local value="${1-}"
   local method="${2-string method}"
@@ -2420,21 +2411,6 @@ __sushi_string_match() {
   __sushi_json_object "ok" "true" "value" "$matched" "index" "$index" "groups" "$groups_json"
 }
 
-__sushi_truthy() {
-  local value="${1-}"
-  case "$value" in
-    ''|false|FALSE|False|null|NULL|Null)
-      return 1
-      ;;
-  esac
-
-  if __sushi_j_is_integer "$value"; then
-    (( value != 0 ))
-    return $?
-  fi
-
-  return 0
-}
 """);
 
         AppendRuntimeBlock(_zshMode
@@ -3484,14 +3460,16 @@ __sushi_native_obj_to_json() {
 
     private string PrepareRegex(IrExpression expression, bool inFunction)
     {
-        if (expression is IrLiteralExpression { Value: string pattern })
-        {
-            return Escape.BashSingleQuoted(pattern
+        var pattern = expression is IrLiteralExpression { Value: string literal }
+            ? Escape.BashSingleQuoted(literal
                 .Replace("\\d", "[0-9]", StringComparison.Ordinal)
                 .Replace("\\s", "[[:space:]]", StringComparison.Ordinal)
-                .Replace("\\w", "[[:alnum:]_]", StringComparison.Ordinal));
-        }
-        return PrepareValue(expression, inFunction);
+                .Replace("\\w", "[[:alnum:]_]", StringComparison.Ordinal))
+            : PrepareValue(expression, inFunction);
+        var name = $"__sushi_regex_{++_valueTempId}";
+        WriteLine($"{(inFunction ? "local " : "")}{name}={pattern}");
+        // Bash/Zsh interpret a quoted RHS of =~ literally; expand a temporary unquoted instead.
+        return $"${{{name}-}}";
     }
 
     private void EmitNativeProcessRun(string name, IReadOnlyList<IrExpression> arguments, bool inFunction)
@@ -3601,6 +3579,13 @@ __sushi_native_obj_to_json() {
     {
         switch (expression)
         {
+            case IrTruthinessExpression truthiness:
+            {
+                var result = DeclareTemp("'false'", inFunction);
+                var condition = PrepareTruthinessCondition(truthiness, inFunction);
+                WriteLine($"if {condition}; then {result}='true'; fi");
+                return $"\"${{{result}-}}\"";
+            }
             case IrLiteralExpression or IrIdentifierExpression:
                 return EmitValueExpression(expression);
 
@@ -3985,6 +3970,9 @@ __sushi_native_obj_to_json() {
 
     private string PrepareCondition(IrExpression expression, bool inFunction)
     {
+        if (expression is IrTruthinessExpression truthiness)
+            return PrepareTruthinessCondition(truthiness, inFunction);
+
         if (expression is IrUnaryExpression { Operator: "!" } unary)
         {
             return $"! {PrepareCondition(unary.Operand, inFunction)}";
@@ -4000,7 +3988,7 @@ __sushi_native_obj_to_json() {
             WriteLine($"if {right}; then {result}='true'; else {result}='false'; fi");
             _indent--;
             WriteLine("fi");
-            return $"__sushi_truthy \"${{{result}-}}\"";
+            return $"[[ \"${{{result}-}}\" == 'true' ]]";
         }
 
         if (expression is IrBinaryExpression comparison && comparison.Operator is "==" or "!=")
@@ -4053,6 +4041,50 @@ __sushi_native_obj_to_json() {
 
         var value = PrepareValue(expression, inFunction);
         return $"[[ -n {value} ]]";
+    }
+
+    private string PrepareTruthinessCondition(IrTruthinessExpression expression, bool inFunction)
+    {
+        var type = expression.OperandType.Name;
+        if (type == "null") return "false";
+        if (type == "array" || type == "object" || IsNamedObjectType(expression.OperandType))
+        {
+            if (expression.Operand is IrArrayLiteralExpression or IrObjectLiteralExpression or IrConstructionExpression)
+                return "true";
+            if (expression.Operand is IrIdentifierExpression identifier)
+            {
+                var name = SanitizeVariableName(identifier.Name);
+                if (_nativeArrayVariables.ContainsKey(name) || _nativeObjectVariables.Contains(name) || _recordVariables.Contains(name))
+                    return "true";
+            }
+            return $"[[ -n {PrepareValue(expression.Operand, inFunction)} ]]";
+        }
+
+        if (type == "bool") return PrepareBooleanCondition(expression.Operand, inFunction);
+        var value = PrepareValue(expression.Operand, inFunction);
+        return type switch
+        {
+            "int" => $"(( {value} != 0 ))",
+            "float" => $"[[ ! {value} =~ ^[-+]?0+([.]0*)?$ ]]",
+            "string" => $"[[ -n {value} ]]",
+            _ => "false"
+        };
+    }
+
+    private string PrepareBooleanCondition(IrExpression expression, bool inFunction)
+    {
+        return expression switch
+        {
+            IrLiteralExpression { Value: true } => "true",
+            IrLiteralExpression { Value: false } => "false",
+            IrIdentifierExpression identifier => $"[[ \"${{{SanitizeVariableName(identifier.Name)}:-}}\" == 'true' ]]",
+            IrUnaryExpression { Operator: "!" } unary => $"! {PrepareBooleanCondition(unary.Operand, inFunction)}",
+            IrBinaryExpression { Operator: "&&" } binary => $"{PrepareBooleanCondition(binary.Left, inFunction)} && {PrepareBooleanCondition(binary.Right, inFunction)}",
+            IrBinaryExpression { Operator: "||" } binary => $"{PrepareBooleanCondition(binary.Left, inFunction)} || {PrepareBooleanCondition(binary.Right, inFunction)}",
+            IrBinaryExpression binary when binary.Operator is "==" or "!=" or "<" or ">" or "<=" or ">=" => PrepareCondition(binary, inFunction),
+            IrTruthinessExpression truthiness => PrepareTruthinessCondition(truthiness, inFunction),
+            _ => $"[[ {PrepareValue(expression, inFunction)} == 'true' ]]"
+        };
     }
 
     private string PrepareStringIntrinsic(IrIntrinsicCallExpression call, bool inFunction)
@@ -4232,6 +4264,9 @@ __sushi_native_obj_to_json() {
 
     private string EmitConditionCommand(IrExpression expression)
     {
+        if (expression is IrTruthinessExpression truthiness)
+            return EmitTruthinessCommand(truthiness);
+
         if (expression is IrLiteralExpression literal && literal.Value is bool booleanValue)
         {
             return booleanValue ? "true" : "false";
@@ -4253,12 +4288,7 @@ __sushi_native_obj_to_json() {
             return $"(( {EmitArithmeticExpression(relational.Left)} {relational.Operator} {EmitArithmeticExpression(relational.Right)} ))";
         }
 
-        if (expression is IrIdentifierExpression identifier)
-        {
-            return $"__sushi_truthy \"${{{SanitizeVariableName(identifier.Name)}:-}}\"";
-        }
-
-        return $"__sushi_truthy {EmitValueExpression(expression)}";
+        return $"[[ {EmitValueExpression(expression)} == 'true' ]]";
     }
 
     private string EmitComparableValue(IrExpression expression)
@@ -4290,6 +4320,8 @@ __sushi_native_obj_to_json() {
             IrIndexExpression index => $"\"$(__sushi_json_index {EmitValueExpression(index.Target)} {EmitValueExpression(index.Index)})\"",
             IrUnaryExpression unary when unary.Operator == "!" =>
                 $"\"$(if {EmitConditionCommand(unary.Operand)}; then printf '%s' 'false'; else printf '%s' 'true'; fi)\"",
+            IrTruthinessExpression truthiness =>
+                $"\"$(if {EmitTruthinessCommand(truthiness)}; then printf '%s' 'true'; else printf '%s' 'false'; fi)\"",
             IrUnaryExpression unary when unary.Operator is "-" or "+" =>
                 $"$(( {unary.Operator}{EmitArithmeticExpression(unary.Operand)} ))",
             IrBinaryExpression binary when binary.Operator is "+" =>
@@ -4310,6 +4342,35 @@ __sushi_native_obj_to_json() {
             _ => "''"
         };
     }
+
+    private string EmitTruthinessCommand(IrTruthinessExpression expression)
+    {
+        var type = expression.OperandType.Name;
+        if (type == "null") return "false";
+        if (type == "array" || type == "object" || IsNamedObjectType(expression.OperandType)) return "true";
+        if (type == "bool") return EmitBooleanCondition(expression.Operand);
+        var value = EmitValueExpression(expression.Operand);
+        return type switch
+        {
+            "int" => $"(( {value} != 0 ))",
+            "float" => $"[[ ! {value} =~ ^[-+]?0+([.]0*)?$ ]]",
+            "string" => $"[[ -n {value} ]]",
+            _ => "false"
+        };
+    }
+
+    private string EmitBooleanCondition(IrExpression expression) => expression switch
+    {
+        IrLiteralExpression { Value: true } => "true",
+        IrLiteralExpression { Value: false } => "false",
+        IrIdentifierExpression identifier => $"[[ \"${{{SanitizeVariableName(identifier.Name)}:-}}\" == 'true' ]]",
+        IrUnaryExpression { Operator: "!" } unary => $"! {EmitBooleanCondition(unary.Operand)}",
+        IrBinaryExpression { Operator: "&&" } binary => $"{EmitBooleanCondition(binary.Left)} && {EmitBooleanCondition(binary.Right)}",
+        IrBinaryExpression { Operator: "||" } binary => $"{EmitBooleanCondition(binary.Left)} || {EmitBooleanCondition(binary.Right)}",
+        IrBinaryExpression binary when binary.Operator is "==" or "!=" or "<" or ">" or "<=" or ">=" => EmitConditionCommand(binary),
+        IrTruthinessExpression truthiness => EmitTruthinessCommand(truthiness),
+        _ => $"[[ {EmitValueExpression(expression)} == 'true' ]]"
+    };
 
     private string EmitArrayLiteral(IrArrayLiteralExpression expression)
     {

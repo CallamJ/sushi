@@ -1164,7 +1164,7 @@ public class Parser
 
     private ExpressionNode ParseUnaryExpression()
     {
-        if (MatchOperator("!") || MatchOperator("-") || MatchOperator("+") ||
+        if (Match(ClassifiedTokenKind.Question) || MatchOperator("!") || MatchOperator("-") || MatchOperator("+") ||
             MatchOperator("++") || MatchOperator("--"))
         {
             var op = Previous().Text;

@@ -30,7 +30,7 @@ public enum ClassifiedTokenKind
     Colon,          // :
     Pipe,           // |
     At,             // @ (pipe placeholder)
-    Question,       // ? (ternary operator)
+    Question,       // ? (ternary operator or prefix truthiness operator)
     Range,          // .. (exclusive range)
     RangeInclusive, // ... (inclusive range, also used for varargs)
     

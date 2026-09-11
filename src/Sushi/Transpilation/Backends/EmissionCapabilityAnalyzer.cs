@@ -41,6 +41,7 @@ internal static class EmissionCapabilityAnalyzer
         IrConstructionExpression construction => construction.Arguments.Any(argument => UsesArrays(argument.Value)),
         IrResolvedMethodCallExpression method => UsesArrays(method.Target) || method.Arguments.Any(argument => UsesArrays(argument.Value)),
         IrAdapterCallExpression adapter => UsesArrays(adapter.Value),
+        IrTruthinessExpression truthiness => UsesArrays(truthiness.Operand),
         IrUnaryExpression unary => UsesArrays(unary.Operand),
         IrBinaryExpression binary => UsesArrays(binary.Left) || UsesArrays(binary.Right),
         IrConditionalExpression conditional => UsesArrays(conditional.Condition) ||

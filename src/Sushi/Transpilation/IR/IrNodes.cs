@@ -250,6 +250,19 @@ public sealed class IrUnaryExpression : IrExpression
     }
 }
 
+/// <summary>Explicit conversion of a statically typed value to a boolean.</summary>
+public sealed class IrTruthinessExpression : IrExpression
+{
+    public IrExpression Operand { get; }
+    public IrTypeRef OperandType { get; }
+
+    public IrTruthinessExpression(IrExpression operand, IrTypeRef operandType)
+    {
+        Operand = operand;
+        OperandType = operandType;
+    }
+}
+
 public sealed class IrBinaryExpression : IrExpression
 {
     public IrExpression Left { get; }
@@ -391,15 +404,18 @@ public sealed class IrIntrinsicCallExpression : IrExpression
     public string CanonicalName { get; }
     public Sushi.Transpilation.Intrinsics.IntrinsicId Id { get; }
     public List<IrExpression> Arguments { get; }
+    public IrTypeRef ReturnType { get; }
 
     public IrIntrinsicCallExpression(
         string canonicalName,
         Sushi.Transpilation.Intrinsics.IntrinsicId id,
-        IEnumerable<IrExpression> arguments)
+        IEnumerable<IrExpression> arguments,
+        IrTypeRef? returnType = null)
     {
         CanonicalName = canonicalName;
         Id = id;
         Arguments = arguments.ToList();
+        ReturnType = returnType ?? IrTypeRef.Any;
     }
 }
 

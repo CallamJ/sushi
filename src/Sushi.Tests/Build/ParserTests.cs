@@ -556,6 +556,17 @@ namespace Sushi.Tests
             var unary = (UnaryExpressionNode)varDecl.Initializer;
             Assert.Equal("-", unary.Operator);
         }
+
+        [Fact]
+        public void TestTruthinessUnaryExpression()
+        {
+            var ast = Parse("var ready = ?value ? true : false");
+            var varDecl = (VariableDeclarationStatementNode)ast.Declarations[0];
+            var conditional = Assert.IsType<ConditionalExpressionNode>(varDecl.Initializer);
+            var truthiness = Assert.IsType<UnaryExpressionNode>(conditional.Condition);
+            Assert.Equal("?", truthiness.Operator);
+            Assert.IsType<IdentifierExpressionNode>(truthiness.Operand);
+        }
         
         [Fact]
         public void TestLogicalOperators()
