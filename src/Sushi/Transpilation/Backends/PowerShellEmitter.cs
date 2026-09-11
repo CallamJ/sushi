@@ -786,16 +786,7 @@ function __sushi_call_method {
                 break;
 
             case IrReturnStatement returnStatement:
-                if (returnStatement.Expression != null && _currentFunctionName != null && !_currentFunctionReturnType.IsAnyOrUnknown)
-                {
-                    WriteLine($"$__sushi_return_value = {EmitValueExpression(returnStatement.Expression)}");
-                    EmitContractCheckForValue(
-                        _currentFunctionReturnType,
-                        "$__sushi_return_value",
-                        $"return value of function '{_currentFunctionName}'");
-                    WriteLine("return $__sushi_return_value");
-                }
-                else if (returnStatement.Expression != null)
+                if (returnStatement.Expression != null)
                 {
                     WriteLine($"return {EmitValueExpression(returnStatement.Expression)}");
                 }

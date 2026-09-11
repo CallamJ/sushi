@@ -2636,6 +2636,20 @@ __sushi_native_obj_to_json() {
                     break;
                 }
 
+                if (initializer is IrIntrinsicCallExpression stringIntrinsic &&
+                    IsInlineStringIntrinsic(stringIntrinsic.Id))
+                {
+                    EmitStringChain(name, stringIntrinsic, inFunction, declareResult: true);
+                    break;
+                }
+
+                if (initializer is IrIntrinsicCallExpression directIntrinsic &&
+                    directIntrinsic.Id is IntrinsicId.IoReadText or IntrinsicId.IoExists or IntrinsicId.PathJoin or IntrinsicId.PathDirname or IntrinsicId.PathBasename or IntrinsicId.EnvGet or IntrinsicId.OsCwd)
+                {
+                    WriteLine($"{(inFunction ? "local " : "")}{name}={EmitValueExpression(directIntrinsic)}");
+                    break;
+                }
+
                 var value = PrepareValue(initializer, inFunction);
                 WriteLine($"{(inFunction ? "local " : "")}{name}={value}");
                 SetKnownInteger(name, IsDefinitelyInteger(initializer));
@@ -2916,6 +2930,13 @@ __sushi_native_obj_to_json() {
             case IrIntrinsicCallExpression intrinsicCall:
                 if (intrinsicCall.Id is IntrinsicId.Print or IntrinsicId.Println)
                 {
+                    if (intrinsicCall.Arguments.FirstOrDefault() is IrIntrinsicCallExpression stringPredicate &&
+                        stringPredicate.Id is IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or IntrinsicId.StringIsMatch)
+                    {
+                        EmitPrintedStringPredicate(stringPredicate, intrinsicCall.Id == IntrinsicId.Println, inFunction);
+                        return;
+                    }
+
                     var value = intrinsicCall.Arguments.Count == 0
                         ? "''"
                         : PrepareValue(intrinsicCall.Arguments[0], inFunction);
@@ -2968,6 +2989,21 @@ __sushi_native_obj_to_json() {
         }
 
         _context.Error(UnsupportedEmitCode, $"Unsupported expression statement in Bash emitter: {expression.GetType().Name}");
+    }
+
+    private void EmitPrintedStringPredicate(IrIntrinsicCallExpression predicate, bool newline, bool inFunction)
+    {
+        var value = PrepareValue(predicate.Arguments[0], inFunction);
+        var test = predicate.Id switch
+        {
+            IntrinsicId.StringContains => $"{value} == *{PrepareValue(predicate.Arguments[1], inFunction)}*",
+            IntrinsicId.StringStartsWith => $"{value} == {PrepareValue(predicate.Arguments[1], inFunction)}*",
+            IntrinsicId.StringEndsWith => $"{value} == *{PrepareValue(predicate.Arguments[1], inFunction)}",
+            IntrinsicId.StringIsMatch => $"{value} =~ {PrepareRegex(predicate.Arguments[1], inFunction)}",
+            _ => throw new InvalidOperationException($"Unexpected string predicate '{predicate.Id}'.")
+        };
+        var suffix = newline ? "\\n" : string.Empty;
+        WriteLine($"if [[ {test} ]]; then printf '%s{suffix}' 'true'; else printf '%s{suffix}' 'false'; fi");
     }
 
     private string EmitAssignmentExpression(IrAssignmentExpression assignment)
@@ -3741,6 +3777,13 @@ __sushi_native_obj_to_json() {
 
     private string PrepareStringIntrinsic(IrIntrinsicCallExpression call, bool inFunction)
     {
+        var result = $"__sushi_value_{++_valueTempId}";
+        EmitStringChain(result, call, inFunction, declareResult: true);
+        return $"\"${{{result}-}}\"";
+    }
+
+    private void EmitStringChain(string result, IrIntrinsicCallExpression call, bool inFunction, bool declareResult)
+    {
         var chain = new List<IrIntrinsicCallExpression> { call };
         var receiverExpression = call.Arguments[0];
         while (receiverExpression is IrIntrinsicCallExpression nested && IsInlineStringIntrinsic(nested.Id))
@@ -3750,7 +3793,8 @@ __sushi_native_obj_to_json() {
         }
         chain.Reverse();
 
-        var result = DeclareTemp(PrepareValue(receiverExpression, inFunction), inFunction);
+        var declaration = declareResult && inFunction ? "local " : "";
+        WriteLine($"{declaration}{result}={PrepareValue(receiverExpression, inFunction)}");
         foreach (var operation in chain)
         {
             switch (operation.Id)
@@ -3776,12 +3820,12 @@ __sushi_native_obj_to_json() {
                 case IntrinsicId.StringStartsWith:
                 case IntrinsicId.StringEndsWith:
                 {
-                    var needle = DeclareTemp(PrepareValue(operation.Arguments[1], inFunction), inFunction);
+                    var needle = PrepareValue(operation.Arguments[1], inFunction);
                     var test = operation.Id switch
                     {
-                        IntrinsicId.StringContains => $"\"${{{result}-}}\" == *\"${{{needle}-}}\"*",
-                        IntrinsicId.StringStartsWith => $"\"${{{result}-}}\" == \"${{{needle}-}}\"*",
-                        _ => $"\"${{{result}-}}\" == *\"${{{needle}-}}\""
+                        IntrinsicId.StringContains => $"\"${{{result}-}}\" == *{needle}*",
+                        IntrinsicId.StringStartsWith => $"\"${{{result}-}}\" == {needle}*",
+                        _ => $"\"${{{result}-}}\" == *{needle}"
                     };
                     WriteLine($"if [[ {test} ]]; then {result}='true'; else {result}='false'; fi");
                     break;
@@ -3794,8 +3838,6 @@ __sushi_native_obj_to_json() {
                 }
             }
         }
-
-        return $"\"${{{result}-}}\"";
     }
 
     private string CaptureValue(string expression, bool inFunction)

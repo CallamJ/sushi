@@ -163,6 +163,7 @@ public class EmitterTests
         Assert.Contains("[[", script);
         Assert.Contains("BASH_REMATCH", script);
         Assert.DoesNotContain("__sushi_string_", script);
+        Assert.DoesNotContain("__sushi_value_", script);
         Assert.Empty(diagnostics);
     }
 
@@ -518,7 +519,8 @@ public class EmitterTests
         var script = emitter.Emit(program, new EmitContext("contracts.sushi", diagnostics));
 
         Assert.Contains("param([pscustomobject]$user, [int]$count)", script);
-        Assert.Contains("$__sushi_return_value =", script);
+        Assert.Contains("return $count", script);
+        Assert.DoesNotContain("$__sushi_return_value", script);
         Assert.DoesNotContain("function __sushi_", script);
         Assert.Empty(diagnostics);
     }
@@ -601,6 +603,36 @@ public class EmitterTests
         Assert.Contains("values=('second')", script);
         Assert.Contains("${values[0]-}", script);
         Assert.DoesNotContain("__sushi_array_", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void BashEmitter_PrintsStringPredicatesWithoutTemporaryValues()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("text", new IrLiteralExpression("sushi")),
+            new IrExpressionStatement(new IrIntrinsicCallExpression(
+                "println",
+                IntrinsicId.Println,
+                new IrExpression[]
+                {
+                    new IrIntrinsicCallExpression(
+                        "std.string.contains",
+                        IntrinsicId.StringContains,
+                        new IrExpression[]
+                        {
+                            new IrIdentifierExpression("text"),
+                            new IrLiteralExpression("ush")
+                        })
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new BashEmitter().Emit(program, new EmitContext("strings.sushi", diagnostics));
+
+        Assert.Contains("if [[ \"${text:-}\" == *'ush'* ]]; then printf '%s\\n' 'true'", script);
+        Assert.DoesNotContain("__sushi_value_", script);
         Assert.Empty(diagnostics);
     }
 

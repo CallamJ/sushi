@@ -16,7 +16,7 @@ Line counts include shebangs and target setup:
 
 | Example | Native Bash | Generated Bash | Native Zsh | Generated Zsh | Native PowerShell | Generated PowerShell |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| arithmetic | 9 | 11 | 9 | 12 | 7 | 8 |
+| arithmetic | 9 | 11 | 9 | 12 | 7 | 7 |
 | strings | 7 | 8 | 7 | 9 | 4 | 4 |
 | collections | 6 | 5 | 7 | 7 | 5 | 5 |
 
