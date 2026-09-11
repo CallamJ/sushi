@@ -61,7 +61,7 @@ jobs:
         run: |
           test -f publish/Sushi-linux_x64-64
           publish/Sushi-linux_x64-64 --help >/dev/null
-          publish/Sushi-linux_x64-64 check examples/m3_verification.sushi --target Bash --format json >/dev/null
+          publish/Sushi-linux_x64-64 check examples/m3_verification.sushi --target bash-linux --format json >/dev/null
           publish/Sushi-linux_x64-64 benchmark --targets bash --iterations 1 --warmup 0 --strict-output --filter regex_match --output-dir /tmp/sushi-package-smoke
 
   m3-verification-bash:
@@ -90,10 +90,10 @@ jobs:
           sudo apt-get install -y curl
 
       - name: Transpile M3 verification to Bash
-        run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t Bash
+        run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t bash-linux
 
       - name: Execute Bash verification
-        run: bash examples/m3_verification.sh
+        run: bash examples/m3_verification.bash-linux.sh
 
   m3-verification-zsh:
     name: M3 Verification (Zsh)
@@ -116,10 +116,10 @@ jobs:
         run: dotnet restore src/Sushi/Sushi.csproj
 
       - name: Transpile M3 verification to Zsh
-        run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t Zsh
+        run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t zsh-macos
 
       - name: Execute Zsh verification
-        run: zsh examples/m3_verification.zsh
+        run: zsh examples/m3_verification.zsh-macos.zsh
 
   m3-verification-powershell:
     name: M3 Verification (PowerShell)
@@ -142,9 +142,9 @@ jobs:
         run: dotnet restore src/Sushi/Sushi.csproj
 
       - name: Transpile M3 verification to PowerShell
-        run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t Powershell7
+        run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t powershell-windows
 
       - name: Execute PowerShell verification
         shell: pwsh
         run: |
-          ./examples/m3_verification.ps1
+          ./examples/m3_verification.powershell-windows.ps1

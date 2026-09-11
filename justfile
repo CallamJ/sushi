@@ -75,4 +75,4 @@ ci: test
     bash scripts/build.sh linux-x64
     test -f publish/Sushi-linux_x64-64
     publish/Sushi-linux_x64-64 --help >/dev/null
-    publish/Sushi-linux_x64-64 check examples/m3_verification.sushi --target Bash --format json >/dev/null
+    publish/Sushi-linux_x64-64 check examples/m3_verification.sushi --target bash-linux --format json >/dev/null
