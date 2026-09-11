@@ -17,25 +17,9 @@ static class RunCommand
             Arity = ArgumentArity.ZeroOrMore
         };
 
-        Option<TargetLanguage> targetLanguageOption = new("-t", "--target")
-        {
-            Description = "Language to transpile to (defaults: Powershell on Windows, Zsh on macOS, Bash on Linux)",
-            DefaultValueFactory = parseResult => CommandSupport.GetDefaultTarget()
-        };
+        var targetLanguageOption = TranspileCommand.CreateTargetOption();
 
-        fileArgument.Validators.Add(result =>
-        {
-            var value = result.GetValueOrDefault<string>() ?? "";
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                result.AddError("File path cannot be empty.");
-                return;
-            }
-            if (!value.EndsWith(".sushi", StringComparison.OrdinalIgnoreCase))
-            {
-                result.AddError("File must have a .sushi extension.");
-            }
-        });
+        TranspileCommand.AddFileValidator(fileArgument);
 
         var command = new Command("run", "Transpile a .sushi file and execute it immediately")
         {
@@ -47,7 +31,17 @@ static class RunCommand
         command.SetAction(parseResult =>
         {
             var filePath = parseResult.GetValue(fileArgument) ?? "";
-            var target = parseResult.GetValue(targetLanguageOption);
+            var targetText = parseResult.GetValue(targetLanguageOption) ?? "auto";
+            if (!CommandSupport.TryParseTarget(targetText, out var target))
+            {
+                System.Console.Error.WriteLine($"Invalid target '{targetText}'. Choose one of: {TargetProfile.AcceptedValues}.");
+                return 1;
+            }
+            if (!CommandSupport.CanRunLocally(target))
+            {
+                System.Console.Error.WriteLine($"Cannot run target '{target.Id}' on this host. Transpile it and execute it on {target.PlatformName} instead.");
+                return 1;
+            }
             var scriptArgs = parseResult.GetValue(scriptArguments) ?? Array.Empty<string>();
 
             if (!CommandSupport.TryReadSourceFile(filePath, out var source))
@@ -62,12 +56,7 @@ static class RunCommand
                 return 1;
             }
 
-            var scriptExtension = target switch
-            {
-                TargetLanguage.Bash => ".sh",
-                TargetLanguage.Zsh => ".zsh",
-                _ => ".ps1"
-            };
+            var scriptExtension = target.FileExtension;
 
             var tempOutputPath = Path.Combine(
                 Path.GetTempPath(),

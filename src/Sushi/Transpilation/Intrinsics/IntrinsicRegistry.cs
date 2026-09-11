@@ -22,6 +22,14 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.Println,
                 new[] { new IntrinsicParameter("value", hasDefaultValue: true, defaultValue: "") }),
             new IntrinsicSignature(
+                "std.target.shell",
+                IntrinsicId.TargetShell,
+                Array.Empty<IntrinsicParameter>()),
+            new IntrinsicSignature(
+                "std.target.platform",
+                IntrinsicId.TargetPlatform,
+                Array.Empty<IntrinsicParameter>()),
+            new IntrinsicSignature(
                 "std.string.trim",
                 IntrinsicId.StringTrim,
                 new[] { new IntrinsicParameter("value") }),
@@ -92,11 +100,11 @@ public sealed class IntrinsicRegistry
                     new IntrinsicParameter("pattern")
                 }),
             new IntrinsicSignature(
-                "std.io.readText",
+                "std.fs.readText",
                 IntrinsicId.IoReadText,
                 new[] { new IntrinsicParameter("path") }),
             new IntrinsicSignature(
-                "std.io.writeText",
+                "std.fs.writeText",
                 IntrinsicId.IoWriteText,
                 new[]
                 {
@@ -105,9 +113,27 @@ public sealed class IntrinsicRegistry
                     new IntrinsicParameter("append", hasDefaultValue: true, defaultValue: false)
                 }),
             new IntrinsicSignature(
-                "std.io.exists",
+                "std.fs.exists",
                 IntrinsicId.IoExists,
                 new[] { new IntrinsicParameter("path") }),
+            // Compatibility names for the beta. New code should use std.fs.*.
+            new IntrinsicSignature(
+                "std.io.readText",
+                IntrinsicId.IoReadText,
+                new[] { new IntrinsicParameter("path") }, "std.io.* is deprecated; use std.fs.* instead."),
+            new IntrinsicSignature(
+                "std.io.writeText",
+                IntrinsicId.IoWriteText,
+                new[]
+                {
+                    new IntrinsicParameter("path"),
+                    new IntrinsicParameter("text"),
+                    new IntrinsicParameter("append", hasDefaultValue: true, defaultValue: false)
+                }, "std.io.* is deprecated; use std.fs.* instead."),
+            new IntrinsicSignature(
+                "std.io.exists",
+                IntrinsicId.IoExists,
+                new[] { new IntrinsicParameter("path") }, "std.io.* is deprecated; use std.fs.* instead."),
             new IntrinsicSignature(
                 "std.path.join",
                 IntrinsicId.PathJoin,
@@ -119,6 +145,14 @@ public sealed class IntrinsicRegistry
             new IntrinsicSignature(
                 "std.path.basename",
                 IntrinsicId.PathBasename,
+                new[] { new IntrinsicParameter("path") }),
+            new IntrinsicSignature(
+                "std.path.extension",
+                IntrinsicId.PathExtension,
+                new[] { new IntrinsicParameter("path") }),
+            new IntrinsicSignature(
+                "std.path.stem",
+                IntrinsicId.PathStem,
                 new[] { new IntrinsicParameter("path") }),
             new IntrinsicSignature(
                 "std.env.get",
@@ -137,6 +171,14 @@ public sealed class IntrinsicRegistry
                     new IntrinsicParameter("value")
                 }),
             new IntrinsicSignature(
+                "std.env.has",
+                IntrinsicId.EnvHas,
+                new[] { new IntrinsicParameter("name") }),
+            new IntrinsicSignature(
+                "std.env.unset",
+                IntrinsicId.EnvUnset,
+                new[] { new IntrinsicParameter("name") }),
+            new IntrinsicSignature(
                 "std.process.args",
                 IntrinsicId.ProcessArgs,
                 Array.Empty<IntrinsicParameter>()),
@@ -144,6 +186,14 @@ public sealed class IntrinsicRegistry
                 "std.process.exit",
                 IntrinsicId.ProcessExit,
                 new[] { new IntrinsicParameter("code", hasDefaultValue: true, defaultValue: 0) }),
+            new IntrinsicSignature(
+                "std.process.which",
+                IntrinsicId.ProcessWhich,
+                new[] { new IntrinsicParameter("command") }),
+            new IntrinsicSignature(
+                "std.process.sleep",
+                IntrinsicId.ProcessSleep,
+                new[] { new IntrinsicParameter("milliseconds") }),
             new IntrinsicSignature(
                 "std.process.run",
                 IntrinsicId.ProcessRun,
@@ -188,6 +238,14 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.OsChdir,
                 new[] { new IntrinsicParameter("path") }),
             new IntrinsicSignature(
+                "std.console.error",
+                IntrinsicId.ConsoleError,
+                new[] { new IntrinsicParameter("value", hasDefaultValue: true, defaultValue: "") }),
+            new IntrinsicSignature(
+                "std.console.readLine",
+                IntrinsicId.ConsoleReadLine,
+                Array.Empty<IntrinsicParameter>()),
+            new IntrinsicSignature(
                 "std.fs.glob",
                 IntrinsicId.FsGlob,
                 new[]
@@ -196,12 +254,61 @@ public sealed class IntrinsicRegistry
                     new IntrinsicParameter("cwd", hasDefaultValue: true, defaultValue: null)
                 }),
             new IntrinsicSignature(
+                "std.fs.isFile",
+                IntrinsicId.FsIsFile,
+                new[] { new IntrinsicParameter("path") }),
+            new IntrinsicSignature(
+                "std.fs.isDirectory",
+                IntrinsicId.FsIsDirectory,
+                new[] { new IntrinsicParameter("path") }),
+            new IntrinsicSignature(
+                "std.fs.createDirectory",
+                IntrinsicId.FsCreateDirectory,
+                new[] { new IntrinsicParameter("path") }),
+            new IntrinsicSignature(
+                "std.fs.remove",
+                IntrinsicId.FsRemove,
+                new[]
+                {
+                    new IntrinsicParameter("path"),
+                    new IntrinsicParameter("recursive", hasDefaultValue: true, defaultValue: false)
+                }),
+            new IntrinsicSignature(
+                "std.fs.copy",
+                IntrinsicId.FsCopy,
+                new[]
+                {
+                    new IntrinsicParameter("source"),
+                    new IntrinsicParameter("destination"),
+                    new IntrinsicParameter("recursive", hasDefaultValue: true, defaultValue: false)
+                }),
+            new IntrinsicSignature(
+                "std.fs.move",
+                IntrinsicId.FsMove,
+                new[] { new IntrinsicParameter("source"), new IntrinsicParameter("destination") }),
+            new IntrinsicSignature(
+                "std.archive.zip",
+                IntrinsicId.ArchiveZip,
+                new[] { new IntrinsicParameter("source"), new IntrinsicParameter("destination") }),
+            new IntrinsicSignature(
+                "std.archive.unzip",
+                IntrinsicId.ArchiveUnzip,
+                new[] { new IntrinsicParameter("source"), new IntrinsicParameter("destination") }),
+            new IntrinsicSignature(
                 "std.http.get",
                 IntrinsicId.HttpGet,
                 new[]
                 {
                     new IntrinsicParameter("url"),
                     new IntrinsicParameter("headers", hasDefaultValue: true, defaultValue: null)
+                }),
+            new IntrinsicSignature(
+                "std.http.download",
+                IntrinsicId.HttpDownload,
+                new[]
+                {
+                    new IntrinsicParameter("url"),
+                    new IntrinsicParameter("destination")
                 }),
             new IntrinsicSignature(
                 "std.http.post",

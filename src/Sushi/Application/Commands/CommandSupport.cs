@@ -2,39 +2,23 @@ namespace Sushi.Application.Commands;
 
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using Sushi.Application.Console;
 using Sushi.Transpilation;
 
 internal static class CommandSupport
 {
-    public static TargetLanguage GetDefaultTarget()
+    public static TargetProfile GetDefaultTarget() => TargetProfile.Host();
+
+    public static bool TryParseTarget(string? value, out TargetProfile target) => TargetProfile.TryParse(value, out target);
+
+    public static bool CanRunLocally(TargetProfile target) => target.Platform == TargetProfile.Host().Platform;
+
+    public static string GetOutputPath(string inputPath, TargetProfile target, bool includeProfile = false)
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            return TargetLanguage.Powershell7;
-        }
-
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            return TargetLanguage.Zsh;
-        }
-
-        return TargetLanguage.Bash;
-    }
-
-    public static string GetOutputPath(string inputPath, TargetLanguage target)
-    {
-        var extension = target switch
-        {
-            TargetLanguage.Bash => ".sh",
-            TargetLanguage.Zsh => ".zsh",
-            _ => ".ps1"
-        };
-
         var directory = Path.GetDirectoryName(inputPath) ?? ".";
         var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(inputPath);
-        return Path.Combine(directory, fileNameWithoutExtension + extension);
+        var suffix = includeProfile ? $".{target.Id}" : "";
+        return Path.Combine(directory, fileNameWithoutExtension + suffix + target.FileExtension);
     }
 
     public static bool TryReadSourceFile(string filePath, out string sourceText)
@@ -58,16 +42,21 @@ internal static class CommandSupport
         }
     }
 
-    public static TranspileResult Transpile(string filePath, TargetLanguage target, string sourceText)
+    public static TranspileResult Transpile(string filePath, TargetProfile target, string sourceText)
     {
         var transpiler = new Transpiler();
         return transpiler.Transpile(new TranspileRequest
         {
             SourceText = sourceText,
             SourcePath = filePath,
-            TargetLanguage = target
+            TargetLanguage = target.Shell,
+            TargetProfile = target
         });
     }
+
+    // Benchmark infrastructure still models native runners by shell only.
+    public static TranspileResult Transpile(string filePath, TargetLanguage target, string sourceText) =>
+        Transpile(filePath, new TargetProfile(target, target == TargetLanguage.Zsh ? TargetPlatform.Macos : target == TargetLanguage.Powershell7 ? TargetPlatform.Windows : TargetPlatform.Linux), sourceText);
 
     public static bool TryWriteOutput(string outputPath, string code)
     {
@@ -83,7 +72,7 @@ internal static class CommandSupport
         }
     }
 
-    public static int ExecuteScript(TargetLanguage target, string scriptPath, IReadOnlyList<string> scriptArgs, string? workingDirectory)
+    public static int ExecuteScript(TargetProfile target, string scriptPath, IReadOnlyList<string> scriptArgs, string? workingDirectory)
     {
         foreach (var candidate in GetRunnerCandidates(target))
         {
@@ -144,9 +133,9 @@ internal static class CommandSupport
         return ex.NativeErrorCode == 2 || ex.NativeErrorCode == 3;
     }
 
-    private static IEnumerable<RunnerCandidate> GetRunnerCandidates(TargetLanguage target)
+    private static IEnumerable<RunnerCandidate> GetRunnerCandidates(TargetProfile target)
     {
-        return target switch
+        return target.Shell switch
         {
             TargetLanguage.Bash => new[]
             {

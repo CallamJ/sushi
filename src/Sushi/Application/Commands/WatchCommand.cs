@@ -1,6 +1,7 @@
 namespace Sushi.Application.Commands;
 
 using System.CommandLine;
+using Sushi.Application;
 
 
 static class WatchCommand
@@ -12,11 +13,7 @@ static class WatchCommand
             Description = "Path to the .sushi file to watch"
         };
 
-        Option<TargetLanguage> targetLanguageOption = new("-t", "--target")
-        {
-            Description = "Language to transpile to",
-            DefaultValueFactory = parseResult => CommandSupport.GetDefaultTarget()
-        };
+        var targetLanguageOption = TranspileCommand.CreateTargetOption();
 
         Option<bool> verboseOption = new("-v", "--verbose")
         {
@@ -36,19 +33,7 @@ static class WatchCommand
             DefaultValueFactory = _ => 250
         };
 
-        fileArgument.Validators.Add(result =>
-        {
-            var value = result.GetValueOrDefault<string>() ?? "";
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                result.AddError("File path cannot be empty.");
-                return;
-            }
-            if (!value.EndsWith(".sushi", StringComparison.OrdinalIgnoreCase))
-            {
-                result.AddError("File must have a .sushi extension.");
-            }
-        });
+        TranspileCommand.AddFileValidator(fileArgument);
 
         var command = new Command("watch", "Automatically transpile a .sushi file on any changes")
         {
@@ -62,7 +47,17 @@ static class WatchCommand
         command.SetAction(parseResult =>
         {
             var filePath = parseResult.GetValue(fileArgument) ?? "";
-            var target = parseResult.GetValue(targetLanguageOption);
+            var targetText = parseResult.GetValue(targetLanguageOption) ?? "auto";
+            if (!CommandSupport.TryParseTarget(targetText, out var target))
+            {
+                System.Console.Error.WriteLine($"Invalid target '{targetText}'. Choose one of: {TargetProfile.AcceptedValues}.");
+                return 1;
+            }
+            if (parseResult.GetValue(runOption) && !CommandSupport.CanRunLocally(target))
+            {
+                System.Console.Error.WriteLine($"Cannot use --run for target '{target.Id}' on this host.");
+                return 1;
+            }
             var verbose = parseResult.GetValue(verboseOption);
             var runAfterTranspile = parseResult.GetValue(runOption);
             var pollIntervalMs = parseResult.GetValue(pollIntervalMsOption);
@@ -130,7 +125,7 @@ static class WatchCommand
     private static int TranspileOnce(
         string filePath,
         string outputPath,
-        TargetLanguage target,
+        TargetProfile target,
         bool verbose,
         bool runAfterTranspile,
         string? workingDirectory)

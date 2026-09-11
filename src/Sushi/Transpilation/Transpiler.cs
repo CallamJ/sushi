@@ -37,7 +37,8 @@ public sealed class Transpiler
             };
         }
 
-        var lowerer = new AstToIrLowerer();
+        var targetProfile = request.TargetProfile ?? GetLegacyProfile(request.TargetLanguage);
+        var lowerer = new AstToIrLowerer(targetProfile);
         var ir = lowerer.Lower(program, request.SourcePath);
         diagnostics.AddRange(lowerer.Diagnostics);
 
@@ -51,8 +52,8 @@ public sealed class Transpiler
             };
         }
 
-        var emitter = GetEmitter(request.TargetLanguage);
-        var emitContext = new EmitContext(request.SourcePath, diagnostics);
+        var emitter = GetEmitter(targetProfile.Shell);
+        var emitContext = new EmitContext(request.SourcePath, diagnostics, targetProfile);
         string code;
         try
         {
@@ -92,6 +93,13 @@ public sealed class Transpiler
             _ => throw new ArgumentOutOfRangeException(nameof(targetLanguage), targetLanguage, "Unsupported target")
         };
     }
+
+    private static TargetProfile GetLegacyProfile(TargetLanguage shell) => shell switch
+    {
+        TargetLanguage.Zsh => new TargetProfile(shell, TargetPlatform.Macos),
+        TargetLanguage.Powershell7 => new TargetProfile(shell, TargetPlatform.Windows),
+        _ => new TargetProfile(shell, TargetPlatform.Linux)
+    };
 
     private static Diagnostic ParseExceptionToDiagnostic(string sourcePath, Exception exception)
     {

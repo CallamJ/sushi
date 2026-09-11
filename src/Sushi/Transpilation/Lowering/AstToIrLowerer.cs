@@ -1,5 +1,7 @@
 namespace Sushi.Transpilation.Lowering;
 
+using Sushi.Application;
+using Sushi.Build;
 using Sushi.Build.SyntaxTree;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
@@ -42,6 +44,7 @@ public sealed class AstToIrLowerer
     private readonly Dictionary<string, EnumDeclarationNode> _enums = new(StringComparer.Ordinal);
     private readonly List<IrFunctionDeclarationStatement> _liftedFunctions = new();
     private readonly HashSet<string> _globalVariables = new(StringComparer.Ordinal);
+    private readonly TargetProfile _targetProfile;
 
     private string _sourcePath = "";
     private string? _currentFunctionName;
@@ -54,6 +57,11 @@ public sealed class AstToIrLowerer
     private int _functionDepth;
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
+
+    public AstToIrLowerer(TargetProfile? targetProfile = null)
+    {
+        _targetProfile = targetProfile ?? TargetProfile.Host();
+    }
 
     public IrProgram Lower(ProgramNode program, string sourcePath)
     {
@@ -187,10 +195,20 @@ public sealed class AstToIrLowerer
                 return new IrExpressionStatement(LowerExpression(expressionStatement.Expression));
 
             case IfStatementNode ifStatement:
+            {
+                var condition = LowerExpression(ifStatement.Condition);
+                if (condition is IrLiteralExpression { Value: bool value })
+                {
+                    return value
+                        ? StatementToBlock(ifStatement.ThenBranch)
+                        : ifStatement.ElseBranch != null ? StatementToBlock(ifStatement.ElseBranch) : new IrBlockStatement();
+                }
+
                 return new IrIfStatement(
-                    LowerExpression(ifStatement.Condition),
+                    condition,
                     StatementToBlock(ifStatement.ThenBranch),
                     ifStatement.ElseBranch != null ? StatementToBlock(ifStatement.ElseBranch) : null);
+            }
 
             case WhileStatementNode whileStatement:
                 return new IrWhileStatement(
@@ -516,6 +534,7 @@ public sealed class AstToIrLowerer
                 LowerExpression(conditional.FalseExpression)),
             ArrayLiteralExpressionNode array => new IrArrayLiteralExpression(array.Elements.Select(LowerExpression)),
             ObjectLiteralExpressionNode obj => LowerObjectLiteral(obj),
+            InterpolatedStringExpressionNode interpolated => LowerInterpolatedString(interpolated),
             MemberAccessExpressionNode member => new IrMemberAccessExpression(LowerExpression(member.Object), member.MemberName),
             IndexExpressionNode index => new IrIndexExpression(LowerExpression(index.Array), LowerExpression(index.Index)),
             SliceExpressionNode slice => new IrCallExpression(
@@ -526,11 +545,79 @@ public sealed class AstToIrLowerer
                     slice.Start != null ? LowerExpression(slice.Start) : new IrLiteralExpression(null),
                     slice.End != null ? LowerExpression(slice.End) : new IrLiteralExpression(null)
                 }),
+            PipeExpressionNode pipe => LowerPipeExpression(pipe),
             CallExpressionNode call => LowerCall(call),
             NewExpressionNode @new => LowerNewExpression(@new),
             LambdaExpressionNode lambda => LowerLambdaExpression(lambda),
             _ => UnsupportedExpression(node)
         };
+    }
+
+    private IrExpression LowerInterpolatedString(InterpolatedStringExpressionNode node)
+    {
+        IrExpression result = new IrLiteralExpression("");
+        foreach (var part in node.Parts)
+        {
+            var value = part.IsLiteral
+                ? new IrLiteralExpression(part.Content)
+                : LowerInterpolationExpression(part.Content, node);
+            result = new IrBinaryExpression(result, "+", value);
+        }
+
+        return result;
+    }
+
+    private IrExpression LowerInterpolationExpression(string source, InterpolatedStringExpressionNode owner)
+    {
+        try
+        {
+            // The parser intentionally exposes programs, not standalone expressions.
+            // A synthetic declaration gives interpolation the exact same grammar and
+            // name/type validation as a regular expression.
+            var tokens = new Tokenizer("var __sushi_interpolation = " + source).Tokenize().ToList();
+            var parsed = new Parser(new Lexer(tokens).Lex().ToList()).Parse();
+            if (parsed.Declarations.FirstOrDefault() is VariableDeclarationStatementNode declaration && declaration.Initializer != null)
+            {
+                return LowerExpression(declaration.Initializer);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddDiagnostic(UnsupportedSyntaxCode, $"Invalid string interpolation expression: {ex.Message}", owner.Line, owner.Column);
+            return new IrLiteralExpression("");
+        }
+
+        AddDiagnostic(UnsupportedSyntaxCode, "Invalid string interpolation expression", owner.Line, owner.Column);
+        return new IrLiteralExpression("");
+    }
+
+    private IrExpression LowerPipeExpression(PipeExpressionNode node)
+    {
+        // A pipe is syntax sugar only: value | fn(a, @, b) becomes fn(a, value, b).
+        // Keeping this rewrite in the AST phase means normal intrinsic/function binding
+        // and the existing native emitters handle the result without a pipeline runtime.
+        if (node.Target is CallExpressionNode targetCall)
+        {
+            var arguments = targetCall.Arguments.ToList();
+            var insertionIndex = node.PlaceholderIndex ?? 0;
+            var sourceArgument = new ArgumentNode(null, node.Source, node.Source.Line, node.Source.Column);
+            if (node.PlaceholderIndex.HasValue)
+            {
+                arguments[insertionIndex] = sourceArgument;
+            }
+            else
+            {
+                arguments.Insert(insertionIndex, sourceArgument);
+            }
+
+            return LowerCall(new CallExpressionNode(targetCall.Callee, arguments, node.Line, node.Column));
+        }
+
+        return LowerCall(new CallExpressionNode(
+            node.Target,
+            new List<ArgumentNode> { new(null, node.Source, node.Source.Line, node.Source.Column) },
+            node.Line,
+            node.Column));
     }
 
     private IrExpression LowerObjectLiteral(ObjectLiteralExpressionNode node)
@@ -564,10 +651,17 @@ public sealed class AstToIrLowerer
                 LowerExpression(node.Right));
         }
 
-        return new IrBinaryExpression(
-            LowerExpression(node.Left),
-            node.Operator,
-            LowerExpression(node.Right));
+        var left = LowerExpression(node.Left);
+        var right = LowerExpression(node.Right);
+        if (left is IrLiteralExpression leftLiteral && right is IrLiteralExpression rightLiteral)
+        {
+            if (node.Operator is "==" or "===")
+                return new IrLiteralExpression(Equals(leftLiteral.Value, rightLiteral.Value));
+            if (node.Operator is "!=" or "!==")
+                return new IrLiteralExpression(!Equals(leftLiteral.Value, rightLiteral.Value));
+        }
+
+        return new IrBinaryExpression(left, node.Operator, right);
     }
 
     private IrExpression LowerCall(CallExpressionNode node)
@@ -604,10 +698,21 @@ public sealed class AstToIrLowerer
                     _diagnostics.Add(diagnostic);
                 }
 
+                if (signature.DeprecationMessage != null)
+                {
+                    _diagnostics.Add(Diagnostic.Warning("SUSHI2001", signature.DeprecationMessage,
+                        new SourceSpan(_sourcePath, node.Line, node.Column)));
+                }
+
                 if (!binding.Success)
                 {
                     return new IrLiteralExpression(null);
                 }
+
+                if (signature.Id == IntrinsicId.TargetShell)
+                    return new IrLiteralExpression(_targetProfile.ShellName);
+                if (signature.Id == IntrinsicId.TargetPlatform)
+                    return new IrLiteralExpression(_targetProfile.PlatformName);
 
                 return new IrIntrinsicCallExpression(
                     signature.CanonicalName,

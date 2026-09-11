@@ -1,138 +1,56 @@
 namespace Sushi.Application.Commands;
 
-using System.Runtime.InteropServices;
 using System.CommandLine;
+using Sushi.Application;
 using Sushi.Application.Console;
-using Sushi.Transpilation;
-
 
 static class TranspileCommand
 {
-    public static TargetLanguage GetTarget()
-    {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            return TargetLanguage.Powershell7;
-        }
-
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            return TargetLanguage.Zsh;
-        }
-
-        return TargetLanguage.Bash;
-    }
-
     public static Command Create()
     {
-        Argument<string> fileArgument = new("file")
-        {
-            Description = "Path to the .sushi file to transpile"
-        };
-
-        Option<TargetLanguage> targetLanguageOption = new("-t", "--target")
-        {
-            Description = "Language to transpile to",
-            DefaultValueFactory = parseResult => GetTarget()
-        };
-
-        Option<bool> verboseOption = new("-v", "--verbose")
-        {
-            Description = "Print additional diagnostic details",
-            DefaultValueFactory = parseResult => false
-        };
-
-        fileArgument.Validators.Add(result =>
-        {
-            var value = result.GetValueOrDefault<string>() ?? "";
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                result.AddError("File path cannot be empty.");
-                return;
-            }
-            if (!value.EndsWith(".sushi", StringComparison.OrdinalIgnoreCase))
-            {
-                result.AddError("File must have a .sushi extension.");
-            }
-        });
-
-        var command = new Command("transpile", "Transpile a .sushi file to an output file")
-        {
-            fileArgument,
-            targetLanguageOption,
-            verboseOption,
-        };
-
+        Argument<string> fileArgument = new("file") { Description = "Path to the .sushi file to transpile" };
+        var targetOption = CreateTargetOption();
+        Option<string?> outputOption = new("-o", "--output") { Description = "Output path (defaults beside the input)" };
+        Option<bool> verboseOption = new("-v", "--verbose") { Description = "Print additional diagnostic details" };
+        AddFileValidator(fileArgument);
+        var command = new Command("transpile", "Transpile a .sushi file to an output file") { fileArgument, targetOption, outputOption, verboseOption };
         command.SetAction(parseResult =>
         {
             var filePath = parseResult.GetValue(fileArgument) ?? "";
-            var target = parseResult.GetValue(targetLanguageOption);
+            var targetText = parseResult.GetValue(targetOption) ?? "auto";
+            if (!CommandSupport.TryParseTarget(targetText, out var target))
+            {
+                System.Console.Error.WriteLine($"Invalid target '{targetText}'. Choose one of: {TargetProfile.AcceptedValues}.");
+                return 1;
+            }
+            if (!CommandSupport.TryReadSourceFile(filePath, out var source)) return 1;
+            var result = CommandSupport.Transpile(filePath, target, source);
             var verbose = parseResult.GetValue(verboseOption);
-
-            if (!File.Exists(filePath))
-            {
-                System.Console.Error.WriteLine($"Input file not found: {filePath}");
-                return 1;
-            }
-
-            string source;
-            try
-            {
-                source = File.ReadAllText(filePath);
-            }
-            catch (Exception ex)
-            {
-                System.Console.Error.WriteLine($"Failed to read input file: {ex.Message}");
-                return 1;
-            }
-
-            var transpiler = new Transpiler();
-            var result = transpiler.Transpile(new TranspileRequest
-            {
-                SourceText = source,
-                SourcePath = filePath,
-                TargetLanguage = target
-            });
-
             if (!result.Success || result.EmittedCode == null)
             {
                 DiagnosticPrinter.Print(result.Diagnostics, includeWarnings: verbose);
                 return 1;
             }
-
-            var outputPath = GetOutputPath(filePath, target);
-            try
-            {
-                File.WriteAllText(outputPath, result.EmittedCode);
-            }
-            catch (Exception ex)
-            {
-                System.Console.Error.WriteLine($"Failed to write output file: {ex.Message}");
-                return 1;
-            }
-
-            if (verbose && result.Diagnostics.Count > 0)
-            {
-                DiagnosticPrinter.Print(result.Diagnostics, includeWarnings: true);
-            }
-
-            System.Console.WriteLine($"Transpiled {filePath} -> {outputPath}");
+            var output = parseResult.GetValue(outputOption);
+            var outputPath = output ?? CommandSupport.GetOutputPath(filePath, target, includeProfile: !targetText.Equals("auto", StringComparison.OrdinalIgnoreCase));
+            if (!CommandSupport.TryWriteOutput(outputPath, result.EmittedCode)) return 1;
+            if (verbose && result.Diagnostics.Count > 0) DiagnosticPrinter.Print(result.Diagnostics, includeWarnings: true);
+            System.Console.WriteLine($"Transpiled {filePath} -> {outputPath} ({target.Id})");
             return 0;
         });
-
         return command;
     }
 
-    private static string GetOutputPath(string inputPath, TargetLanguage target)
+    internal static Option<string> CreateTargetOption() => new("-t", "--target")
     {
-        var extension = target switch
-        {
-            TargetLanguage.Bash => ".sh",
-            TargetLanguage.Zsh => ".zsh",
-            _ => ".ps1"
-        };
-        var directory = Path.GetDirectoryName(inputPath) ?? ".";
-        var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(inputPath);
-        return Path.Combine(directory, fileNameWithoutExtension + extension);
-    }
+        Description = $"Target profile: {TargetProfile.AcceptedValues}",
+        DefaultValueFactory = _ => "auto"
+    };
+
+    internal static void AddFileValidator(Argument<string> fileArgument) => fileArgument.Validators.Add(result =>
+    {
+        var value = result.GetValueOrDefault<string>() ?? "";
+        if (string.IsNullOrWhiteSpace(value)) result.AddError("File path cannot be empty.");
+        else if (!value.EndsWith(".sushi", StringComparison.OrdinalIgnoreCase)) result.AddError("File must have a .sushi extension.");
+    });
 }

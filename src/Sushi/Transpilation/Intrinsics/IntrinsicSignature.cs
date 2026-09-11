@@ -25,11 +25,13 @@ public sealed class IntrinsicSignature
     public string CanonicalName { get; }
     public IntrinsicId Id { get; }
     public IReadOnlyList<IntrinsicParameter> Parameters { get; }
+    public string? DeprecationMessage { get; }
 
-    public IntrinsicSignature(string canonicalName, IntrinsicId id, IEnumerable<IntrinsicParameter> parameters)
+    public IntrinsicSignature(string canonicalName, IntrinsicId id, IEnumerable<IntrinsicParameter> parameters, string? deprecationMessage = null)
     {
         CanonicalName = canonicalName;
         Id = id;
         Parameters = parameters.ToList();
+        DeprecationMessage = deprecationMessage;
     }
 }

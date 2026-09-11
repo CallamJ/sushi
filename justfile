@@ -34,7 +34,7 @@ transpile file target="Bash":
     dotnet run --project {{cli}} --no-restore -- transpile {{file}} -t {{target}}
 
 # Static-check a .sushi file
-check file target="Bash" format="text":
+check file target="Bash" format="plain":
     dotnet run --project {{cli}} --no-restore -- check {{file}} --target {{target}} --format {{format}}
 
 # Execute a .sushi file directly

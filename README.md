@@ -27,6 +27,11 @@ String runtime intrinsics and instance-method sugar are available:
 - `std.string.isMatch` and `std.string.match`
 - method sugar lowering (for example: `text.trim().lower()`)
 
+The native-lowered standard library includes `std.fs.*`, `std.path.*`,
+`std.env.*`, `std.process.*`, `std.console.*`, `std.archive.*`, and
+`std.http.download`. These APIs emit the corresponding target command or
+cmdlet; they do not bring a Sushi runtime library into simple scripts.
+
 Milestone 4 Phase 3 function contracts are now available:
 
 - typed function parameters (e.g. `int`, `string`, `bool`, `array`, `object`)
@@ -61,19 +66,27 @@ scripts/build.sh linux-x64
 
 Default transpile target selection:
 
-- Windows: `Powershell7`
-- macOS: `Zsh`
-- Linux/WSL: `Bash`
+- Windows: `powershell-windows`
+- macOS: `zsh-macos`
+- Linux/WSL: `bash-linux`
+
+Targets are profiles, not shell names: use `-t auto` (the default), or one of
+`bash-linux`, `bash-macos`, `zsh-linux`, `zsh-macos`, `powershell-linux`,
+`powershell-macos`, or `powershell-windows`. An explicit profile makes the
+default output name unambiguous (for example, `script.bash-linux.sh`); pass
+`-o` to choose the output path yourself. `std.target.shell()` and
+`std.target.platform()` are compile-time values, so unselected conditional
+branches are omitted from generated code.
 
 ### Run transpiled Bash scripts
 
 - Bash 4.0+ (arrays and associative arrays lower directly to native storage)
-- `curl` (required for `std.http.get/post`)
+- `curl` (required for `std.http.get/post/download` and native archive downloads)
 
 ### Run transpiled Zsh scripts
 
 - Zsh 5.0+ (arrays and associative arrays lower directly to native storage)
-- `curl` (required for `std.http.get/post`)
+- `curl` (required for `std.http.get/post/download` and native archive downloads)
 
 ### Run transpiled PowerShell scripts
 
@@ -87,22 +100,22 @@ supported target.
 ### PowerShell target
 
 ```powershell
-dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Powershell7
-pwsh -NoLogo -NoProfile -File examples/m3_verification.ps1
+dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t powershell-windows
+pwsh -NoLogo -NoProfile -File examples/m3_verification.powershell-windows.ps1
 ```
 
 ### Bash target
 
 ```bash
-dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Bash
-bash examples/m3_verification.sh
+dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t bash-linux
+bash examples/m3_verification.bash-linux.sh
 ```
 
 ### Zsh target
 
 ```zsh
-dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Zsh
-zsh examples/m3_verification.zsh
+dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t zsh-macos
+zsh examples/m3_verification.zsh-macos.zsh
 ```
 
 If your environment blocks outbound HTTP, set `SUSHI_SKIP_HTTP=1` before
@@ -114,6 +127,16 @@ running verification.
 dotnet run --project src/Sushi -- check examples/m3_verification.sushi
 dotnet run --project src/Sushi -- run examples/m3_verification.sushi
 dotnet run --project src/Sushi -- watch examples/m3_verification.sushi --run
+```
+
+## ZIP example
+
+`examples/zip_directory.sushi` uses `std.archive.zip`, which lowers directly
+to native `zip` on Bash/Zsh and `Compress-Archive` on PowerShell. The required
+native archive tool must be present on the target machine:
+
+```bash
+just run examples/zip_directory.sushi
 ```
 
 ## Benchmark examples
@@ -168,9 +191,9 @@ explicit local-development escape hatch.
 ## Quickstart (M4 Phase 3 contracts)
 
 ```powershell
-dotnet run --project src/Sushi -- check examples/m4_structural_valid.sushi -t Bash
-dotnet run --project src/Sushi -- check examples/m4_typed_return.sushi -t Powershell7
-dotnet run --project src/Sushi -- check examples/m4_structural_invalid_static.sushi -t Zsh
+dotnet run --project src/Sushi -- check examples/m4_structural_valid.sushi -t bash-linux
+dotnet run --project src/Sushi -- check examples/m4_typed_return.sushi -t powershell-windows
+dotnet run --project src/Sushi -- check examples/m4_structural_invalid_static.sushi -t zsh-macos
 ```
 
 ## Portability and runtime behavior
@@ -184,8 +207,8 @@ See `docs/runtime-prereqs-and-portability.md` for:
 Current tooling limitations:
 
 - `fmt` is not exposed until deterministic formatting is implemented.
-- `box` and `use` syntax is parser-only and produces an explicit transpilation
-  error instead of being silently ignored.
+- Modules, `box` declarations, and class declarations remain parser-only and
+  currently produce an explicit transpilation error instead of being silently ignored.
 - `check` rejects references to undefined variables in supported code paths.
 - Generated scripts contain no embedded Sushi helper library. Bash and Zsh
   scalar functions use a result slot, while arrays, records, intrinsics, and
@@ -194,6 +217,8 @@ Current tooling limitations:
   with `SUSHI1030` instead of adding runtime type dispatch.
 - JSON is not part of the built-in standard library; it is reserved for a
   future optional dependency.
+- Filesystem APIs are under `std.fs.*`; `std.io.*` remains temporarily as a
+  deprecated compatibility alias and reports `SUSHI2001`.
 
 ## CI
 

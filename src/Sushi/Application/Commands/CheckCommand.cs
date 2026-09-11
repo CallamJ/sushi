@@ -2,6 +2,7 @@ namespace Sushi.Application.Commands;
 
 using System.CommandLine;
 using System.Text.Json;
+using Sushi.Application;
 using Sushi.Transpilation;
 
 static class CheckCommand
@@ -21,11 +22,7 @@ static class CheckCommand
             Description = "Path to the .sushi file to check"
         };
 
-        Option<TargetLanguage> targetLanguageOption = new("-t", "--target")
-        {
-            Description = "Language target to validate transpilation against",
-            DefaultValueFactory = parseResult => CommandSupport.GetDefaultTarget()
-        };
+        var targetLanguageOption = TranspileCommand.CreateTargetOption();
 
         Option<string> formatOption = new("--format")
         {
@@ -33,19 +30,7 @@ static class CheckCommand
             DefaultValueFactory = _ => "plain"
         };
 
-        fileArgument.Validators.Add(result =>
-        {
-            var value = result.GetValueOrDefault<string>() ?? "";
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                result.AddError("File path cannot be empty.");
-                return;
-            }
-            if (!value.EndsWith(".sushi", StringComparison.OrdinalIgnoreCase))
-            {
-                result.AddError("File must have a .sushi extension.");
-            }
-        });
+        TranspileCommand.AddFileValidator(fileArgument);
 
         var command = new Command("check", "Validate a .sushi file without emitting an output file")
         {
@@ -66,7 +51,12 @@ static class CheckCommand
         command.SetAction(parseResult =>
         {
             var filePath = parseResult.GetValue(fileArgument) ?? "";
-            var target = parseResult.GetValue(targetLanguageOption);
+            var targetText = parseResult.GetValue(targetLanguageOption) ?? "auto";
+            if (!CommandSupport.TryParseTarget(targetText, out var target))
+            {
+                System.Console.Error.WriteLine($"Invalid target '{targetText}'. Choose one of: {TargetProfile.AcceptedValues}.");
+                return 1;
+            }
             var format = (parseResult.GetValue(formatOption) ?? "plain").Trim().ToLowerInvariant();
             if (!CommandSupport.TryReadSourceFile(filePath, out var source))
             {
@@ -81,7 +71,7 @@ static class CheckCommand
                 var payload = new
                 {
                     success,
-                    target = target.ToString(),
+                    target = target.Id,
                     diagnostics = result.Diagnostics.Select(d => new SerializableDiagnostic(
                         d.Code,
                         d.Severity.ToString().ToUpperInvariant(),

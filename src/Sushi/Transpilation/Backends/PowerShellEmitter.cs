@@ -37,6 +37,7 @@ public sealed class PowerShellEmitter : IBackendEmitter
             .ToHashSet(StringComparer.Ordinal);
 
         WriteLine("Set-StrictMode -Version Latest");
+        WriteLine("$ErrorActionPreference = 'Stop'");
         WriteLine("");
         foreach (var statement in program.Statements)
         {
@@ -1385,15 +1386,25 @@ function __sushi_call_method {
             IntrinsicId.StringMatch => $"$null = {EmitStringMatch(call.Arguments)}",
             IntrinsicId.IoWriteText => EmitIoWriteText(call.Arguments),
             IntrinsicId.EnvSet => EmitEnvSet(call.Arguments),
+            IntrinsicId.EnvUnset => $"Remove-Item -Path (\"Env:\" + [string]({Arg(call.Arguments, 0)})) -ErrorAction SilentlyContinue",
             IntrinsicId.ProcessExit => $"exit {EmitValueExpression(call.Arguments[0])}",
+            IntrinsicId.ProcessSleep => $"Start-Sleep -Milliseconds {Arg(call.Arguments, 0)}",
+            IntrinsicId.ConsoleError => $"[Console]::Error.WriteLine([string]({Arg(call.Arguments, 0)}))",
             IntrinsicId.OsChdir => $"Set-Location -LiteralPath {Arg(call.Arguments, 0)}",
             IntrinsicId.ProcessRun => $"$null = {EmitProcessRun(call.Arguments)}",
             IntrinsicId.ProcessPipeline => $"$null = {EmitProcessPipeline(call.Arguments)}",
             IntrinsicId.ProcessFail => $"$null = {EmitProcessFail(call.Arguments)}",
             IntrinsicId.ProcessRequireSuccess => $"$null = {EmitProcessRequireSuccess(call.Arguments)}",
             IntrinsicId.FsGlob => $"$null = {EmitFsGlob(call.Arguments)}",
+            IntrinsicId.FsCreateDirectory => $"$null = {EmitFsCreateDirectory(call.Arguments)}",
+            IntrinsicId.FsRemove => $"$null = {EmitFsRemove(call.Arguments)}",
+            IntrinsicId.FsCopy => $"$null = {EmitFsCopy(call.Arguments)}",
+            IntrinsicId.FsMove => $"$null = {EmitFsMove(call.Arguments)}",
+            IntrinsicId.ArchiveZip => $"$null = {EmitArchiveZip(call.Arguments)}",
+            IntrinsicId.ArchiveUnzip => $"$null = {EmitArchiveUnzip(call.Arguments)}",
             IntrinsicId.HttpGet => $"$null = {EmitHttpGet(call.Arguments)}",
             IntrinsicId.HttpPost => $"$null = {EmitHttpPost(call.Arguments)}",
+            IntrinsicId.HttpDownload => $"$null = {EmitHttpDownload(call.Arguments)}",
             _ => _context.ErrorAndReturn(UnsupportedEmitCode, $"Intrinsic '{call.CanonicalName}' cannot be emitted as a statement in PowerShell", "$null")
         };
     }
@@ -1416,23 +1427,40 @@ function __sushi_call_method {
             IntrinsicId.StringMatch => EmitStringMatch(call.Arguments),
             IntrinsicId.IoReadText => $"(Get-Content -Raw -LiteralPath {Arg(call.Arguments, 0)})",
             IntrinsicId.IoExists => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)})",
+            IntrinsicId.FsIsFile => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)} -PathType Leaf)",
+            IntrinsicId.FsIsDirectory => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)} -PathType Container)",
             IntrinsicId.PathJoin => EmitPathJoin(call.Arguments),
             IntrinsicId.PathDirname => $"(Split-Path -Path {Arg(call.Arguments, 0)} -Parent)",
             IntrinsicId.PathBasename => $"(Split-Path -Path {Arg(call.Arguments, 0)} -Leaf)",
+            IntrinsicId.PathExtension => $"([IO.Path]::GetExtension([string]({Arg(call.Arguments, 0)})))",
+            IntrinsicId.PathStem => $"([IO.Path]::GetFileNameWithoutExtension([string]({Arg(call.Arguments, 0)})))",
             IntrinsicId.EnvGet => EmitEnvGet(call.Arguments),
+            IntrinsicId.EnvHas => $"(Test-Path (\"Env:\" + [string]({Arg(call.Arguments, 0)})))",
             IntrinsicId.ProcessArgs => "$args",
+            IntrinsicId.ProcessWhich => "$($commandInfo = Get-Command -Name ([string]({Arg(call.Arguments, 0)})) -ErrorAction SilentlyContinue; if ($null -eq $commandInfo) {{ $null }} else {{ $commandInfo.Source }})",
+            IntrinsicId.ConsoleReadLine => "([Console]::ReadLine())",
             IntrinsicId.OsCwd => "((Get-Location).Path)",
             IntrinsicId.IoWriteText => $"({EmitIoWriteText(call.Arguments)})",
             IntrinsicId.EnvSet => $"({EmitEnvSet(call.Arguments)})",
+            IntrinsicId.EnvUnset => $"(Remove-Item -Path (\"Env:\" + [string]({Arg(call.Arguments, 0)})) -ErrorAction SilentlyContinue)",
             IntrinsicId.ProcessExit => $"(exit {EmitValueExpression(call.Arguments[0])})",
+            IntrinsicId.ProcessSleep => $"(Start-Sleep -Milliseconds {Arg(call.Arguments, 0)})",
+            IntrinsicId.ConsoleError => $"([Console]::Error.WriteLine([string]({Arg(call.Arguments, 0)})))",
             IntrinsicId.OsChdir => $"(Set-Location -LiteralPath {Arg(call.Arguments, 0)})",
             IntrinsicId.ProcessRun => EmitProcessRun(call.Arguments),
             IntrinsicId.ProcessPipeline => EmitProcessPipeline(call.Arguments),
             IntrinsicId.ProcessFail => EmitProcessFail(call.Arguments),
             IntrinsicId.ProcessRequireSuccess => EmitProcessRequireSuccess(call.Arguments),
             IntrinsicId.FsGlob => EmitFsGlob(call.Arguments),
+            IntrinsicId.FsCreateDirectory => EmitFsCreateDirectory(call.Arguments),
+            IntrinsicId.FsRemove => EmitFsRemove(call.Arguments),
+            IntrinsicId.FsCopy => EmitFsCopy(call.Arguments),
+            IntrinsicId.FsMove => EmitFsMove(call.Arguments),
+            IntrinsicId.ArchiveZip => EmitArchiveZip(call.Arguments),
+            IntrinsicId.ArchiveUnzip => EmitArchiveUnzip(call.Arguments),
             IntrinsicId.HttpGet => EmitHttpGet(call.Arguments),
             IntrinsicId.HttpPost => EmitHttpPost(call.Arguments),
+            IntrinsicId.HttpDownload => EmitHttpDownload(call.Arguments),
             _ => _context.ErrorAndReturn(UnsupportedEmitCode, $"Unsupported intrinsic expression in PowerShell: {call.CanonicalName}", "$null")
         };
     }
@@ -1574,6 +1602,24 @@ function __sushi_call_method {
         return $"(__sushi_fs_glob -pattern ([string]({Arg(arguments, 0)})) -cwd {Arg(arguments, 1)})";
     }
 
+    private string EmitFsCreateDirectory(IReadOnlyList<IrExpression> arguments) =>
+        $"(New-Item -ItemType Directory -Force -Path {Arg(arguments, 0)})";
+
+    private string EmitFsRemove(IReadOnlyList<IrExpression> arguments) =>
+        $"$(if ([bool]({Arg(arguments, 1)})) {{ Remove-Item -LiteralPath {Arg(arguments, 0)} -Force -Recurse }} else {{ Remove-Item -LiteralPath {Arg(arguments, 0)} -Force }})";
+
+    private string EmitFsCopy(IReadOnlyList<IrExpression> arguments) =>
+        $"$(if ([bool]({Arg(arguments, 2)})) {{ Copy-Item -LiteralPath {Arg(arguments, 0)} -Destination {Arg(arguments, 1)} -Recurse -Force }} else {{ Copy-Item -LiteralPath {Arg(arguments, 0)} -Destination {Arg(arguments, 1)} -Force }})";
+
+    private string EmitFsMove(IReadOnlyList<IrExpression> arguments) =>
+        $"(Move-Item -LiteralPath {Arg(arguments, 0)} -Destination {Arg(arguments, 1)} -Force)";
+
+    private string EmitArchiveZip(IReadOnlyList<IrExpression> arguments) =>
+        $"(Compress-Archive -Path {Arg(arguments, 0)} -DestinationPath {Arg(arguments, 1)} -Force)";
+
+    private string EmitArchiveUnzip(IReadOnlyList<IrExpression> arguments) =>
+        $"(Expand-Archive -LiteralPath {Arg(arguments, 0)} -DestinationPath {Arg(arguments, 1)} -Force)";
+
     private string EmitHttpGet(IReadOnlyList<IrExpression> arguments)
     {
         return $"(__sushi_http_get -url ([string]({Arg(arguments, 0)})) -headers {Arg(arguments, 1)})";
@@ -1587,6 +1633,9 @@ function __sushi_call_method {
                "-headers " + Arg(arguments, 2) + " " +
                "-contentType ([string](" + Arg(arguments, 3) + ")))";
     }
+
+    private string EmitHttpDownload(IReadOnlyList<IrExpression> arguments) =>
+        $"(Invoke-WebRequest -Uri {Arg(arguments, 0)} -OutFile {Arg(arguments, 1)})";
 
     private string Arg(IReadOnlyList<IrExpression> arguments, int index)
     {

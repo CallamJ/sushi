@@ -2960,7 +2960,7 @@ __sushi_native_obj_to_json() {
                 }
                 else
                 {
-                    _ = PrepareValue(intrinsicCall, inFunction);
+                    WriteLine(EmitIntrinsicCommand(intrinsicCall));
                 }
                 return;
 
@@ -4213,15 +4213,25 @@ __sushi_native_obj_to_json() {
             IntrinsicId.StringMatch => $"{EmitStringMatchInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.IoWriteText => EmitIoWriteText(call.Arguments),
             IntrinsicId.EnvSet => EmitEnvSet(call.Arguments),
+            IntrinsicId.EnvUnset => EmitEnvUnset(call.Arguments),
             IntrinsicId.ProcessExit => EmitProcessExit(call.Arguments),
+            IntrinsicId.ProcessSleep => EmitProcessSleep(call.Arguments),
+            IntrinsicId.ConsoleError => EmitConsoleError(call.Arguments),
             IntrinsicId.OsChdir => $"cd -- {Arg(call.Arguments, 0)}",
             IntrinsicId.ProcessRun => $"{EmitProcessRunInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.ProcessPipeline => $"{EmitProcessPipelineInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.ProcessFail => $"{EmitProcessFailInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.ProcessRequireSuccess => $"{EmitProcessRequireSuccessInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.FsGlob => $"{EmitFsGlobInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.FsCreateDirectory => EmitFsCreateDirectory(call.Arguments),
+            IntrinsicId.FsRemove => EmitFsRemove(call.Arguments),
+            IntrinsicId.FsCopy => EmitFsCopy(call.Arguments),
+            IntrinsicId.FsMove => EmitFsMove(call.Arguments),
+            IntrinsicId.ArchiveZip => EmitArchiveZip(call.Arguments),
+            IntrinsicId.ArchiveUnzip => EmitArchiveUnzip(call.Arguments),
             IntrinsicId.HttpGet => $"{EmitHttpGetInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.HttpPost => $"{EmitHttpPostInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.HttpDownload => EmitHttpDownload(call.Arguments),
             _ => _context.ErrorAndReturn(UnsupportedEmitCode, $"Intrinsic '{call.CanonicalName}' cannot be emitted as a statement in Bash")
         };
     }
@@ -4244,23 +4254,40 @@ __sushi_native_obj_to_json() {
             IntrinsicId.StringMatch => $"\"$({EmitStringMatchInvocation(call.Arguments)})\"",
             IntrinsicId.IoReadText => $"$(cat -- {Arg(call.Arguments, 0)})",
             IntrinsicId.IoExists => $"$([[ -e {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
+            IntrinsicId.FsIsFile => $"$([[ -f {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
+            IntrinsicId.FsIsDirectory => $"$([[ -d {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
             IntrinsicId.PathJoin => EmitPathJoin(call.Arguments),
             IntrinsicId.PathDirname => $"$(dirname -- {Arg(call.Arguments, 0)})",
             IntrinsicId.PathBasename => $"$(basename -- {Arg(call.Arguments, 0)})",
+            IntrinsicId.PathExtension => EmitPathExtension(call.Arguments),
+            IntrinsicId.PathStem => EmitPathStem(call.Arguments),
             IntrinsicId.EnvGet => EmitEnvGet(call.Arguments),
+            IntrinsicId.EnvHas => $"$(__sushi_env_name=$(printf '%s' {Arg(call.Arguments, 0)}); [[ -v $__sushi_env_name ]] && printf 'true' || printf 'false')",
             IntrinsicId.ProcessArgs => "\"$(__sushi_json_array \"$@\")\"",
+            IntrinsicId.ProcessWhich => $"$(command -v -- {Arg(call.Arguments, 0)} 2>/dev/null || true)",
+            IntrinsicId.ConsoleReadLine => "$(IFS= read -r __sushi_line; printf '%s' \"$__sushi_line\")",
             IntrinsicId.OsCwd => "$(pwd)",
             IntrinsicId.IoWriteText => $"$({EmitIoWriteText(call.Arguments)})",
             IntrinsicId.EnvSet => $"$({EmitEnvSet(call.Arguments)})",
+            IntrinsicId.EnvUnset => $"$({EmitEnvUnset(call.Arguments)})",
             IntrinsicId.ProcessExit => $"$({EmitProcessExit(call.Arguments)})",
+            IntrinsicId.ProcessSleep => $"$({EmitProcessSleep(call.Arguments)})",
+            IntrinsicId.ConsoleError => $"$({EmitConsoleError(call.Arguments)})",
             IntrinsicId.OsChdir => $"$(cd -- {Arg(call.Arguments, 0)})",
             IntrinsicId.ProcessRun => $"\"$({EmitProcessRunInvocation(call.Arguments)})\"",
             IntrinsicId.ProcessPipeline => $"\"$({EmitProcessPipelineInvocation(call.Arguments)})\"",
             IntrinsicId.ProcessFail => $"\"$({EmitProcessFailInvocation(call.Arguments)})\"",
             IntrinsicId.ProcessRequireSuccess => $"\"$({EmitProcessRequireSuccessInvocation(call.Arguments)})\"",
             IntrinsicId.FsGlob => $"\"$({EmitFsGlobInvocation(call.Arguments)})\"",
+            IntrinsicId.FsCreateDirectory => $"$({EmitFsCreateDirectory(call.Arguments)})",
+            IntrinsicId.FsRemove => $"$({EmitFsRemove(call.Arguments)})",
+            IntrinsicId.FsCopy => $"$({EmitFsCopy(call.Arguments)})",
+            IntrinsicId.FsMove => $"$({EmitFsMove(call.Arguments)})",
+            IntrinsicId.ArchiveZip => $"$({EmitArchiveZip(call.Arguments)})",
+            IntrinsicId.ArchiveUnzip => $"$({EmitArchiveUnzip(call.Arguments)})",
             IntrinsicId.HttpGet => $"\"$({EmitHttpGetInvocation(call.Arguments)})\"",
             IntrinsicId.HttpPost => $"\"$({EmitHttpPostInvocation(call.Arguments)})\"",
+            IntrinsicId.HttpDownload => $"$({EmitHttpDownload(call.Arguments)})",
             _ => _context.ErrorAndReturn(UnsupportedEmitCode, $"Unsupported intrinsic expression in Bash: {call.CanonicalName}")
         };
     }
@@ -4339,6 +4366,24 @@ __sushi_native_obj_to_json() {
                "if [[ " + append + " == 'true' ]]; then printf '%s' " + text + " >> \"$__sushi_path\"; else printf '%s' " + text + " > \"$__sushi_path\"; fi";
     }
 
+    private string EmitFsCreateDirectory(IReadOnlyList<IrExpression> arguments) =>
+        $"mkdir -p -- {Arg(arguments, 0)}";
+
+    private string EmitFsRemove(IReadOnlyList<IrExpression> arguments) =>
+        $"if [[ {Arg(arguments, 1)} == 'true' ]]; then rm -rf -- {Arg(arguments, 0)}; else rm -f -- {Arg(arguments, 0)}; fi";
+
+    private string EmitFsCopy(IReadOnlyList<IrExpression> arguments) =>
+        $"if [[ {Arg(arguments, 2)} == 'true' ]]; then cp -R -- {Arg(arguments, 0)} {Arg(arguments, 1)}; else cp -- {Arg(arguments, 0)} {Arg(arguments, 1)}; fi";
+
+    private string EmitFsMove(IReadOnlyList<IrExpression> arguments) =>
+        $"mv -f -- {Arg(arguments, 0)} {Arg(arguments, 1)}";
+
+    private string EmitArchiveZip(IReadOnlyList<IrExpression> arguments) =>
+        $"zip -r -- {Arg(arguments, 1)} {Arg(arguments, 0)}";
+
+    private string EmitArchiveUnzip(IReadOnlyList<IrExpression> arguments) =>
+        $"unzip -o -- {Arg(arguments, 0)} -d {Arg(arguments, 1)}";
+
     private string EmitEnvSet(IReadOnlyList<IrExpression> arguments)
     {
         var name = Arg(arguments, 0);
@@ -4350,6 +4395,21 @@ __sushi_native_obj_to_json() {
     {
         return $"__sushi_env_name=$(printf '%s' {name}); __sushi_env_value=$(printf '%s' {value}); export \"$__sushi_env_name=$__sushi_env_value\"";
     }
+
+    private string EmitEnvUnset(IReadOnlyList<IrExpression> arguments) =>
+        $"__sushi_env_name=$(printf '%s' {Arg(arguments, 0)}); unset \"$__sushi_env_name\"";
+
+    private string EmitProcessSleep(IReadOnlyList<IrExpression> arguments) =>
+        $"sleep \"$(({Arg(arguments, 0)} / 1000)).$(({Arg(arguments, 0)} % 1000))\"";
+
+    private string EmitConsoleError(IReadOnlyList<IrExpression> arguments) =>
+        $"printf '%s\\n' {Arg(arguments, 0)} >&2";
+
+    private string EmitPathExtension(IReadOnlyList<IrExpression> arguments) =>
+        $"$(__sushi_base=$(basename -- {Arg(arguments, 0)}); if [[ \"$__sushi_base\" == *.* && \"$__sushi_base\" != .* ]]; then printf '.%s' \"${{__sushi_base##*.}}\"; fi)";
+
+    private string EmitPathStem(IReadOnlyList<IrExpression> arguments) =>
+        $"$(__sushi_base=$(basename -- {Arg(arguments, 0)}); if [[ \"$__sushi_base\" == *.* && \"$__sushi_base\" != .* ]]; then printf '%s' \"${{__sushi_base%.*}}\"; else printf '%s' \"$__sushi_base\"; fi)";
 
     private string EmitProcessExit(IReadOnlyList<IrExpression> arguments)
     {
@@ -4432,6 +4492,9 @@ __sushi_native_obj_to_json() {
     {
         return $"__sushi_http_post {Arg(arguments, 0)} {Arg(arguments, 1)} {Arg(arguments, 2)} {Arg(arguments, 3)}";
     }
+
+    private string EmitHttpDownload(IReadOnlyList<IrExpression> arguments) =>
+        $"curl -fsSL -- {Arg(arguments, 0)} -o {Arg(arguments, 1)}";
 
     private string Arg(IReadOnlyList<IrExpression> arguments, int index)
     {

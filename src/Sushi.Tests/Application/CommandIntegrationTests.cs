@@ -42,11 +42,11 @@ public sealed class CommandIntegrationTests
     public async Task Transpile_ValidSource_WritesTargetFile()
     {
         var sourcePath = CreateSource("println(\"hello\")");
-        var outputPath = Path.ChangeExtension(sourcePath, ".sh");
+        var outputPath = Path.ChangeExtension(sourcePath, ".bash-linux.sh");
         try
         {
             var exitCode = await CreateRoot()
-                .Parse(new[] { "transpile", sourcePath, "--target", "Bash" })
+                .Parse(new[] { "transpile", sourcePath, "--target", "bash-linux" })
                 .InvokeAsync(null, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, exitCode);
@@ -74,7 +74,7 @@ public sealed class CommandIntegrationTests
         try
         {
             var exitCode = await CreateRoot()
-                .Parse(new[] { "run", sourcePath, "--target", "Bash", "expected value" })
+                .Parse(new[] { "run", sourcePath, "--target", "bash-linux", "expected value" })
                 .InvokeAsync(null, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, exitCode);
