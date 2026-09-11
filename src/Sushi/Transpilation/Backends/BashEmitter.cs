@@ -2595,6 +2595,14 @@ __sushi_native_obj_to_json() {
             {
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);
                 var name = SanitizeVariableName(variable.Name);
+                if (initializer is IrCallExpression constructor && constructor.Callee.StartsWith("__sushi_new_", StringComparison.Ordinal))
+                {
+                    WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
+                    var arguments = constructor.Arguments.Select(argument => PrepareValue(argument.Value, inFunction));
+                    WriteLine($"{SanitizeFunctionName(constructor.Callee)} {Escape.BashSingleQuoted(name)} {string.Join(" ", arguments)}");
+                    _nativeObjectVariables.Add(name);
+                    break;
+                }
                 if (initializer is IrArrayLiteralExpression array)
                 {
                     var values = array.Elements.Any(element => element is IrObjectLiteralExpression)
@@ -2618,7 +2626,10 @@ __sushi_native_obj_to_json() {
                         })
                         : obj.Properties.Select(property =>
                             $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
-                    WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=({string.Join(" ", entries)})");
+                    if (name == "this" && _currentFunctionName?.StartsWith("__sushi_new_", StringComparison.Ordinal) == true)
+                        WriteLine($"this=({string.Join(" ", entries)})");
+                    else
+                        WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=({string.Join(" ", entries)})");
                     _nativeObjectVariables.Add(name);
                     _nativeArrayVariables.Remove(name);
                     _arrayInitializers.Remove(name);
@@ -2823,7 +2834,21 @@ __sushi_native_obj_to_json() {
         _recordVariables = new HashSet<string>(StringComparer.Ordinal);
         _integerArrayVariables = new HashSet<string>(StringComparer.Ordinal);
 
-        var argIndex = 1;
+        var isConstructor = statement.Name.StartsWith("__sushi_new_", StringComparison.Ordinal);
+        var argIndex = isConstructor ? 2 : 1;
+        if (isConstructor)
+        {
+            if (_zshMode)
+            {
+                WriteLine("local this_name=\"$1\"");
+                WriteLine("local -A this=()");
+            }
+            else
+            {
+                WriteLine("local -n this=\"$1\"");
+            }
+            _nativeObjectVariables.Add("this");
+        }
         foreach (var parameter in statement.Parameters)
         {
             var param = SanitizeVariableName(parameter.Name);
@@ -2849,7 +2874,15 @@ __sushi_native_obj_to_json() {
                 }
                 else if (parameter.DeclaredType.Name is "array" or "object")
                 {
-                    WriteLine($"local -n {param}=\"${argIndex}\"");
+                    if (_zshMode && param == "this")
+                    {
+                        WriteLine($"local this_name=\"${argIndex}\"");
+                        WriteLine("local -A this=( \"${(@kvP)this_name}\" )");
+                    }
+                    else
+                    {
+                        WriteLine($"local -n {param}=\"${argIndex}\"");
+                    }
                     if (parameter.DeclaredType.Name == "array") _nativeArrayVariables[param] = param;
                     else _nativeObjectVariables.Add(param);
                 }
@@ -2878,6 +2911,11 @@ __sushi_native_obj_to_json() {
         EmitStatement(statement.Body, inFunction: true);
         if (!EndsWithReturn(statement.Body))
         {
+            if (_zshMode && _nativeObjectVariables.Contains("this"))
+            {
+                WriteLine("typeset -gA $this_name");
+                WriteLine("set -A $this_name \"${(@kv)this}\"");
+            }
             WriteLine("__sushi_result=''");
             WriteLine("return 0");
         }
@@ -2897,6 +2935,21 @@ __sushi_native_obj_to_json() {
 
     private void EmitReturn(IrReturnStatement statement, bool inFunction)
     {
+        if (inFunction && _currentFunctionName?.StartsWith("__sushi_new_", StringComparison.Ordinal) == true)
+        {
+            if (_zshMode)
+            {
+                WriteLine("typeset -gA $this_name");
+                WriteLine("set -A $this_name \"${(@kv)this}\"");
+            }
+            WriteLine("return 0");
+            return;
+        }
+        if (inFunction && _zshMode && _nativeObjectVariables.Contains("this"))
+        {
+            WriteLine("typeset -gA $this_name");
+            WriteLine("set -A $this_name \"${(@kv)this}\"");
+        }
         if (statement.Expression != null)
         {
             var value = PrepareValue(statement.Expression, inFunction);
@@ -2970,6 +3023,10 @@ __sushi_native_obj_to_json() {
 
             case IrAssignmentExpression assignment:
                 EmitPreparedAssignment(assignment, inFunction);
+                return;
+
+            case IrMemberAssignmentExpression assignment:
+                EmitMemberAssignment(assignment, inFunction);
                 return;
 
             case IrUnaryExpression unary when unary.Operator is "++" or "--":
@@ -3088,6 +3145,22 @@ __sushi_native_obj_to_json() {
         var right = DeclareTemp(value, inFunction);
         WriteLine($"{name}=$(( {name} {assignment.Operator[0]} {right} ))");
         _knownIntegerVariables.Add(name);
+    }
+
+    private void EmitMemberAssignment(IrMemberAssignmentExpression assignment, bool inFunction)
+    {
+        if (assignment.Target is IrIdentifierExpression identifier)
+        {
+            var target = SanitizeVariableName(identifier.Name);
+            var member = EmitObjectSubscript(assignment.MemberName);
+            if (assignment.Operator == "=")
+                WriteLine($"{target}[{member}]={PrepareValue(assignment.Value, inFunction)}");
+            else
+                WriteLine($"{target}[{member}]=$(( ${{{target}[{member}]:-0}} {assignment.Operator[0]} {EmitArithmeticExpression(assignment.Value)} ))");
+            return;
+        }
+
+        _context.Error(AmbiguousShapeCode, "Member assignment requires a statically known native object.");
     }
 
     private bool EmitNativeIntrinsicDeclaration(
@@ -3469,7 +3542,7 @@ __sushi_native_obj_to_json() {
                 return $"$(( {unary.Operator}{operandTemp} ))";
             }
 
-            case IrCallExpression call when !call.Callee.StartsWith("__sushi_", StringComparison.Ordinal):
+            case IrCallExpression call when !call.Callee.StartsWith("__sushi_", StringComparison.Ordinal) || call.Callee.StartsWith("__sushi_method_", StringComparison.Ordinal):
             {
                 var arguments = new List<string>();
                 _functions.TryGetValue(call.Callee, out var function);

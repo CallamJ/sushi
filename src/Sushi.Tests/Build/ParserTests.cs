@@ -895,11 +895,29 @@ namespace Sushi.Tests
         [Fact]
         public void TestUseDeclaration()
         {
-            var ast = Parse("use System.Collections");
+            var ast = Parse("use \"./collections.sushi\" as collections");
             Assert.Single(ast.Declarations);
             Assert.IsType<UseDeclarationNode>(ast.Declarations[0]);
             var useDecl = (UseDeclarationNode)ast.Declarations[0];
-            Assert.Equal("System.Collections", useDecl.ImportPath);
+            Assert.Equal("./collections.sushi", useDecl.ImportPath);
+            Assert.Equal("collections", useDecl.Alias);
+        }
+
+        [Fact]
+        public void TestExportDeclaration()
+        {
+            var ast = Parse("export greet(name) { return name }");
+            var exported = Assert.IsType<ExportDeclarationNode>(Assert.Single(ast.Declarations));
+            Assert.IsType<FunctionDeclarationNode>(exported.Declaration);
+        }
+
+        [Fact]
+        public void TestQualifiedNewExpression()
+        {
+            var ast = Parse("var person = new helpers.Person(\"Ada\")");
+            var variable = Assert.IsType<VariableDeclarationStatementNode>(Assert.Single(ast.Declarations));
+            var expression = Assert.IsType<NewExpressionNode>(variable.Initializer);
+            Assert.Equal("helpers.Person", expression.TypeName);
         }
         
         // ═══════════════════════════════════════════════════════════════════

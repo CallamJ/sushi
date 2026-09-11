@@ -139,6 +139,23 @@ native archive tool must be present on the target machine:
 just run examples/zip_directory.sushi
 ```
 
+## Modules
+
+Modules use a declared identity, explicit exports, and relative imports:
+
+```sushi
+// helpers.sushi
+box Example.Helpers
+export greet(name) { return "Hello, $(name)!" }
+
+// app.sushi
+use "./helpers.sushi" as helpers
+println(helpers.greet("Sushi"))
+```
+
+Run the complete example with `just run examples/modules/app.sushi`. Imported
+modules are statically linked once and do not require source files at runtime.
+
 ## Benchmark examples
 
 ```bash
@@ -207,8 +224,8 @@ See `docs/runtime-prereqs-and-portability.md` for:
 Current tooling limitations:
 
 - `fmt` is not exposed until deterministic formatting is implemented.
-- Modules, `box` declarations, and class declarations remain parser-only and
-  currently produce an explicit transpilation error instead of being silently ignored.
+- Relative modules and explicit exports are statically linked. Imported files
+  must declare a unique `box`; package-name imports are not supported yet.
 - `check` rejects references to undefined variables in supported code paths.
 - Generated scripts contain no embedded Sushi helper library. Bash and Zsh
   scalar functions use a result slot, while arrays, records, intrinsics, and

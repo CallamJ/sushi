@@ -2,45 +2,46 @@ namespace Sushi.Transpilation;
 
 using System.Text.RegularExpressions;
 using Sushi.Application;
-using Sushi.Build;
-using Sushi.Build.SyntaxTree;
 using Sushi.Transpilation.Backends;
+using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Lowering;
+using Sushi.Transpilation.Modules;
 
 public sealed class Transpiler
 {
-    private const string ParseErrorCode = "SUSHI1000";
     private const string InternalErrorCode = "SUSHI1999";
 
     public TranspileResult Transpile(TranspileRequest request)
     {
         var diagnostics = new List<Diagnostic>();
 
-        ProgramNode? program;
-        try
-        {
-            var tokenizer = new Tokenizer(request.SourceText);
-            var tokens = tokenizer.Tokenize().ToList();
-            var lexer = new Lexer(tokens);
-            var classifiedTokens = lexer.Lex().ToList();
-            var parser = new Parser(classifiedTokens);
-            program = parser.Parse();
-        }
-        catch (Exception ex)
-        {
-            diagnostics.Add(ParseExceptionToDiagnostic(request.SourcePath, ex));
-            return new TranspileResult
-            {
-                Success = false,
-                EmittedCode = null,
-                Diagnostics = diagnostics
-            };
-        }
-
         var targetProfile = request.TargetProfile ?? GetLegacyProfile(request.TargetLanguage);
-        var lowerer = new AstToIrLowerer(targetProfile);
-        var ir = lowerer.Lower(program, request.SourcePath);
-        diagnostics.AddRange(lowerer.Diagnostics);
+        var moduleLoader = new ModuleGraphLoader(diagnostics);
+        var root = moduleLoader.LoadRoot(request.SourcePath, request.SourceText);
+        var dependencies = moduleLoader.OrderedModules
+            .Where(module => root == null || module.SourcePath != root.SourcePath)
+            .Select(module => module.SourcePath)
+            .ToArray();
+        if (root == null || diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+            return new TranspileResult { Success = false, Diagnostics = diagnostics, DependencyPaths = dependencies };
+
+        var ir = new IrProgram();
+        foreach (var module in moduleLoader.OrderedModules)
+        {
+            var prefix = module == root ? "" : $"sushi_module_{SanitizeModuleName(module.BoxName!)}_";
+            var externalSymbols = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var import in module.Imports)
+            {
+                var importedPrefix = $"sushi_module_{SanitizeModuleName(import.Value.BoxName!)}_";
+                foreach (var exported in import.Value.Exports.Keys)
+                    externalSymbols[$"{import.Key}.{exported}"] = importedPrefix + exported;
+            }
+
+            var lowerer = new AstToIrLowerer(targetProfile, prefix, externalSymbols, module.Imports.Keys.ToHashSet(StringComparer.Ordinal));
+            var moduleIr = lowerer.Lower(module.Program, module.SourcePath);
+            diagnostics.AddRange(lowerer.Diagnostics);
+            ir.Statements.AddRange(moduleIr.Statements);
+        }
 
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
         {
@@ -48,7 +49,8 @@ public sealed class Transpiler
             {
                 Success = false,
                 EmittedCode = null,
-                Diagnostics = diagnostics
+                Diagnostics = diagnostics,
+                DependencyPaths = dependencies
             };
         }
 
@@ -70,7 +72,8 @@ public sealed class Transpiler
             {
                 Success = false,
                 EmittedCode = null,
-                Diagnostics = diagnostics
+                Diagnostics = diagnostics,
+                DependencyPaths = dependencies
             };
         }
 
@@ -79,9 +82,13 @@ public sealed class Transpiler
         {
             Success = !hasErrors,
             EmittedCode = hasErrors ? null : code,
-            Diagnostics = diagnostics
+            Diagnostics = diagnostics,
+            DependencyPaths = dependencies
         };
     }
+
+    private static string SanitizeModuleName(string name) =>
+        Regex.Replace(name, "[^A-Za-z0-9_]", "_");
 
     private static IBackendEmitter GetEmitter(TargetLanguage targetLanguage)
     {
@@ -101,20 +108,4 @@ public sealed class Transpiler
         _ => new TargetProfile(shell, TargetPlatform.Linux)
     };
 
-    private static Diagnostic ParseExceptionToDiagnostic(string sourcePath, Exception exception)
-    {
-        var message = exception.Message;
-        var line = 1;
-        var column = 1;
-
-        // Parser exceptions frequently include "at line:column"
-        var match = Regex.Match(message, @"(?:at|@)\s*(\d+):(\d+)");
-        if (match.Success)
-        {
-            _ = int.TryParse(match.Groups[1].Value, out line);
-            _ = int.TryParse(match.Groups[2].Value, out column);
-        }
-
-        return Diagnostic.Error(ParseErrorCode, message, new SourceSpan(sourcePath, line, column));
-    }
 }

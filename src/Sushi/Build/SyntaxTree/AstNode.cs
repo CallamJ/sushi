@@ -27,6 +27,7 @@ public interface IAstVisitor
     void Visit(ProgramNode node);
     void Visit(BoxDeclarationNode node);
     void Visit(UseDeclarationNode node);
+    void Visit(ExportDeclarationNode node);
     void Visit(ClassDeclarationNode node);
     void Visit(EnumDeclarationNode node);
     void Visit(EnumValueNode node);
@@ -86,6 +87,7 @@ public interface IAstVisitor<T>
     T Visit(ProgramNode node);
     T Visit(BoxDeclarationNode node);
     T Visit(UseDeclarationNode node);
+    T Visit(ExportDeclarationNode node);
     T Visit(ClassDeclarationNode node);
     T Visit(EnumDeclarationNode node);
     T Visit(EnumValueNode node);

@@ -53,6 +53,20 @@ public class UseDeclarationNode : AstNode
     public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
 }
 
+/// <summary>An explicitly exported top-level declaration.</summary>
+public class ExportDeclarationNode : AstNode
+{
+    public AstNode Declaration { get; }
+
+    public ExportDeclarationNode(AstNode declaration, int line, int column) : base(line, column)
+    {
+        Declaration = declaration;
+    }
+
+    public override void Accept(IAstVisitor visitor) => visitor.Visit(this);
+    public override T Accept<T>(IAstVisitor<T> visitor) => visitor.Visit(this);
+}
+
 /// <summary>
 /// Class declaration
 /// </summary>

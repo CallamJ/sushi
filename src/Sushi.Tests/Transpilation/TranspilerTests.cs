@@ -553,19 +553,17 @@ public class TranspilerTests
         Assert.DoesNotContain(result.Diagnostics, d => d.Code == "SUSHI1002");
     }
 
-    [Theory]
-    [InlineData("box Example")]
-    [InlineData("use Example.Helpers")]
-    public void Transpile_ParsedButUnsupportedModuleSyntax_Fails(string source)
+    [Fact]
+    public void Transpile_BoxDeclaration_Succeeds()
     {
         var result = new Transpiler().Transpile(new TranspileRequest
         {
-            SourceText = source,
+            SourceText = "box Example",
             SourcePath = "module.sushi",
             TargetLanguage = TargetLanguage.Bash
         });
 
-        Assert.False(result.Success);
-        Assert.Contains(result.Diagnostics, d => d.Code == "SUSHI1001");
+        Assert.True(result.Success);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1001");
     }
 }

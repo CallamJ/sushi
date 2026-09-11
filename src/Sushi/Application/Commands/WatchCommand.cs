@@ -77,9 +77,9 @@ static class WatchCommand
             var absolutePath = Path.GetFullPath(filePath);
             var outputPath = CommandSupport.GetOutputPath(absolutePath, target);
             var workingDirectory = Path.GetDirectoryName(absolutePath);
-            var lastResult = TranspileOnce(absolutePath, outputPath, target, verbose, runAfterTranspile, workingDirectory);
+            var cycle = TranspileOnce(absolutePath, outputPath, target, verbose, runAfterTranspile, workingDirectory);
             var stopRequested = false;
-            var lastWriteTime = File.GetLastWriteTimeUtc(absolutePath);
+            var watchedFiles = CreateWatchSnapshot(absolutePath, cycle.Dependencies);
 
             System.Console.WriteLine($"Watching {absolutePath} -> {outputPath}");
             System.Console.WriteLine("Press Ctrl+C to stop.");
@@ -96,19 +96,13 @@ static class WatchCommand
                 while (!stopRequested)
                 {
                     Thread.Sleep(pollIntervalMs);
-                    if (!File.Exists(absolutePath))
+                    if (!HasChanged(watchedFiles))
                     {
                         continue;
                     }
 
-                    var currentWriteTime = File.GetLastWriteTimeUtc(absolutePath);
-                    if (currentWriteTime == lastWriteTime)
-                    {
-                        continue;
-                    }
-
-                    lastWriteTime = currentWriteTime;
-                    lastResult = TranspileOnce(absolutePath, outputPath, target, verbose, runAfterTranspile, workingDirectory);
+                    cycle = TranspileOnce(absolutePath, outputPath, target, verbose, runAfterTranspile, workingDirectory);
+                    watchedFiles = CreateWatchSnapshot(absolutePath, cycle.Dependencies);
                 }
             }
             finally
@@ -116,13 +110,13 @@ static class WatchCommand
                 System.Console.CancelKeyPress -= cancelHandler;
             }
 
-            return lastResult;
+            return cycle.ExitCode;
         });
 
         return command;
     }
 
-    private static int TranspileOnce(
+    private static WatchCycleResult TranspileOnce(
         string filePath,
         string outputPath,
         TargetProfile target,
@@ -132,19 +126,19 @@ static class WatchCommand
     {
         if (!CommandSupport.TryReadSourceFile(filePath, out var source))
         {
-            return 1;
+            return new WatchCycleResult(1, Array.Empty<string>());
         }
 
         var result = CommandSupport.Transpile(filePath, target, source);
         if (!result.Success || result.EmittedCode == null)
         {
             CommandSupport.PrintDiagnostics(result, verbose: true);
-            return 1;
+            return new WatchCycleResult(1, result.DependencyPaths);
         }
 
         if (!CommandSupport.TryWriteOutput(outputPath, result.EmittedCode))
         {
-            return 1;
+            return new WatchCycleResult(1, result.DependencyPaths);
         }
 
         if (verbose)
@@ -158,10 +152,21 @@ static class WatchCommand
 
         if (!runAfterTranspile)
         {
-            return 0;
+            return new WatchCycleResult(0, result.DependencyPaths);
         }
 
         System.Console.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss}] Running {outputPath}");
-        return CommandSupport.ExecuteScript(target, outputPath, Array.Empty<string>(), workingDirectory);
+        return new WatchCycleResult(
+            CommandSupport.ExecuteScript(target, outputPath, Array.Empty<string>(), workingDirectory),
+            result.DependencyPaths);
     }
+
+    private static Dictionary<string, DateTime?> CreateWatchSnapshot(string root, IReadOnlyList<string> dependencies) =>
+        dependencies.Prepend(root).Distinct(StringComparer.Ordinal)
+            .ToDictionary(path => path, path => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : (DateTime?)null, StringComparer.Ordinal);
+
+    private static bool HasChanged(IReadOnlyDictionary<string, DateTime?> snapshot) =>
+        snapshot.Any(item => (File.Exists(item.Key) ? File.GetLastWriteTimeUtc(item.Key) : (DateTime?)null) != item.Value);
+
+    private sealed record WatchCycleResult(int ExitCode, IReadOnlyList<string> Dependencies);
 }

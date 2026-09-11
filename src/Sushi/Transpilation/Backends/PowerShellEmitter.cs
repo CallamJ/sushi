@@ -1098,6 +1098,10 @@ function __sushi_call_method {
                 WriteLine(EmitAssignmentExpression(assignment));
                 return;
 
+            case IrMemberAssignmentExpression assignment:
+                WriteLine($"({EmitValueExpression(assignment.Target)}).{SanitizeName(assignment.MemberName)} {assignment.Operator} {EmitValueExpression(assignment.Value)}");
+                return;
+
             case IrUnaryExpression unary when unary.Operator is "++" or "--":
                 if (unary.Operand is IrIdentifierExpression identifier)
                 {
@@ -1220,6 +1224,8 @@ function __sushi_call_method {
                 EmitMethodCallExpression(methodCall),
             IrAssignmentExpression assignment =>
                 $"({EmitAssignmentExpression(assignment)}; ${SanitizeName(assignment.Target.Name)})",
+            IrMemberAssignmentExpression assignment =>
+                $"$(({EmitValueExpression(assignment.Target)}).{SanitizeName(assignment.MemberName)} {assignment.Operator} {EmitValueExpression(assignment.Value)})",
             _ => "$null"
         };
     }

@@ -1,0 +1,3 @@
+use "./helpers.sushi" as helpers
+
+println(helpers.greet("Sushi"))

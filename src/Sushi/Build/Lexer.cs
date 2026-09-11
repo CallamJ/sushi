@@ -27,7 +27,7 @@ public class Lexer
         "if", "else", "while", "for", "break", "continue",
         "true", "false", "null",
         "var", "switch", "case", "default", "also",
-        "do", "step", "enum", "in"
+        "do", "step", "enum", "in", "export", "as"
     };
 
     // Operators that should be classified as operators

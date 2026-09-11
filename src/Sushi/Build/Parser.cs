@@ -88,6 +88,16 @@ public class Parser
             DebugLog("Found 'use' keyword");
             return ParseUseDeclaration();
         }
+
+        if (token.IsKeyword("export"))
+        {
+            Advance();
+            var declaration = ParseTopLevelDeclaration()
+                ?? throw new Exception($"Expected declaration after export at {token.Line}:{token.Column}");
+            if (declaration is not (FunctionDeclarationNode or ClassDeclarationNode or EnumDeclarationNode or VariableDeclarationStatementNode))
+                throw new Exception($"Only functions, classes, enums, and variables can be exported at {token.Line}:{token.Column}");
+            return new ExportDeclarationNode(declaration, token.Line, token.Column);
+        }
         
         if (token.IsKeyword("class"))
         {
@@ -201,26 +211,14 @@ public class Parser
     {
         var token = Expect(ClassifiedTokenKind.Keyword, "use");
         
-        // Parse import path: People.Person or People.Helpers.greet()
-        var path = ParseQualifiedName();
-        
-        // Check for function call syntax
-        if (Match(ClassifiedTokenKind.LeftParen))
-        {
-            Expect(ClassifiedTokenKind.RightParen);
-            path += "()";
-        }
-        
-        // Check for alias: -> greetPerson()
+        var pathToken = Expect(ClassifiedTokenKind.StringLiteral);
+        var path = (string?)pathToken.Value ?? pathToken.Text.Trim('"');
+
         string? alias = null;
-        if (MatchOperator("->"))
+        if (Check(ClassifiedTokenKind.Keyword) && Current().IsKeyword("as"))
         {
+            Advance();
             alias = Expect(ClassifiedTokenKind.Identifier).Text;
-            if (Match(ClassifiedTokenKind.LeftParen))
-            {
-                Expect(ClassifiedTokenKind.RightParen);
-                alias += "()";
-            }
         }
         
         ExpectSemicolon();
@@ -1383,6 +1381,10 @@ public class Parser
     {
         var token = Expect(ClassifiedTokenKind.Keyword, "new");
         var typeName = Expect(ClassifiedTokenKind.Identifier).Text;
+        while (Match(ClassifiedTokenKind.Dot))
+        {
+            typeName += "." + Expect(ClassifiedTokenKind.Identifier).Text;
+        }
         
         Expect(ClassifiedTokenKind.LeftParen);
         var args = ParseArgumentList();

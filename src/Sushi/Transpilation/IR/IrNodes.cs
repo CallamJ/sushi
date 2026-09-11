@@ -402,6 +402,22 @@ public sealed class IrMemberAccessExpression : IrExpression
     }
 }
 
+public sealed class IrMemberAssignmentExpression : IrExpression
+{
+    public IrExpression Target { get; }
+    public string MemberName { get; }
+    public string Operator { get; }
+    public IrExpression Value { get; }
+
+    public IrMemberAssignmentExpression(IrExpression target, string memberName, string @operator, IrExpression value)
+    {
+        Target = target;
+        MemberName = memberName;
+        Operator = @operator;
+        Value = value;
+    }
+}
+
 public sealed class IrIndexExpression : IrExpression
 {
     public IrExpression Target { get; }

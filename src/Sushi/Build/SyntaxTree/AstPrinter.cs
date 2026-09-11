@@ -55,6 +55,14 @@ public class AstPrinter : IAstVisitor
         WriteLine($"UseDeclaration: {node.ImportPath}{alias}");
     }
 
+    public void Visit(ExportDeclarationNode node)
+    {
+        WriteLine("ExportDeclaration");
+        Indent();
+        node.Declaration.Accept(this);
+        Dedent();
+    }
+
     public void Visit(ClassDeclarationNode node)
     {
         WriteLine($"ClassDeclaration: {node.Name}");
