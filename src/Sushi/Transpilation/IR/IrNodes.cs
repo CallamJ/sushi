@@ -200,6 +200,92 @@ public sealed class IrFunctionDeclarationStatement : IrStatement
     }
 }
 
+/// <summary>
+/// A source-level class retained alongside the portable object lowering.  Backends
+/// that have native classes can use this declaration; shell backends continue to
+/// emit the accompanying portable functions and object literals.
+/// </summary>
+public sealed class IrClassDeclarationStatement : IrStatement
+{
+    public string Name { get; }
+    public List<IrClassField> Fields { get; }
+    public List<IrFunctionParameter> ConstructorParameters { get; }
+    public IrBlockStatement ConstructorBody { get; }
+    public List<IrClassMethod> Methods { get; }
+    public List<IrClassMethod> Adapters { get; }
+    public HashSet<string> LegacyFunctionNames { get; }
+
+    public IrClassDeclarationStatement(string name, IEnumerable<IrClassField> fields,
+        IEnumerable<IrFunctionParameter> constructorParameters, IrBlockStatement constructorBody,
+        IEnumerable<IrClassMethod> methods, IEnumerable<IrClassMethod> adapters,
+        IEnumerable<string> legacyFunctionNames)
+    {
+        Name = name;
+        Fields = fields.ToList();
+        ConstructorParameters = constructorParameters.ToList();
+        ConstructorBody = constructorBody;
+        Methods = methods.ToList();
+        Adapters = adapters.ToList();
+        LegacyFunctionNames = legacyFunctionNames.ToHashSet(StringComparer.Ordinal);
+    }
+}
+
+public sealed class IrClassField
+{
+    public string Name { get; }
+    public IrTypeRef Type { get; }
+    public IrExpression? Initializer { get; }
+
+    public IrClassField(string name, IrTypeRef type, IrExpression? initializer)
+    {
+        Name = name;
+        Type = type;
+        Initializer = initializer;
+    }
+}
+
+public sealed class IrClassMethod
+{
+    public string Name { get; }
+    public List<IrFunctionParameter> Parameters { get; }
+    public IrBlockStatement Body { get; }
+    public IrTypeRef ReturnType { get; }
+    public string LegacyName { get; }
+
+    public IrClassMethod(string name, IEnumerable<IrFunctionParameter> parameters,
+        IrBlockStatement body, IrTypeRef returnType, string legacyName)
+    {
+        Name = name;
+        Parameters = parameters.ToList();
+        Body = body;
+        ReturnType = returnType;
+        LegacyName = legacyName;
+    }
+}
+
+/// <summary>Native-enum candidate retained with the portable enum lowering.</summary>
+public sealed class IrEnumDeclarationStatement : IrStatement
+{
+    public string Name { get; }
+    public List<IrEnumValue> Values { get; }
+    public HashSet<string> LegacyVariableNames { get; }
+
+    public IrEnumDeclarationStatement(string name, IEnumerable<IrEnumValue> values, IEnumerable<string> legacyVariableNames)
+    {
+        Name = name;
+        Values = values.ToList();
+        LegacyVariableNames = legacyVariableNames.ToHashSet(StringComparer.Ordinal);
+    }
+}
+
+public sealed class IrEnumValue
+{
+    public string Name { get; }
+    public int Value { get; }
+    public int Ordinal { get; }
+    public IrEnumValue(string name, int value, int ordinal) { Name = name; Value = value; Ordinal = ordinal; }
+}
+
 public sealed class IrReturnStatement : IrStatement
 {
     public IrExpression? Expression { get; }

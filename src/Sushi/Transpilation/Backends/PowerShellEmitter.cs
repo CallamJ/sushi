@@ -22,12 +22,28 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private Dictionary<string, IrArrayLiteralExpression> _arrayInitializers = new(StringComparer.Ordinal);
     private TargetNameAllocator _names = null!;
     private Dictionary<string, string> _generatedFunctionNames = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _nativeClassNames = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _nativeEnumNames = new(StringComparer.Ordinal);
+    private Dictionary<string, IrClassDeclarationStatement> _nativeClasses = new(StringComparer.Ordinal);
+    private HashSet<string> _suppressedFunctions = new(StringComparer.Ordinal);
+    private HashSet<string> _suppressedVariables = new(StringComparer.Ordinal);
+    private Dictionary<string, IrClassMethod> _nativeMethods = new(StringComparer.Ordinal);
+    private Dictionary<string, (string Type, string Value, int Ordinal)> _nativeEnumValues = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _nativeEnumVariableTypes = new(StringComparer.Ordinal);
 
     public string Emit(IrProgram program, EmitContext context)
     {
         _builder.Clear();
         _names = new TargetNameAllocator(TargetLanguage.Powershell7);
         _generatedFunctionNames.Clear();
+        _nativeClassNames.Clear();
+        _nativeEnumNames.Clear();
+        _nativeClasses.Clear();
+        _suppressedFunctions.Clear();
+        _suppressedVariables.Clear();
+        _nativeMethods.Clear();
+        _nativeEnumValues.Clear();
+        _nativeEnumVariableTypes.Clear();
         _context = context;
         _indent = 0;
         _currentFunctionName = null;
@@ -44,6 +60,40 @@ public sealed class PowerShellEmitter : IBackendEmitter
         WriteLine("Set-StrictMode -Version Latest");
         WriteLine("$ErrorActionPreference = 'Stop'");
         WriteLine("");
+        var classes = CollectClasses(program.Statements).ToList();
+        foreach (var declaration in classes)
+        {
+            var name = _names.Source(TargetNameKind.Type, declaration.Name);
+            _nativeClassNames[declaration.Name] = name;
+            _nativeClasses[declaration.Name] = declaration;
+            _suppressedFunctions.UnionWith(declaration.LegacyFunctionNames);
+            foreach (var method in declaration.Methods.Concat(declaration.Adapters))
+                _nativeMethods[method.LegacyName] = method;
+        }
+        var enums = CollectEnums(program.Statements).ToList();
+        foreach (var declaration in enums)
+            _nativeEnumNames[declaration.Name] = _names.Source(TargetNameKind.Type, declaration.Name);
+        foreach (var declaration in enums)
+        {
+            var enumName = _nativeEnumNames[declaration.Name];
+            WriteLine($"enum {enumName} {{");
+            _indent++;
+            foreach (var value in declaration.Values)
+            {
+                var valueName = SanitizeMemberName(value.Name);
+                WriteLine($"{valueName} = {value.Value}");
+                _nativeEnumValues[$"{declaration.Name}_{value.Name}"] = (enumName, valueName, value.Ordinal);
+            }
+            _indent--;
+            WriteLine("}");
+            WriteLine("");
+            _suppressedVariables.UnionWith(declaration.LegacyVariableNames);
+        }
+        foreach (var declaration in OrderClasses(classes))
+        {
+            EmitNativeClass(declaration);
+            WriteLine("");
+        }
         foreach (var statement in program.Statements)
         {
             EmitStatement(statement);
@@ -51,6 +101,132 @@ public sealed class PowerShellEmitter : IBackendEmitter
 
         return _builder.ToString();
     }
+
+    private static IEnumerable<IrClassDeclarationStatement> CollectClasses(IEnumerable<IrStatement> statements)
+    {
+        foreach (var statement in statements)
+        {
+            if (statement is IrClassDeclarationStatement declaration) yield return declaration;
+            if (statement is IrBlockStatement block)
+                foreach (var nestedDeclaration in CollectClasses(block.Statements)) yield return nestedDeclaration;
+        }
+    }
+
+    private static IEnumerable<IrEnumDeclarationStatement> CollectEnums(IEnumerable<IrStatement> statements)
+    {
+        foreach (var statement in statements)
+        {
+            if (statement is IrEnumDeclarationStatement declaration) yield return declaration;
+            if (statement is IrBlockStatement block)
+                foreach (var nestedDeclaration in CollectEnums(block.Statements)) yield return nestedDeclaration;
+        }
+    }
+
+    private IEnumerable<IrClassDeclarationStatement> OrderClasses(IEnumerable<IrClassDeclarationStatement> classes)
+    {
+        var remaining = classes.ToDictionary(c => c.Name, StringComparer.Ordinal);
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        while (remaining.Count > 0)
+        {
+            var ready = remaining.Values
+                .Where(c => ReferencedClassTypes(c).All(type => !remaining.ContainsKey(type) || type == c.Name))
+                .OrderBy(c => c.Name, StringComparer.Ordinal)
+                .ToList();
+            // Cycles use [object] on the relevant member annotations, so any
+            // deterministic order is valid once no acyclic declaration remains.
+            if (ready.Count == 0) ready.Add(remaining.Values.OrderBy(c => c.Name, StringComparer.Ordinal).First());
+            foreach (var declaration in ready)
+            {
+                remaining.Remove(declaration.Name);
+                emitted.Add(declaration.Name);
+                yield return declaration;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ReferencedClassTypes(IrClassDeclarationStatement declaration) =>
+        declaration.Fields.Select(field => field.Type)
+            .Concat(declaration.ConstructorParameters.Select(parameter => parameter.DeclaredType))
+            .Concat(declaration.Methods.Concat(declaration.Adapters).SelectMany(method =>
+                method.Parameters.Select(parameter => parameter.DeclaredType).Append(method.ReturnType)))
+            .Where(type => type.Kind == IrTypeKind.Primitive && type.Name is not null)
+            .Select(type => type.Name!);
+
+    private void EmitNativeClass(IrClassDeclarationStatement declaration)
+    {
+        var className = _nativeClassNames[declaration.Name];
+        WriteLine($"class {className} {{");
+        _indent++;
+        foreach (var field in declaration.Fields)
+            WriteLine($"{EmitPowerShellType(field.Type, declaration.Name)} ${SanitizeMemberName(field.Name)}");
+
+        var constructorParameters = string.Join(", ", declaration.ConstructorParameters.Select(p => EmitPowerShellParameter(p, declaration.Name)));
+        WriteLine($"{className}({constructorParameters}) {{");
+        _indent++;
+        foreach (var field in declaration.Fields)
+        {
+            var matchingParameter = declaration.ConstructorParameters.FirstOrDefault(p => p.Name == field.Name);
+            var value = matchingParameter != null
+                ? "$" + SanitizeName(matchingParameter.Name)
+                : field.Initializer != null ? EmitValueExpression(field.Initializer) : "$null";
+            WriteLine($"$this.{SanitizeMemberName(field.Name)} = {value}");
+        }
+        EmitClassBody(declaration.ConstructorBody, IrTypeRef.Any);
+        _indent--;
+        WriteLine("}");
+
+        foreach (var method in declaration.Methods.Concat(declaration.Adapters))
+        {
+            var returnType = ContainsValueReturn(method.Body)
+                ? EmitPowerShellType(method.ReturnType, declaration.Name)
+                : "[void]";
+            var parameters = string.Join(", ", method.Parameters.Select(p => EmitPowerShellParameter(p, declaration.Name)));
+            WriteLine($"{returnType} {SanitizeMemberName(NativeMethodName(method.Name))}({parameters}) {{");
+            _indent++;
+            EmitClassBody(method.Body, method.ReturnType);
+            _indent--;
+            WriteLine("}");
+        }
+        _indent--;
+        WriteLine("}");
+    }
+
+    private void EmitClassBody(IrBlockStatement body, IrTypeRef returnType)
+    {
+        var previousName = _currentFunctionName;
+        var previousReturn = _currentFunctionReturnType;
+        var previousIntegers = _knownIntegerVariables;
+        _currentFunctionName = null;
+        _currentFunctionReturnType = returnType;
+        _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
+        EmitStatement(body);
+        _currentFunctionName = previousName;
+        _currentFunctionReturnType = previousReturn;
+        _knownIntegerVariables = previousIntegers;
+    }
+
+    private static bool ContainsValueReturn(IrStatement statement) => statement switch
+    {
+        IrReturnStatement { Expression: not null } => true,
+        IrBlockStatement block => block.Statements.Any(ContainsValueReturn),
+        IrIfStatement conditional => ContainsValueReturn(conditional.ThenBlock) ||
+                                     (conditional.ElseBlock != null && ContainsValueReturn(conditional.ElseBlock)),
+        IrWhileStatement loop => ContainsValueReturn(loop.Body),
+        IrForStatement loop => ContainsValueReturn(loop.Body),
+        IrDoWhileStatement loop => ContainsValueReturn(loop.Body),
+        _ => false
+    };
+
+    private static string NativeMethodName(string name) => name.ToLowerInvariant() switch
+    {
+        "string" => "ToString",
+        "int" => "ToInt32",
+        "float" => "ToDouble",
+        "bool" => "ToBoolean",
+        "array" => "ToArray",
+        "object" => "ToObject",
+        _ => name
+    };
 
     private void EmitRuntimeHelpers()
     {
@@ -746,8 +922,13 @@ function __sushi_call_method {
 
             case IrVariableDeclarationStatement variable:
             {
+                if (_suppressedVariables.Contains(variable.Name)) break;
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);
                 var variableName = SanitizeName(variable.Name);
+                if (TryGetNativeEnumType(initializer, out var enumType))
+                    _nativeEnumVariableTypes[variableName] = enumType;
+                else
+                    _nativeEnumVariableTypes.Remove(variableName);
                 if (initializer is IrArrayLiteralExpression array)
                 {
                     _arrayInitializers[variableName] = array;
@@ -788,7 +969,15 @@ function __sushi_call_method {
                 break;
 
             case IrFunctionDeclarationStatement function:
-                EmitFunction(function);
+                if (!_suppressedFunctions.Contains(function.Name)) EmitFunction(function);
+                break;
+
+            case IrClassDeclarationStatement:
+                // Emitted in the declaration preamble so classes are available
+                // to all top-level code, including constructors in other files.
+                break;
+
+            case IrEnumDeclarationStatement:
                 break;
 
             case IrReturnStatement returnStatement:
@@ -887,7 +1076,7 @@ function __sushi_call_method {
 
         var regularParameters = statement.Parameters
             .Where(parameter => !parameter.IsVarargs)
-            .Select(EmitPowerShellParameter)
+            .Select(parameter => EmitPowerShellParameter(parameter))
             .ToList();
         var varargsParameter = statement.Parameters.FirstOrDefault(parameter => parameter.IsVarargs);
 
@@ -1094,11 +1283,11 @@ function __sushi_call_method {
                 return;
 
             case IrResolvedMethodCallExpression method:
-                WriteLine(EmitCallCommand(method.AsFunctionCall()));
+                WriteLine(EmitNativeMethodCall(method));
                 return;
 
             case IrAdapterCallExpression adapter:
-                WriteLine(EmitCallCommand(adapter.AsFunctionCall()));
+                WriteLine(EmitNativeAdapterCall(adapter));
                 return;
 
             case IrAssignmentExpression assignment:
@@ -1217,10 +1406,10 @@ function __sushi_call_method {
         return expression switch
         {
             IrLiteralExpression literal => EmitLiteral(literal.Value),
-            IrIdentifierExpression identifier => $"${SanitizeName(identifier.Name)}",
+            IrIdentifierExpression identifier => EmitIdentifier(identifier),
             IrArrayLiteralExpression array => EmitArrayLiteral(array),
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
-            IrMemberAccessExpression member => $"({EmitValueExpression(member.Target)}).{SanitizeName(member.MemberName)}",
+            IrMemberAccessExpression member => EmitMemberAccess(member),
             IrIndexExpression index => $"({EmitValueExpression(index.Target)})[{EmitValueExpression(index.Index)}]",
             IrUnaryExpression unary when unary.Operator is "!" =>
                 $"(-not {EmitValueExpression(unary.Operand)})",
@@ -1237,18 +1426,64 @@ function __sushi_call_method {
                 EmitIntrinsicValue(intrinsicCall),
             IrCallExpression call =>
                 $"({EmitCallCommand(call)})",
-            IrConstructionExpression construction =>
-                $"({SanitizeFunctionName(construction.ConstructorName)} {string.Join(" ", construction.Arguments.Select(argument => EmitValueExpression(argument.Value)))})",
-            IrResolvedMethodCallExpression method => $"({EmitCallCommand(method.AsFunctionCall())})",
-            IrAdapterCallExpression adapter => $"({EmitCallCommand(adapter.AsFunctionCall())})",
+            IrConstructionExpression construction => EmitNativeConstruction(construction),
+            IrResolvedMethodCallExpression method => $"({EmitNativeMethodCall(method)})",
+            IrAdapterCallExpression adapter => $"({EmitNativeAdapterCall(adapter)})",
             IrMethodCallExpression methodCall =>
                 EmitMethodCallExpression(methodCall),
             IrAssignmentExpression assignment =>
                 $"({EmitAssignmentExpression(assignment)}; ${SanitizeName(assignment.Target.Name)})",
             IrMemberAssignmentExpression assignment =>
-                $"$(({EmitValueExpression(assignment.Target)}).{SanitizeName(assignment.MemberName)} {assignment.Operator} {EmitValueExpression(assignment.Value)})",
+                $"$(({EmitValueExpression(assignment.Target)}).{SanitizeMemberName(assignment.MemberName)} {assignment.Operator} {EmitValueExpression(assignment.Value)})",
             _ => "$null"
         };
+    }
+
+    private string EmitIdentifier(IrIdentifierExpression identifier)
+    {
+        if (_nativeEnumValues.TryGetValue(identifier.Name, out var value))
+            return $"[{value.Type}]::{value.Value}";
+        return $"${SanitizeName(identifier.Name)}";
+    }
+
+    private string EmitMemberAccess(IrMemberAccessExpression member)
+    {
+        if (member.Target is IrIdentifierExpression identifier &&
+            _nativeEnumValues.TryGetValue(identifier.Name, out var value))
+        {
+            var enumValue = $"[{value.Type}]::{value.Value}";
+            return member.MemberName switch
+            {
+                "_name" => $"(({enumValue}).ToString())",
+                "_value" => $"([int]({enumValue}))",
+                "_ord" => $"({value.Ordinal.ToString(CultureInfo.InvariantCulture)})",
+                _ => $"({enumValue}).{SanitizeMemberName(member.MemberName)}"
+            };
+        }
+        if (member.Target is IrIdentifierExpression variable &&
+            _nativeEnumVariableTypes.TryGetValue(SanitizeName(variable.Name), out var enumType))
+        {
+            var enumValue = EmitValueExpression(variable);
+            return member.MemberName switch
+            {
+                "_name" => $"(({enumValue}).ToString())",
+                "_value" => $"([int]({enumValue}))",
+                "_ord" => $"([Array]::IndexOf([{enumType}]::GetEnumValues(), {enumValue}))",
+                _ => $"({enumValue}).{SanitizeMemberName(member.MemberName)}"
+            };
+        }
+        return $"({EmitValueExpression(member.Target)}).{SanitizeMemberName(member.MemberName)}";
+    }
+
+    private bool TryGetNativeEnumType(IrExpression expression, out string type)
+    {
+        if (expression is IrIdentifierExpression identifier && _nativeEnumValues.TryGetValue(identifier.Name, out var value))
+        {
+            type = value.Type;
+            return true;
+        }
+        type = "";
+        return false;
     }
 
     private string EmitTruthinessExpression(IrTruthinessExpression expression)
@@ -1334,12 +1569,48 @@ function __sushi_call_method {
         // provable mismatches are diagnosed before emission.
     }
 
-    private string EmitPowerShellParameter(IrFunctionParameter parameter)
+    private string EmitNativeConstruction(IrConstructionExpression construction)
     {
-        var annotation = parameter.DeclaredType.Kind switch
+        if (_nativeClassNames.TryGetValue(construction.TypeName, out var className))
+        {
+            var arguments = string.Join(", ", construction.Arguments.Select(argument => EmitValueExpression(argument.Value)));
+            return $"[{className}]::new({arguments})";
+        }
+        return $"({SanitizeFunctionName(construction.ConstructorName)} {string.Join(" ", construction.Arguments.Select(argument => EmitValueExpression(argument.Value)))})";
+    }
+
+    private string EmitNativeMethodCall(IrResolvedMethodCallExpression method)
+    {
+        if (_nativeClassNames.ContainsKey(method.TypeName) && _nativeMethods.TryGetValue(method.Callee, out var declaration))
+        {
+            var arguments = string.Join(", ", method.Arguments.Select(argument => EmitValueExpression(argument.Value)));
+            return $"({EmitValueExpression(method.Target)}).{SanitizeMemberName(NativeMethodName(declaration.Name))}({arguments})";
+        }
+        return EmitCallCommand(method.AsFunctionCall());
+    }
+
+    private string EmitNativeAdapterCall(IrAdapterCallExpression adapter)
+    {
+        if (_nativeClassNames.ContainsKey(adapter.SourceTypeName) && _nativeMethods.TryGetValue(adapter.Callee, out var declaration))
+            return $"({EmitValueExpression(adapter.Value)}).{SanitizeMemberName(NativeMethodName(declaration.Name))}()";
+        return EmitCallCommand(adapter.AsFunctionCall());
+    }
+
+    private string EmitPowerShellParameter(IrFunctionParameter parameter, string? ownerClass = null)
+    {
+        var annotation = EmitPowerShellType(parameter.DeclaredType, ownerClass);
+        return $"{annotation}${SanitizeName(parameter.Name)}";
+    }
+
+    private string EmitPowerShellType(IrTypeRef type, string? ownerClass = null)
+    {
+        return type.Kind switch
         {
             IrTypeKind.Structural => "[pscustomobject]",
-            IrTypeKind.Primitive => parameter.DeclaredType.Name?.ToLowerInvariant() switch
+            IrTypeKind.Primitive when type.Name is not null && _nativeClassNames.TryGetValue(type.Name, out var className) &&
+                                        !IsCyclicClassReference(ownerClass, type.Name) => $"[{className}]",
+            IrTypeKind.Primitive when type.Name is not null && _nativeEnumNames.TryGetValue(type.Name, out var enumName) => $"[{enumName}]",
+            IrTypeKind.Primitive => type.Name?.ToLowerInvariant() switch
             {
                 "int" => "[int]",
                 "float" => "[double]",
@@ -1349,9 +1620,22 @@ function __sushi_call_method {
                 "object" => "[object]",
                 _ => "[object]"
             },
-            _ => ""
+            _ => "[object]"
         };
-        return $"{annotation}${SanitizeName(parameter.Name)}";
+    }
+
+    private bool IsCyclicClassReference(string? ownerClass, string targetClass)
+    {
+        if (ownerClass == null || ownerClass == targetClass) return false;
+        return DependsOn(targetClass, ownerClass, new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    private bool DependsOn(string current, string target, HashSet<string> seen)
+    {
+        if (!seen.Add(current) || !_nativeClasses.TryGetValue(current, out var declaration)) return false;
+        foreach (var reference in ReferencedClassTypes(declaration))
+            if (reference == target || DependsOn(reference, target, seen)) return true;
+        return false;
     }
 
     private static string EncodeRuntimeType(IrTypeRef type)
@@ -1419,6 +1703,10 @@ function __sushi_call_method {
     }
 
     private string SanitizeName(string name) => _names.Source(TargetNameKind.Variable, name);
+
+    // Members live in their own PowerShell namespace. Keeping them separate
+    // avoids a local variable allocation changing a public property spelling.
+    private string SanitizeMemberName(string name) => _names.Source(TargetNameKind.Field, name);
 
     private string SanitizeFunctionName(string name)
     {

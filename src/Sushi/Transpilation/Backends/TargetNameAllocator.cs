@@ -92,5 +92,6 @@ internal enum TargetNameKind
 {
     Variable,
     Function,
-    Field
+    Field,
+    Type
 }

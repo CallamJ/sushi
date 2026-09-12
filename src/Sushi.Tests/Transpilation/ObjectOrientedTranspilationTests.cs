@@ -78,8 +78,19 @@ public sealed class ObjectOrientedTranspilationTests
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
         Assert.DoesNotContain("__sushi_json_member", result.EmittedCode);
         Assert.DoesNotContain("__sushi_call_method", result.EmittedCode);
-        Assert.Contains("person_string", result.EmittedCode);
-        Assert.Contains("Priority_High", result.EmittedCode);
+        if (target == TargetLanguage.Powershell7)
+        {
+            Assert.Contains("class Person", result.EmittedCode);
+            Assert.Contains("[Person]::new", result.EmittedCode);
+            Assert.Contains("ToString()", result.EmittedCode);
+            Assert.Contains("enum ExitCode", result.EmittedCode);
+            Assert.DoesNotContain("person_string", result.EmittedCode);
+        }
+        else
+        {
+            Assert.Contains("person_string", result.EmittedCode);
+            Assert.Contains("Priority_High", result.EmittedCode);
+        }
     }
 
     [Fact]

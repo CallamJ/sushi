@@ -2574,6 +2574,15 @@ __sushi_native_obj_to_json() {
                 }
                 break;
 
+            // Native-class metadata is consumed by the PowerShell backend.  The
+            // portable functions and object constructors which follow it remain
+            // the Bash/Zsh representation.
+            case IrClassDeclarationStatement:
+                break;
+
+            case IrEnumDeclarationStatement:
+                break;
+
             case IrVariableDeclarationStatement variable:
             {
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);

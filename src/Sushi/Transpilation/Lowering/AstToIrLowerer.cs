@@ -1,5 +1,6 @@
 namespace Sushi.Transpilation.Lowering;
 
+using System.Globalization;
 using Sushi.Application;
 using Sushi.Build;
 using Sushi.Build.SyntaxTree;
@@ -1798,6 +1799,9 @@ public sealed class AstToIrLowerer
     {
         var statements = new List<IrStatement>();
         var resolvedTypeName = ResolveTopLevel(node.Name);
+        var nativeMethods = new List<IrClassMethod>();
+        var nativeAdapters = new List<IrClassMethod>();
+        var legacyFunctionNames = new List<string>();
 
         foreach (var method in node.Methods)
         {
@@ -1830,15 +1834,25 @@ public sealed class AstToIrLowerer
             _currentFunctionName = previousFunctionName;
             _currentFunctionReturnType = previousReturnType;
 
-            statements.Add(new IrFunctionDeclarationStatement(
+            var loweredMethod = new IrFunctionDeclarationStatement(
                 methodName,
                 parameters,
                 body,
-                _functionSignatures[methodName].ReturnType));
+                _functionSignatures[methodName].ReturnType);
+            statements.Add(loweredMethod);
+            legacyFunctionNames.Add(methodName);
+            nativeMethods.Add(new IrClassMethod(method.Name, parameters.Skip(1), body,
+                loweredMethod.ReturnType, methodName));
         }
 
         foreach (var adapter in node.TypeAdapters)
-            statements.Add(LowerAdapter(resolvedTypeName, adapter));
+        {
+            var loweredAdapter = (IrFunctionDeclarationStatement)LowerAdapter(resolvedTypeName, adapter);
+            statements.Add(loweredAdapter);
+            legacyFunctionNames.Add(loweredAdapter.Name);
+            nativeAdapters.Add(new IrClassMethod(adapter.TargetType, loweredAdapter.Parameters.Skip(1),
+                loweredAdapter.Body, loweredAdapter.ReturnType, loweredAdapter.Name));
+        }
 
         var constructorName = $"__sushi_new_{resolvedTypeName}";
         var ctorParameters = node.Constructor?.Parameters
@@ -1866,6 +1880,7 @@ public sealed class AstToIrLowerer
         TrackParameterObjectTypes(ctorParameters, ctorSignature.Parameters);
 
         var objectProperties = new List<IrObjectProperty>();
+        var nativeFields = new List<IrClassField>();
 
         foreach (var method in node.Methods)
         {
@@ -1877,18 +1892,30 @@ public sealed class AstToIrLowerer
         foreach (var field in node.Fields)
         {
             var matchingCtorParameter = ctorSignature.Parameters.FirstOrDefault(p => p.Name == field.Name);
+            var fieldInitializer = field.Initializer != null ? LowerExpression(field.Initializer) : null;
+            nativeFields.Add(new IrClassField(field.Name,
+                LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'"), fieldInitializer));
             if (matchingCtorParameter != null)
             {
                 objectProperties.Add(new IrObjectProperty(field.Name, new IrIdentifierExpression(field.Name)));
             }
-            else if (field.Initializer != null)
+            else if (fieldInitializer != null)
             {
-                objectProperties.Add(new IrObjectProperty(field.Name, LowerExpression(field.Initializer)));
+                objectProperties.Add(new IrObjectProperty(field.Name, fieldInitializer));
             }
             else
             {
                 objectProperties.Add(new IrObjectProperty(field.Name, new IrLiteralExpression(null)));
             }
+        }
+
+        var nativeConstructorStatements = new List<IrStatement>();
+        if (node.Constructor != null)
+        {
+            _definedVariables.Add("this");
+            _functionDepth++;
+            nativeConstructorStatements.AddRange(LowerBlock(node.Constructor.Body).Statements);
+            _functionDepth--;
         }
 
         var ctorStatements = new List<IrStatement>
@@ -1910,6 +1937,10 @@ public sealed class AstToIrLowerer
             ctorSignature.Parameters,
             ctorBody,
             IrTypeRef.Primitive("object")));
+        legacyFunctionNames.Add(constructorName);
+        statements.Insert(0, new IrClassDeclarationStatement(resolvedTypeName, nativeFields,
+            ctorSignature.Parameters, new IrBlockStatement(nativeConstructorStatements), nativeMethods,
+            nativeAdapters, legacyFunctionNames));
         _definedVariables = previousConstructorVariables;
         RestoreKnownObjectTypes(previousConstructorObjectTypes);
 
@@ -1920,6 +1951,7 @@ public sealed class AstToIrLowerer
     {
         var statements = new List<IrStatement>();
         var resolvedTypeName = ResolveTopLevel(node.Name);
+        var nativeEnumValues = TryGetNativeEnumValues(node);
         foreach (var method in node.Methods)
         {
             var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}";
@@ -2017,7 +2049,35 @@ public sealed class AstToIrLowerer
             statements.Add(new IrVariableDeclarationStatement($"{resolvedTypeName}_{value.Name}", initializer));
         }
 
+        if (nativeEnumValues != null)
+        {
+            statements.Insert(0, new IrEnumDeclarationStatement(resolvedTypeName, nativeEnumValues,
+                node.Values.Select(value => $"{resolvedTypeName}_{value.Name}")));
+        }
+
         return new IrBlockStatement(statements);
+    }
+
+    private static List<IrEnumValue>? TryGetNativeEnumValues(EnumDeclarationNode node)
+    {
+        if (node.RecordParameters != null || node.ExplicitConstructor != null || node.Methods.Count > 0 || node.TypeAdapters.Count > 0)
+            return null;
+        var output = new List<IrEnumValue>();
+        var nextValue = 0;
+        foreach (var value in node.Values)
+        {
+            if (value.Properties != null || value.ConstructorArgs != null) return null;
+            if (value.DirectValue is LiteralExpressionNode { Kind: LiteralKind.Integer, Value: not null } literal)
+            {
+                try { nextValue = Convert.ToInt32(literal.Value, CultureInfo.InvariantCulture); }
+                catch (OverflowException) { return null; }
+            }
+            else if (value.DirectValue != null) return null;
+            if (output.Any(existing => existing.Value == nextValue)) return null;
+            output.Add(new IrEnumValue(value.Name, nextValue, output.Count));
+            nextValue++;
+        }
+        return output;
     }
 
     private List<IrObjectProperty> BuildEnumValueProperties(
