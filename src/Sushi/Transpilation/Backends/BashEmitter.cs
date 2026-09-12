@@ -36,6 +36,10 @@ public sealed class BashEmitter : IBackendEmitter
     private bool _currentFunctionReturnsValue;
     private string _currentOutputName = "";
     private bool _needsDynamicMethodMetadata;
+    private HashSet<string> _commentedTypes = new(StringComparer.Ordinal);
+    private HashSet<string> _classTypeNames = new(StringComparer.Ordinal);
+    private HashSet<string> _enumTypeNames = new(StringComparer.Ordinal);
+    private bool _emittedTopLevelSection;
 
     public BashEmitter()
     {
@@ -70,6 +74,10 @@ public sealed class BashEmitter : IBackendEmitter
         _zshObjectParameterNames.Clear();
         _zshReadOnlyObjectParameters.Clear();
         _nativeObjectAliases.Clear();
+        _commentedTypes.Clear();
+        _classTypeNames = CollectClassTypeNames(program.Statements);
+        _enumTypeNames = CollectEnumTypeNames(program.Statements);
+        _emittedTopLevelSection = false;
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -2590,6 +2598,30 @@ __sushi_native_obj_to_json() {
 
             case IrVariableDeclarationStatement variable:
             {
+                var enumType = "";
+                var enumValue = "";
+                var isEnumValue = !inFunction &&
+                                  (IsEnumValueInitializer(variable.Initializer, out enumType, out enumValue) ||
+                                   TryGetGeneratedEnumValue(variable.Initializer, out enumType, out enumValue));
+                if (isEnumValue)
+                {
+                    var separator = variable.Name.LastIndexOf('_');
+                    if (separator > 0) enumType = variable.Name[..separator];
+                    if (_commentedTypes.Add(enumType))
+                    {
+                        WriteLine("");
+                        WriteLine($"# --- enum: {enumType} ---");
+                    }
+                    _indent++;
+                }
+                try
+                {
+                    if (isEnumValue)
+                    {
+                        WriteLine("");
+                        WriteLine($"# enum value: {enumType}.{enumValue}");
+                    }
+                    
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);
                 var name = SanitizeVariableName(variable.Name);
                 if (initializer is IrConstructionExpression constructor)
@@ -2646,11 +2678,8 @@ __sushi_native_obj_to_json() {
                 {
                     var properties = MetadataProperties(obj.Properties);
                     var entries = (_zshMode
-                        ? properties.SelectMany(property => new[]
-                        {
-                            Escape.BashSingleQuoted(property.Name),
-                            PrepareValue(property.Value, inFunction)
-                        })
+                        ? properties.Select(property =>
+                            $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
                         : properties.Select(property =>
                             $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
                     EmitAssociativeObject(name, entries, inFunction ? "local " : "declare ",
@@ -2699,14 +2728,21 @@ __sushi_native_obj_to_json() {
                 WriteLine($"{(inFunction ? "local " : "")}{name}={value}");
                 SetKnownInteger(name, IsDefinitelyInteger(initializer));
                 SetKnownArray(name, initializer is IrArrayLiteralExpression);
-                break;
+                    break;
+                }
+                finally
+                {
+                    if (isEnumValue) _indent--;
+                }
             }
 
             case IrExpressionStatement expressionStatement:
+                EnsureTopLevelSection(inFunction);
                 EmitExpressionStatement(expressionStatement.Expression, inFunction);
                 break;
 
             case IrIfStatement ifStatement:
+                EnsureTopLevelSection(inFunction);
                 EmitIfStatement(ifStatement, inFunction);
                 break;
 
@@ -2723,7 +2759,11 @@ __sushi_native_obj_to_json() {
                 break;
 
             case IrFunctionDeclarationStatement function:
+                EmitGeneratedFunctionComment(function);
+                var typeMemberIndent = IsTypeMemberFunction(function.Name);
+                if (typeMemberIndent) _indent++;
                 EmitFunctionDeclaration(function);
+                if (typeMemberIndent) _indent--;
                 break;
 
             case IrReturnStatement returnStatement:
@@ -2994,6 +3034,135 @@ __sushi_native_obj_to_json() {
         _nativeObjectAliases = previousNativeObjectAliases;
         _indent--;
         WriteLine("}");
+    }
+
+    private void EmitGeneratedFunctionComment(IrFunctionDeclarationStatement function)
+    {
+        var name = function.Name;
+        var isTypeMember = IsTypeMemberFunction(name);
+        var parameters = string.Join(", ", function.Parameters
+            .Where(parameter => parameter.Name != "this")
+            .Select(parameter => parameter.IsVarargs ? $"{parameter.Name}..." : parameter.Name));
+        var signature = $"{name}({parameters})";
+        var label = name switch
+        {
+            var value when value.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal) =>
+                $"method: {value[NativeObjectMetadata.MethodPrefix.Length..].Replace('_', '.')}({parameters})",
+            var value when value.StartsWith("__sushi_new_", StringComparison.Ordinal) =>
+                $"constructor: {value["__sushi_new_".Length..]}({parameters})",
+            var value when value.StartsWith("__sushi_adapter_", StringComparison.Ordinal) =>
+                $"adapter: {value["__sushi_adapter_".Length..].Replace('_', '.')}({parameters})",
+            _ => $"function: {signature}"
+        };
+        if (isTypeMember)
+        {
+            var type = name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal)
+                ? name[NativeObjectMetadata.MethodPrefix.Length..].Split('_')[0]
+                : name.StartsWith("__sushi_new_", StringComparison.Ordinal)
+                    ? name["__sushi_new_".Length..].Split('_')[0]
+                    : name["__sushi_adapter_".Length..].Split('_')[0];
+            if (_commentedTypes.Add(type))
+            {
+                WriteLine("");
+                var kind = _enumTypeNames.Contains(type) ? "enum" : "class";
+                WriteLine($"# --- {kind}: {type} ---");
+            }
+        }
+        WriteLine("");
+        if (isTypeMember)
+        {
+            _indent++;
+            WriteLine($"# {label}");
+            _indent--;
+        }
+        else
+        {
+            WriteLine($"# {label}");
+        }
+    }
+
+    private static bool IsTypeMemberFunction(string name) =>
+        name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal) ||
+        name.StartsWith("__sushi_new_", StringComparison.Ordinal) ||
+        name.StartsWith("__sushi_adapter_", StringComparison.Ordinal);
+
+    private static HashSet<string> CollectClassTypeNames(IEnumerable<IrStatement> statements)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var statement in statements)
+        {
+            if (statement is IrClassDeclarationStatement declaration) names.Add(declaration.Name);
+            if (statement is IrBlockStatement block) names.UnionWith(CollectClassTypeNames(block.Statements));
+        }
+        return names;
+    }
+
+    private static HashSet<string> CollectEnumTypeNames(IEnumerable<IrStatement> statements)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var statement in statements)
+        {
+            switch (statement)
+            {
+                case IrEnumDeclarationStatement declaration:
+                    names.Add(declaration.Name);
+                    break;
+                case IrRichEnumDeclarationStatement declaration:
+                    names.Add(declaration.Name);
+                    break;
+                case IrBlockStatement block:
+                    names.UnionWith(CollectEnumTypeNames(block.Statements));
+                    break;
+            }
+        }
+        return names;
+    }
+
+    private void EnsureTopLevelSection(bool inFunction)
+    {
+        if (inFunction || _emittedTopLevelSection) return;
+        WriteLine("");
+        WriteLine("# --- script body ---");
+        _emittedTopLevelSection = true;
+    }
+
+    private static bool IsEnumValueInitializer(IrExpression? initializer, out string type, out string value)
+    {
+        if (initializer is IrObjectLiteralExpression objectLiteral)
+        {
+            var name = objectLiteral.Properties.FirstOrDefault(property => property.Name == NativeObjectMetadata.EnumName)?.Value;
+            if (name is IrLiteralExpression { Value: string enumValue })
+            {
+                type = "enum";
+                value = enumValue;
+                return true;
+            }
+        }
+        type = "";
+        value = "";
+        return false;
+    }
+
+    private bool TryGetGeneratedEnumValue(IrExpression? initializer, out string type, out string value)
+    {
+        if (initializer is IrConstructionExpression construction &&
+            construction.ConstructorName.StartsWith("__sushi_new_", StringComparison.Ordinal))
+        {
+            var suffix = construction.ConstructorName["__sushi_new_".Length..];
+            var enumType = _enumTypeNames
+                .Where(candidate => suffix.StartsWith(candidate + "_", StringComparison.Ordinal))
+                .OrderByDescending(candidate => candidate.Length)
+                .FirstOrDefault();
+            if (enumType != null)
+            {
+                type = enumType;
+                value = suffix[(enumType.Length + 1)..];
+                return true;
+            }
+        }
+        type = "";
+        value = "";
+        return false;
     }
 
     private static bool EndsWithReturn(IrBlockStatement block) =>
@@ -3280,11 +3449,8 @@ __sushi_native_obj_to_json() {
             if (assignment.Value is IrObjectLiteralExpression obj)
             {
                 var entries = _zshMode
-                    ? obj.Properties.SelectMany(property => new[]
-                    {
-                        Escape.BashSingleQuoted(property.Name),
-                        PrepareValue(property.Value, inFunction)
-                    })
+                    ? obj.Properties.Select(property =>
+                        $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
                     : obj.Properties.Select(property =>
                         $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
                 WriteLine($"{name}=({string.Join(" ", entries)})");
@@ -4015,11 +4181,8 @@ __sushi_native_obj_to_json() {
     {
         var properties = MetadataProperties(obj.Properties);
         var entries = (_zshMode
-            ? properties.SelectMany(property => new[]
-            {
-                Escape.BashSingleQuoted(property.Name),
-                PrepareValue(property.Value, inFunction)
-            })
+            ? properties.Select(property =>
+                $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
             : properties.Select(property =>
                 $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
         EmitAssociativeObject(name, entries, inFunction ? "local " : "declare ", false);
