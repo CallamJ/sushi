@@ -123,8 +123,16 @@ public sealed class ModuleTranspilationTests
             result =>
             {
                 Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
-                Assert.Contains("example_model_person", result.EmittedCode);
-                Assert.Contains("example_model_State_Done", result.EmittedCode);
+                if (target == TargetLanguage.Powershell7)
+                {
+                    Assert.Contains("class example_model_Person", result.EmittedCode);
+                    Assert.Contains("[example_model_State]::Done", result.EmittedCode);
+                }
+                else
+                {
+                    Assert.Contains("example_model_person", result.EmittedCode);
+                    Assert.Contains("example_model_State_Done", result.EmittedCode);
+                }
             },
             target);
     }

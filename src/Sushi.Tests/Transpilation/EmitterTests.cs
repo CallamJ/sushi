@@ -56,7 +56,7 @@ public class EmitterTests
 
         Assert.Contains("Set-StrictMode -Version Latest", script);
         Assert.Contains("$x = 1", script);
-        Assert.Contains("Write-Host $x", script);
+        Assert.Contains("Write-Output $x", script);
         Assert.DoesNotContain("function __sushi_member", script);
         Assert.Empty(diagnostics);
     }
@@ -496,7 +496,7 @@ public class EmitterTests
         var emitter = new PowerShellEmitter();
         var script = emitter.Emit(program, new EmitContext("varargs.sushi", diagnostics));
 
-        Assert.Contains("param($head)", script);
+        Assert.Contains("param([object]$head)", script);
         Assert.Contains("$rest = @()", script);
         Assert.Contains("foreach ($__sushi_vararg in @($args))", script);
         Assert.Empty(diagnostics);

@@ -138,7 +138,7 @@ public class TranspilerTests
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
         Assert.Contains("$x = 1", result.EmittedCode);
-        Assert.Contains("Write-Host", result.EmittedCode);
+        Assert.Contains("Write-Output", result.EmittedCode);
     }
 
     [Fact]
