@@ -1955,6 +1955,34 @@ public sealed class AstToIrLowerer
         var richEnumValues = new List<IrRichEnumValue>();
         List<IrFunctionParameter>? richConstructorParameters = null;
         IrBlockStatement? richConstructorBody = null;
+        var sharedConstructorName = $"__sushi_new_{resolvedTypeName}";
+        var sharedSeedPropertyNames = new List<string>
+        {
+            NativeObjectMetadata.EnumName,
+            NativeObjectMetadata.EnumOrdinal,
+            NativeObjectMetadata.EnumValue
+        };
+        var assignedConstructorFields = node.ExplicitConstructor != null
+            ? CollectAssignedThisMembers(node.ExplicitConstructor.Body)
+            : new HashSet<string>(StringComparer.Ordinal);
+        foreach (var enumValue in node.Values)
+        {
+            if (enumValue.Properties != null)
+            {
+                foreach (var property in enumValue.Properties)
+                    if (!sharedSeedPropertyNames.Contains(property.Key, StringComparer.Ordinal))
+                        sharedSeedPropertyNames.Add(property.Key);
+            }
+        }
+        foreach (var method in node.Methods)
+        {
+            var metadataName = $"{NativeObjectMetadata.MethodPrefix}{method.Name}";
+            if (!sharedSeedPropertyNames.Contains(metadataName, StringComparer.Ordinal))
+                sharedSeedPropertyNames.Add(metadataName);
+        }
+        var sharedSeedParameters = sharedSeedPropertyNames
+            .Select((_, index) => new IrFunctionParameter($"__sushi_enum_field_{index}", false, null, IrTypeRef.Any))
+            .ToList();
         var richMethods = new List<IrClassMethod>();
         var richAdapters = new List<IrClassMethod>();
         var richLegacyFunctions = new List<string>();
@@ -2016,43 +2044,61 @@ public sealed class AstToIrLowerer
 
             if (node.ExplicitConstructor != null)
             {
-                var constructorName = $"__sushi_new_{resolvedTypeName}_{value.Name}";
-                var parameters = BuildParameterList(node.ExplicitConstructor.Parameters, constructorName);
-                var previousVariables = _definedVariables;
-                var previousObjectTypes = new Dictionary<string, string>(_knownObjectTypes, StringComparer.Ordinal);
-                _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal) { "this" };
-                _knownObjectTypes["this"] = resolvedTypeName;
-                foreach (var parameter in parameters) _definedVariables.Add(parameter.Name);
-                _functionDepth++;
-                var body = new List<IrStatement> { new IrVariableDeclarationStatement("this", initializer) };
-                var previousAllowEnumMutation = _allowEnumMutation;
-                _allowEnumMutation = true;
-                body.AddRange(LowerBlock(node.ExplicitConstructor.Body).Statements);
-                _allowEnumMutation = previousAllowEnumMutation;
-                body.Add(new IrReturnStatement(new IrIdentifierExpression("this")));
+                var userParameters = BuildParameterList(node.ExplicitConstructor.Parameters, sharedConstructorName);
+                var parameters = userParameters.Concat(sharedSeedParameters).ToList();
                 if (richConstructorParameters == null)
+                    richConstructorParameters = userParameters;
+
+                if (richConstructorBody == null)
                 {
-                    richConstructorParameters = parameters;
+                    var previousVariables = _definedVariables;
+                    var previousObjectTypes = new Dictionary<string, string>(_knownObjectTypes, StringComparer.Ordinal);
+                    _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal) { "this" };
+                    _knownObjectTypes["this"] = resolvedTypeName;
+                    foreach (var parameter in parameters) _definedVariables.Add(parameter.Name);
+                    _functionDepth++;
+                    var seedProperties = sharedSeedPropertyNames.Select((propertyName, index) =>
+                        new IrObjectProperty(propertyName,
+                            assignedConstructorFields.Contains(propertyName)
+                                ? new IrLiteralExpression(null)
+                                : new IrIdentifierExpression(sharedSeedParameters[index].Name))).ToList();
+                    var body = new List<IrStatement>
+                    {
+                        new IrVariableDeclarationStatement("this", new IrObjectLiteralExpression(seedProperties))
+                    };
+                    var previousAllowEnumMutation = _allowEnumMutation;
+                    _allowEnumMutation = true;
+                    body.AddRange(LowerBlock(node.ExplicitConstructor.Body).Statements);
+                    _allowEnumMutation = previousAllowEnumMutation;
+                    body.Add(new IrReturnStatement(new IrIdentifierExpression("this")));
                     richConstructorBody = new IrBlockStatement(body.Skip(1).SkipLast(1));
+                    _functionDepth--;
+                    _definedVariables = previousVariables;
+                    RestoreKnownObjectTypes(previousObjectTypes);
+                    statements.Add(new IrFunctionDeclarationStatement(
+                        sharedConstructorName,
+                        parameters,
+                        new IrBlockStatement(body),
+                        IrTypeRef.Primitive("object")));
+                    richLegacyFunctions.Add(sharedConstructorName);
                 }
-                _functionDepth--;
-                _definedVariables = previousVariables;
-                RestoreKnownObjectTypes(previousObjectTypes);
-                statements.Add(new IrFunctionDeclarationStatement(
-                    constructorName,
-                    parameters,
-                    new IrBlockStatement(body),
-                    IrTypeRef.Primitive("object")));
                 var arguments = (value.ConstructorArgs ?? new List<ExpressionNode>())
                     .Select(argument => new IrCallArgument(null, LowerExpression(argument), argument.Line, argument.Column))
                     .ToList();
-                var binding = FunctionCallBinder.Bind(constructorName, parameters, arguments, _sourcePath, value.Line, value.Column);
+                var propertiesByName = valueProperties.ToDictionary(property => property.Name, property => property.Value, StringComparer.Ordinal);
+                arguments.AddRange(sharedSeedPropertyNames.Select(propertyName =>
+                    new IrCallArgument(null, assignedConstructorFields.Contains(propertyName)
+                        ? new IrLiteralExpression(null)
+                        : propertiesByName.TryGetValue(propertyName, out var propertyValue)
+                        ? propertyValue
+                        : new IrLiteralExpression(null), value.Line, value.Column)));
+                var binding = FunctionCallBinder.Bind(sharedConstructorName, parameters, arguments, _sourcePath, value.Line, value.Column);
                 _diagnostics.AddRange(binding.Diagnostics);
                 if (binding.Success)
-                    ValidateCallTypes(constructorName, parameters, binding.OrderedArguments);
+                    ValidateCallTypes(sharedConstructorName, parameters, binding.OrderedArguments);
                 initializer = new IrConstructionExpression(
                     resolvedTypeName,
-                    constructorName,
+                    sharedConstructorName,
                     binding.Success ? binding.OrderedArguments : arguments);
             }
             else if (node.RecordParameters != null)

@@ -136,7 +136,9 @@ public sealed class ObjectOrientedTranspilationTests
             """;
         var result = Transpile(source, TargetLanguage.Bash);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
-        Assert.Contains("status_good_new", result.EmittedCode);
+        Assert.Contains("status_new", result.EmittedCode);
+        Assert.DoesNotContain("status_good_new", result.EmittedCode);
+        Assert.DoesNotContain("status_bad_new", result.EmittedCode);
     }
 
     [Fact]

@@ -40,6 +40,7 @@ public sealed class BashEmitter : IBackendEmitter
     private HashSet<string> _classTypeNames = new(StringComparer.Ordinal);
     private HashSet<string> _enumTypeNames = new(StringComparer.Ordinal);
     private bool _emittedTopLevelSection;
+    private Dictionary<string, int> _positionalParameterReferences = new(StringComparer.Ordinal);
 
     public BashEmitter()
     {
@@ -78,6 +79,7 @@ public sealed class BashEmitter : IBackendEmitter
         _classTypeNames = CollectClassTypeNames(program.Statements);
         _enumTypeNames = CollectEnumTypeNames(program.Statements);
         _emittedTopLevelSection = false;
+        _positionalParameterReferences.Clear();
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -2600,12 +2602,12 @@ __sushi_native_obj_to_json() {
             {
                 var enumType = "";
                 var enumValue = "";
+                var separator = variable.Name.LastIndexOf('_');
                 var isEnumValue = !inFunction &&
                                   (IsEnumValueInitializer(variable.Initializer, out enumType, out enumValue) ||
                                    TryGetGeneratedEnumValue(variable.Initializer, out enumType, out enumValue));
                 if (isEnumValue)
                 {
-                    var separator = variable.Name.LastIndexOf('_');
                     if (separator > 0) enumType = variable.Name[..separator];
                     if (_commentedTypes.Add(enumType))
                     {
@@ -2619,6 +2621,8 @@ __sushi_native_obj_to_json() {
                     if (isEnumValue)
                     {
                         WriteLine("");
+                        if (string.IsNullOrEmpty(enumValue) && separator > 0)
+                            enumValue = variable.Name[(separator + 1)..];
                         WriteLine($"# enum value: {enumType}.{enumValue}");
                     }
                     
@@ -2917,6 +2921,7 @@ __sushi_native_obj_to_json() {
         _zshObjectParameterNames = new Dictionary<string, string>(StringComparer.Ordinal);
         _zshReadOnlyObjectParameters = new HashSet<string>(StringComparer.Ordinal);
         _nativeObjectAliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        _positionalParameterReferences = new Dictionary<string, int>(StringComparer.Ordinal);
 
         var isConstructor = statement.Name.StartsWith("__sushi_new_", StringComparison.Ordinal);
         var mutatesReceiver = FunctionMutatesReceiver(statement.Body);
@@ -2951,6 +2956,12 @@ __sushi_native_obj_to_json() {
         foreach (var parameter in statement.Parameters)
         {
             var param = SanitizeVariableName(parameter.Name);
+            if (parameter.Name.StartsWith("__sushi_enum_field_", StringComparison.Ordinal))
+            {
+                _positionalParameterReferences[param] = argIndex;
+                argIndex++;
+                continue;
+            }
             if (parameter.IsVarargs)
             {
                 WriteLine($"local -a {param}=(\"${{@:{argIndex}}}\")");
@@ -3041,7 +3052,8 @@ __sushi_native_obj_to_json() {
         var name = function.Name;
         var isTypeMember = IsTypeMemberFunction(name);
         var parameters = string.Join(", ", function.Parameters
-            .Where(parameter => parameter.Name != "this")
+            .Where(parameter => parameter.Name != "this" &&
+                                !parameter.Name.StartsWith("__sushi_enum_field_", StringComparison.Ordinal))
             .Select(parameter => parameter.IsVarargs ? $"{parameter.Name}..." : parameter.Name));
         var signature = $"{name}({parameters})";
         var label = name switch
@@ -3157,6 +3169,14 @@ __sushi_native_obj_to_json() {
             {
                 type = enumType;
                 value = suffix[(enumType.Length + 1)..];
+                return true;
+            }
+            enumType = _enumTypeNames.FirstOrDefault(candidate =>
+                string.Equals(suffix, candidate, StringComparison.Ordinal));
+            if (enumType != null)
+            {
+                type = enumType;
+                value = "";
                 return true;
             }
         }
@@ -4326,7 +4346,9 @@ __sushi_native_obj_to_json() {
                 value = EscapeBashDoubleQuotedContent(character.ToString());
                 return true;
             case IrIdentifierExpression identifier:
-                value = $"${{{SanitizeVariableName(identifier.Name)}:-}}";
+                value = _positionalParameterReferences.TryGetValue(SanitizeVariableName(identifier.Name), out var positional)
+                    ? $"${{{positional}:-}}"
+                    : $"${{{SanitizeVariableName(identifier.Name)}:-}}";
                 return true;
             case IrMemberAccessExpression { Target: IrIdentifierExpression target } member:
             {
@@ -4727,7 +4749,7 @@ __sushi_native_obj_to_json() {
             IrMemberAccessExpression { Target: IrIdentifierExpression target } member
                 when _nativeObjectVariables.Contains(SanitizeVariableName(target.Name)) =>
                 $"\"${{{ResolveNativeObjectName(SanitizeVariableName(target.Name))}[{EmitObjectSubscript(member.MemberName)}]-}}\"",
-            IrIdentifierExpression identifier => $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\"",
+            IrIdentifierExpression identifier => EmitVariableValue(identifier.Name),
             IrLiteralExpression literal when literal.Value is string str => Escape.BashSingleQuoted(str),
             IrLiteralExpression literal when literal.Value is char ch => Escape.BashSingleQuoted(ch.ToString()),
             IrLiteralExpression literal when literal.Value is bool boolean => Escape.BashSingleQuoted(boolean ? "true" : "false"),
@@ -4742,7 +4764,7 @@ __sushi_native_obj_to_json() {
         return expression switch
         {
             IrLiteralExpression literal => EmitLiteral(literal.Value),
-            IrIdentifierExpression identifier => $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\"",
+            IrIdentifierExpression identifier => EmitVariableValue(identifier.Name),
             IrArrayLiteralExpression array => EmitArrayLiteral(array),
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
             IrMemberAccessExpression member => EmitMemberValueExpression(member),
@@ -4770,6 +4792,14 @@ __sushi_native_obj_to_json() {
             IrAssignmentExpression assignment => $"$({EmitAssignmentExpression(assignment)}; printf '%s' \"${{{SanitizeVariableName(assignment.Target.Name)}:-}}\")",
             _ => "''"
         };
+    }
+
+    private string EmitVariableValue(string name)
+    {
+        var variable = SanitizeVariableName(name);
+        return _positionalParameterReferences.TryGetValue(variable, out var positional)
+            ? $"\"${{{positional}:-}}\""
+            : $"\"${{{variable}:-}}\"";
     }
 
     private string EmitMemberValueExpression(IrMemberAccessExpression member)
