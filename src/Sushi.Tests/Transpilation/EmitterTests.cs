@@ -681,7 +681,8 @@ public class EmitterTests
         var diagnostics = new List<Diagnostic>();
         var script = new BashEmitter().Emit(program, new EmitContext("strings.sushi", diagnostics));
 
-        Assert.Contains("if [[ \"${text:-}\" == *'ush'* ]]; then printf '%s\\n' 'true'", script);
+        Assert.Contains("if [[ \"${text:-}\" == *'ush'* ]]; then", script);
+        Assert.Contains("printf '%s\\n' 'true'", script);
         Assert.DoesNotContain("__sushi_value_", script);
         Assert.Empty(diagnostics);
     }

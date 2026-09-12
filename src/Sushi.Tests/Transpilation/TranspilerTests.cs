@@ -6,6 +6,24 @@ using Xunit;
 
 public class TranspilerTests
 {
+    [Fact]
+    public void Transpile_PureEnumComparison_PrintsWithoutTemporaryOrStatusWrapper()
+    {
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = "enum State { Ready, Done }\nprintln(State.Ready != State.Done)",
+            SourcePath = "enum-comparison.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.True(result.Success);
+        Assert.Contains("if [[", result.EmittedCode);
+        Assert.Contains("printf '%s\\n' 'true'", result.EmittedCode);
+        Assert.DoesNotContain("_tmp", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_status", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_enum_", result.EmittedCode);
+    }
+
     [Theory]
     [InlineData(TargetLanguage.Bash)]
     [InlineData(TargetLanguage.Zsh)]

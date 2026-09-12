@@ -710,9 +710,9 @@ function __sushi_call_method {
     param($target, [string]$method, $argValues = $null)
     $argsList = @(__sushi_to_array $argValues)
     switch ($method) {
-        'name' { return (__sushi_member $target '__sushi_enum_name') }
-        'ordinal' { return (__sushi_member $target '__sushi_enum_ordinal') }
-        'value' { return (__sushi_member $target '__sushi_enum_value') }
+        'name' { return (__sushi_member $target '_name') }
+        'ordinal' { return (__sushi_member $target '_ord') }
+        'value' { return (__sushi_member $target '_value') }
         'length' { return (__sushi_json_length $target) }
         'push' { return (__sushi_array_push $target $argsList) }
         'map' { return (__sushi_method_map $target $argsList[0]) }
@@ -723,7 +723,7 @@ function __sushi_call_method {
         }
     }
 
-    $fn = __sushi_member $target ("__sushi_method_" + $method)
+    $fn = __sushi_member $target ("_m_" + $method)
     if ($null -eq $fn -or [string]::IsNullOrWhiteSpace([string]$fn)) {
         return $null
     }
@@ -1317,9 +1317,15 @@ function __sushi_call_method {
             return "([PSCustomObject]@{})";
         }
 
-        var properties = string.Join("; ", expression.Properties.Select(property =>
-            $"{Escape.PowerShellSingleQuoted(property.Name)} = {EmitValueExpression(property.Value)}"));
-        return $"([PSCustomObject]@{{ {properties} }})";
+        var entries = expression.Properties.Select(property =>
+            $"{Escape.PowerShellSingleQuoted(property.Name)} = {EmitValueExpression(property.Value)}").ToList();
+        var complex = entries.Count >= 5 || expression.Properties.Any(property => property.Name.StartsWith("_", StringComparison.Ordinal));
+        if (!complex)
+            return $"([PSCustomObject]@{{ {string.Join("; ", entries)} }})";
+
+        var innerIndent = new string(' ', (_indent + 1) * 4);
+        var outerIndent = new string(' ', _indent * 4);
+        return $"([PSCustomObject][ordered]@{{\n{innerIndent}{string.Join($"\n{innerIndent}", entries)}\n{outerIndent}}})";
     }
 
     private void EmitContractCheckForValue(IrTypeRef type, string valueExpression, string context)

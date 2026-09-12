@@ -3,6 +3,7 @@ namespace Sushi.Transpilation.Backends;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Sushi.Application;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
@@ -33,6 +34,7 @@ public sealed class BashEmitter : IBackendEmitter
     private Dictionary<string, string> _generatedFunctionNames = new(StringComparer.Ordinal);
     private bool _currentFunctionReturnsValue;
     private string _currentOutputName = "";
+    private bool _needsDynamicMethodMetadata;
 
     public BashEmitter()
     {
@@ -62,6 +64,7 @@ public sealed class BashEmitter : IBackendEmitter
         _functions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .ToDictionary(function => function.Name, StringComparer.Ordinal);
+        _needsDynamicMethodMetadata = program.Statements.Any(ContainsDynamicMethodDispatch);
         _integerArrayVariables.Clear();
         _zshObjectParameterNames.Clear();
         _nativeObjectAliases.Clear();
@@ -91,7 +94,7 @@ public sealed class BashEmitter : IBackendEmitter
             EmitStatement(statement, inFunction: false);
         }
 
-        return _builder.ToString();
+        return PrettyPrintBash(_builder.ToString());
     }
 
     private void EmitCoreRuntimeHelpers()
@@ -2168,9 +2171,9 @@ __sushi_call_method() {
   shift 2
 
   case "$method" in
-    name) __sushi_json_member "$target" "__sushi_enum_name"; return 0 ;;
-    ordinal) __sushi_json_member "$target" "__sushi_enum_ordinal"; return 0 ;;
-    value) __sushi_json_member "$target" "__sushi_enum_value"; return 0 ;;
+    name) __sushi_json_member "$target" "_name"; return 0 ;;
+    ordinal) __sushi_json_member "$target" "_ord"; return 0 ;;
+    value) __sushi_json_member "$target" "_value"; return 0 ;;
     length) __sushi_json_length "$target"; return 0 ;;
     push) __sushi_array_push "$target" "$@"; return 0 ;;
     map) __sushi_method_map "$target" "${1-}"; return 0 ;;
@@ -2187,7 +2190,7 @@ __sushi_call_method() {
   esac
 
   local fn
-  fn="$(__sushi_json_member "$target" "__sushi_method_${method}")"
+  fn="$(__sushi_json_member "$target" "_m_${method}")"
   if [[ -z "$fn" ]]; then
     printf ''
     return 0
@@ -2627,18 +2630,17 @@ __sushi_native_obj_to_json() {
 
                 if (initializer is IrObjectLiteralExpression obj)
                 {
-                    var entries = _zshMode
-                        ? obj.Properties.SelectMany(property => new[]
+                    var properties = MetadataProperties(obj.Properties);
+                    var entries = (_zshMode
+                        ? properties.SelectMany(property => new[]
                         {
                             Escape.BashSingleQuoted(property.Name),
                             PrepareValue(property.Value, inFunction)
                         })
-                        : obj.Properties.Select(property =>
-                            $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
-                    if (name == "this" && _currentFunctionName?.StartsWith("__sushi_new_", StringComparison.Ordinal) == true)
-                        WriteLine($"this=({string.Join(" ", entries)})");
-                    else
-                        WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=({string.Join(" ", entries)})");
+                        : properties.Select(property =>
+                            $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
+                    EmitAssociativeObject(name, entries, inFunction ? "local " : "declare ",
+                        name == "this" && _currentFunctionName?.StartsWith("__sushi_new_", StringComparison.Ordinal) == true);
                     _nativeObjectVariables.Add(name);
                     _nativeArrayVariables.Remove(name);
                     _arrayInitializers.Remove(name);
@@ -2649,6 +2651,13 @@ __sushi_native_obj_to_json() {
                 if (initializer is IrIntrinsicCallExpression intrinsic &&
                     EmitNativeIntrinsicDeclaration(name, intrinsic, inFunction))
                 {
+                    break;
+                }
+
+                if (IsBooleanValueExpression(initializer))
+                {
+                    EmitBooleanAssignment(name, initializer, inFunction);
+                    SetKnownInteger(name, false);
                     break;
                 }
 
@@ -3036,6 +3045,12 @@ __sushi_native_obj_to_json() {
         }
         if (statement.Expression != null)
         {
+            if (inFunction && IsBooleanValueExpression(statement.Expression))
+            {
+                EmitBooleanOutput(statement.Expression);
+                WriteLine("return 0");
+                return;
+            }
             var value = PrepareValue(statement.Expression, inFunction);
             if (inFunction && _currentFunctionName != null && !_currentFunctionReturnType.IsAnyOrUnknown)
             {
@@ -3083,6 +3098,14 @@ __sushi_native_obj_to_json() {
                         WriteLine(intrinsicCall.Id == IntrinsicId.Println
                             ? $"printf '%s\\n' {directValue}"
                             : $"printf '%s' {directValue}");
+                        return;
+                    }
+
+                    if (intrinsicCall.Arguments.FirstOrDefault() is { } booleanValue &&
+                        IsBooleanValueExpression(booleanValue))
+                    {
+                        var condition = PrepareCondition(booleanValue, inFunction);
+                        WriteLine($"if {condition}; then printf '%s{(intrinsicCall.Id == IntrinsicId.Println ? "\\n" : string.Empty)}' 'true'; else printf '%s{(intrinsicCall.Id == IntrinsicId.Println ? "\\n" : string.Empty)}' 'false'; fi");
                         return;
                     }
 
@@ -3185,6 +3208,12 @@ __sushi_native_obj_to_json() {
         var name = SanitizeVariableName(assignment.Target.Name);
         if (assignment.Operator == "=")
         {
+            if (IsBooleanValueExpression(assignment.Value))
+            {
+                EmitBooleanAssignment(name, assignment.Value, inFunction);
+                SetKnownInteger(name, false);
+                return;
+            }
             if (assignment.Value is IrIdentifierExpression objectAlias &&
                 _nativeObjectVariables.Contains(SanitizeVariableName(objectAlias.Name)))
             {
@@ -3666,12 +3695,11 @@ __sushi_native_obj_to_json() {
     {
         switch (expression)
         {
-            case IrTruthinessExpression truthiness:
+            case IrTruthinessExpression:
+            case IrUnaryExpression { Operator: "!" }:
+            case IrBinaryExpression { Operator: "==" or "!=" or "<" or ">" or "<=" or ">=" or "&&" or "||" }:
             {
-                var result = DeclareTemp("'false'", inFunction);
-                var condition = PrepareTruthinessCondition(truthiness, inFunction);
-                WriteLine($"if {condition}; then {result}='true'; fi");
-                return $"\"${{{result}-}}\"";
+                return PrepareBooleanValue(expression, inFunction);
             }
             case IrLiteralExpression or IrIdentifierExpression:
                 return EmitValueExpression(expression);
@@ -3910,18 +3938,120 @@ __sushi_native_obj_to_json() {
         }
     }
 
+    private static bool IsBooleanValueExpression(IrExpression expression) => expression switch
+    {
+        IrTruthinessExpression => true,
+        IrUnaryExpression { Operator: "!" } => true,
+        IrBinaryExpression { Operator: "==" or "!=" or "<" or ">" or "<=" or ">=" or "&&" or "||" } => true,
+        _ => false
+    };
+
+    private void EmitBooleanAssignment(string name, IrExpression expression, bool inFunction)
+    {
+        WriteLine($"{(inFunction ? "local " : string.Empty)}{name}='false'");
+        var condition = PrepareCondition(expression, inFunction);
+        WriteLine($"if {condition}; then {name}='true'; fi");
+    }
+
+    private void EmitBooleanOutput(IrExpression expression)
+    {
+        var condition = PrepareCondition(expression, inFunction: true);
+        if (_zshMode)
+        {
+            WriteLine($"if {condition}; then : ${{(P){_currentOutputName}::='true'}}; else : ${{(P){_currentOutputName}::='false'}}; fi");
+        }
+        else
+        {
+            WriteLine($"if {condition}; then {_currentOutputName}='true'; else {_currentOutputName}='false'; fi");
+        }
+    }
+
+    private string PrepareBooleanValue(IrExpression expression, bool inFunction)
+    {
+        var result = DeclareTemp("'false'", inFunction);
+        var condition = PrepareCondition(expression, inFunction);
+        WriteLine($"if {condition}; then {result}='true'; fi");
+        return $"\"${{{result}-}}\"";
+    }
+
     private void EmitNativeObject(string name, IrObjectLiteralExpression obj, bool inFunction)
     {
-        var entries = _zshMode
-            ? obj.Properties.SelectMany(property => new[]
+        var properties = MetadataProperties(obj.Properties);
+        var entries = (_zshMode
+            ? properties.SelectMany(property => new[]
             {
                 Escape.BashSingleQuoted(property.Name),
                 PrepareValue(property.Value, inFunction)
             })
-            : obj.Properties.Select(property =>
-                $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
-        WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=({string.Join(" ", entries)})");
+            : properties.Select(property =>
+                $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
+        EmitAssociativeObject(name, entries, inFunction ? "local " : "declare ", false);
         _nativeObjectVariables.Add(name);
+    }
+
+    private IReadOnlyList<IrObjectProperty> MetadataProperties(IReadOnlyList<IrObjectProperty> properties)
+    {
+        if (_needsDynamicMethodMetadata) return properties;
+        return properties.Where(property => !property.Name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal)).ToList();
+    }
+
+    private static bool ContainsDynamicMethodDispatch(IrStatement statement) => statement switch
+    {
+        IrBlockStatement block => block.Statements.Any(ContainsDynamicMethodDispatch),
+        IrExpressionStatement expression => ContainsDynamicMethodDispatch(expression.Expression),
+        IrVariableDeclarationStatement variable => variable.Initializer != null && ContainsDynamicMethodDispatch(variable.Initializer),
+        IrIfStatement conditional => ContainsDynamicMethodDispatch(conditional.Condition) ||
+                                     ContainsDynamicMethodDispatch(conditional.ThenBlock) ||
+                                     (conditional.ElseBlock != null && ContainsDynamicMethodDispatch(conditional.ElseBlock)),
+        IrWhileStatement loop => ContainsDynamicMethodDispatch(loop.Condition) || ContainsDynamicMethodDispatch(loop.Body),
+        IrDoWhileStatement loop => ContainsDynamicMethodDispatch(loop.Condition) || ContainsDynamicMethodDispatch(loop.Body),
+        IrForStatement loop => (loop.Initializer != null && ContainsDynamicMethodDispatch(loop.Initializer)) ||
+                              (loop.Condition != null && ContainsDynamicMethodDispatch(loop.Condition)) ||
+                              (loop.Increment != null && ContainsDynamicMethodDispatch(loop.Increment)) ||
+                              ContainsDynamicMethodDispatch(loop.Body),
+        IrFunctionDeclarationStatement function => ContainsDynamicMethodDispatch(function.Body),
+        IrReturnStatement result => result.Expression != null && ContainsDynamicMethodDispatch(result.Expression),
+        _ => false
+    };
+
+    private static bool ContainsDynamicMethodDispatch(IrExpression expression) => expression switch
+    {
+        IrMethodCallExpression => true,
+        IrCallExpression call => call.Arguments.Any(argument => ContainsDynamicMethodDispatch(argument.Value)),
+        IrResolvedMethodCallExpression call => ContainsDynamicMethodDispatch(call.Target) ||
+                                               call.Arguments.Any(argument => ContainsDynamicMethodDispatch(argument.Value)),
+        IrAdapterCallExpression call => ContainsDynamicMethodDispatch(call.Value),
+        IrAssignmentExpression assignment => ContainsDynamicMethodDispatch(assignment.Value),
+        IrMemberAssignmentExpression assignment => ContainsDynamicMethodDispatch(assignment.Target) || ContainsDynamicMethodDispatch(assignment.Value),
+        IrBinaryExpression binary => ContainsDynamicMethodDispatch(binary.Left) || ContainsDynamicMethodDispatch(binary.Right),
+        IrUnaryExpression unary => ContainsDynamicMethodDispatch(unary.Operand),
+        IrConditionalExpression conditional => ContainsDynamicMethodDispatch(conditional.Condition) ||
+                                               ContainsDynamicMethodDispatch(conditional.TrueExpression) ||
+                                               ContainsDynamicMethodDispatch(conditional.FalseExpression),
+        IrMemberAccessExpression member => ContainsDynamicMethodDispatch(member.Target),
+        IrIndexExpression index => ContainsDynamicMethodDispatch(index.Target) || ContainsDynamicMethodDispatch(index.Index),
+        IrArrayLiteralExpression array => array.Elements.Any(ContainsDynamicMethodDispatch),
+        IrObjectLiteralExpression obj => obj.Properties.Any(property => ContainsDynamicMethodDispatch(property.Value)),
+        IrTruthinessExpression truthiness => ContainsDynamicMethodDispatch(truthiness.Operand),
+        _ => false
+    };
+
+    private void EmitAssociativeObject(string name, IReadOnlyList<string> entries, string declaration, bool assignmentOnly)
+    {
+        var multiline = entries.Count >= 8 || entries.Any(entry =>
+            entry.Contains("['_", StringComparison.Ordinal) || entry.Contains("'_m_", StringComparison.Ordinal));
+        var prefix = assignmentOnly ? $"{name}=(" : $"{declaration}-A {name}=(";
+        if (!multiline)
+        {
+            WriteLine($"{prefix}{string.Join(" ", entries)})");
+            return;
+        }
+
+        WriteLine(prefix);
+        _indent++;
+        foreach (var entry in entries) WriteLine(entry);
+        _indent--;
+        WriteLine(")");
     }
 
     private string PrepareIntrinsicInto(
@@ -4594,6 +4724,66 @@ __sushi_native_obj_to_json() {
         _builder.Append(' ', _indent * 4);
         _builder.Append(text);
         _builder.Append('\n');
+    }
+
+    private static string PrettyPrintBash(string source)
+    {
+        var output = new StringBuilder(source.Length + 256);
+        foreach (var line in source.Replace("\r\n", "\n").Split('\n'))
+        {
+            if (TryExpandInlineIf(line, output) ||
+                TryExpandInlineLoop(line, output) ||
+                TryExpandInlineGuard(line, output))
+            {
+                continue;
+            }
+
+            output.AppendLine(line);
+        }
+
+        return output.ToString();
+    }
+
+    private static bool TryExpandInlineIf(string line, StringBuilder output)
+    {
+        var match = Regex.Match(line, @"^(?<indent>\s*)if (?<condition>.+?); then (?<true>.+?);(?: else (?<false>.+?);)? fi$");
+        if (!match.Success) return false;
+
+        var indent = match.Groups["indent"].Value;
+        output.AppendLine($"{indent}if {match.Groups["condition"].Value}; then");
+        output.AppendLine($"{indent}    {match.Groups["true"].Value}");
+        if (match.Groups["false"].Success)
+        {
+            output.AppendLine($"{indent}else");
+            output.AppendLine($"{indent}    {match.Groups["false"].Value}");
+        }
+        output.AppendLine($"{indent}fi");
+        return true;
+    }
+
+    private static bool TryExpandInlineLoop(string line, StringBuilder output)
+    {
+        var match = Regex.Match(line, @"^(?<indent>\s*)(?<kind>for|while) (?<header>.+?); do (?<body>.+?); done$");
+        if (!match.Success) return false;
+
+        var indent = match.Groups["indent"].Value;
+        output.AppendLine($"{indent}{match.Groups["kind"].Value} {match.Groups["header"].Value}; do");
+        output.AppendLine($"{indent}    {match.Groups["body"].Value}");
+        output.AppendLine($"{indent}done");
+        return true;
+    }
+
+    private static bool TryExpandInlineGuard(string line, StringBuilder output)
+    {
+        var match = Regex.Match(line, @"^(?<indent>\s*)(?<command>.+?) \|\| \{ (?<status>[^;]+); (?<failure>.+); \}$");
+        if (!match.Success || match.Groups["command"].Value.Contains("||", StringComparison.Ordinal)) return false;
+
+        var indent = match.Groups["indent"].Value;
+        output.AppendLine($"{indent}{match.Groups["command"].Value} || {{");
+        output.AppendLine($"{indent}    {match.Groups["status"].Value};");
+        output.AppendLine($"{indent}    {match.Groups["failure"].Value};");
+        output.AppendLine($"{indent}}}");
+        return true;
     }
 
     private string SanitizeFunctionName(string name)

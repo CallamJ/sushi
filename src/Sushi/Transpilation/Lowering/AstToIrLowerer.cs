@@ -708,9 +708,9 @@ public sealed class AstToIrLowerer
             {
                 var storageName = member.MemberName switch
                 {
-                    "name" => "__sushi_enum_name",
-                    "ordinal" => "__sushi_enum_ordinal",
-                    "value" => "__sushi_enum_value",
+                    "name" => NativeObjectMetadata.EnumName,
+                    "ordinal" => NativeObjectMetadata.EnumOrdinal,
+                    "value" => NativeObjectMetadata.EnumValue,
                     _ => member.MemberName
                 };
                 if (!IsEnumField(enumType, storageName))
@@ -888,9 +888,9 @@ public sealed class AstToIrLowerer
             if (leftObjectType != rightObjectType)
                 return new IrLiteralExpression(node.Operator is "!=" or "!==");
             var equality = new IrBinaryExpression(
-                new IrMemberAccessExpression(LowerExpression(node.Left), "__sushi_enum_ordinal"),
+                new IrMemberAccessExpression(LowerExpression(node.Left), NativeObjectMetadata.EnumOrdinal),
                 node.Operator is "!=" or "!==" ? "!=" : "==",
-                new IrMemberAccessExpression(LowerExpression(node.Right), "__sushi_enum_ordinal"));
+                new IrMemberAccessExpression(LowerExpression(node.Right), NativeObjectMetadata.EnumOrdinal));
             return equality;
         }
 
@@ -1046,7 +1046,7 @@ public sealed class AstToIrLowerer
                     AddDiagnostic(UnknownMemberCode, $"Type '{DisplayTypeName(objectType)}' has no method '{memberCallee.MemberName}'.", node.Line, node.Column);
                     return new IrLiteralExpression(null);
                 }
-                var methodName = $"__sushi_method_{objectType}_{memberCallee.MemberName}";
+                var methodName = $"{NativeObjectMetadata.MethodPrefix}{objectType}_{memberCallee.MemberName}";
                 var arguments = new List<IrCallArgument>
                 {
                     new(null, LowerExpression(memberCallee.Object), memberCallee.Line, memberCallee.Column)
@@ -1332,7 +1332,7 @@ public sealed class AstToIrLowerer
 
             foreach (var method in classDeclaration.Methods)
             {
-                var methodName = $"__sushi_method_{resolvedClassName}_{method.Name}";
+                var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedClassName}_{method.Name}";
                 var methodParameters = new List<IrFunctionParameter>
                 {
                     new("this", false, null, IrTypeRef.Primitive("object"))
@@ -1360,7 +1360,7 @@ public sealed class AstToIrLowerer
                 : enumEntry.Key;
             foreach (var method in enumDeclaration.Methods)
             {
-                var methodName = $"__sushi_method_{resolvedEnumName}_{method.Name}";
+                var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedEnumName}_{method.Name}";
                 var methodParameters = new List<IrFunctionParameter>
                 {
                     new("this", false, null, IrTypeRef.Primitive("object"))
@@ -1598,9 +1598,9 @@ public sealed class AstToIrLowerer
         {
             var storageName = member switch
             {
-                "name" => "__sushi_enum_name",
-                "ordinal" => "__sushi_enum_ordinal",
-                "value" => "__sushi_enum_value",
+                "name" => NativeObjectMetadata.EnumName,
+                "ordinal" => NativeObjectMetadata.EnumOrdinal,
+                "value" => NativeObjectMetadata.EnumValue,
                 _ => member
             };
             expression = new IrMemberAccessExpression(
@@ -1612,16 +1612,16 @@ public sealed class AstToIrLowerer
     }
 
     private static bool IsEnumField(EnumDeclarationNode declaration, string field) =>
-        field is "__sushi_enum_name" or "__sushi_enum_ordinal" or "__sushi_enum_value" or "__sushi_type" ||
+        field is NativeObjectMetadata.EnumName or NativeObjectMetadata.EnumOrdinal or NativeObjectMetadata.EnumValue or NativeObjectMetadata.Type ||
         declaration.RecordParameters?.Any(parameter => parameter.Name == field) == true ||
         declaration.Values.Any(value => value.Properties?.ContainsKey(field) == true) ||
         declaration.ExplicitConstructor != null;
 
     private IrTypeRef GetEnumFieldType(EnumDeclarationNode declaration, string field, int line, int column)
     {
-        if (field == "__sushi_enum_name") return IrTypeRef.Primitive("string");
-        if (field == "__sushi_enum_ordinal") return IrTypeRef.Primitive("int");
-        if (field == "__sushi_enum_value")
+        if (field == NativeObjectMetadata.EnumName) return IrTypeRef.Primitive("string");
+        if (field == NativeObjectMetadata.EnumOrdinal) return IrTypeRef.Primitive("int");
+        if (field == NativeObjectMetadata.EnumValue)
         {
             var values = declaration.Values.Where(value => value.DirectValue != null).Select(value => LowerExpression(value.DirectValue!)).ToList();
             if (values.Count > 0 && values.All(value => TryInferStaticType(value, out var type) && type.Name == "int"))
@@ -1801,7 +1801,7 @@ public sealed class AstToIrLowerer
 
         foreach (var method in node.Methods)
         {
-            var methodName = $"__sushi_method_{resolvedTypeName}_{method.Name}";
+            var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}";
             var parameters = new List<IrFunctionParameter>
             {
                 new("this", false, null, IrTypeRef.Primitive("object"))
@@ -1865,16 +1865,13 @@ public sealed class AstToIrLowerer
         }
         TrackParameterObjectTypes(ctorParameters, ctorSignature.Parameters);
 
-        var objectProperties = new List<IrObjectProperty>
-        {
-            new("__sushi_type", new IrLiteralExpression(node.Name))
-        };
+        var objectProperties = new List<IrObjectProperty>();
 
         foreach (var method in node.Methods)
         {
             objectProperties.Add(new IrObjectProperty(
-                $"__sushi_method_{method.Name}",
-                new IrLiteralExpression($"__sushi_method_{resolvedTypeName}_{method.Name}")));
+                $"{NativeObjectMetadata.MethodPrefix}{method.Name}",
+                new IrLiteralExpression($"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}")));
         }
 
         foreach (var field in node.Fields)
@@ -1925,7 +1922,7 @@ public sealed class AstToIrLowerer
         var resolvedTypeName = ResolveTopLevel(node.Name);
         foreach (var method in node.Methods)
         {
-            var methodName = $"__sushi_method_{resolvedTypeName}_{method.Name}";
+            var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}";
             var parameters = new List<IrFunctionParameter>
             {
                 new("this", false, null, IrTypeRef.Primitive("object"))
@@ -2031,10 +2028,9 @@ public sealed class AstToIrLowerer
     {
         var properties = new List<IrObjectProperty>
         {
-            new("__sushi_type", new IrLiteralExpression(node.Name)),
-            new("__sushi_enum_name", new IrLiteralExpression(value.Name)),
-            new("__sushi_enum_ordinal", new IrLiteralExpression(ordinal)),
-            new("__sushi_enum_value", value.DirectValue != null ? LowerExpression(value.DirectValue) : new IrLiteralExpression(ordinal))
+            new(NativeObjectMetadata.EnumName, new IrLiteralExpression(value.Name)),
+            new(NativeObjectMetadata.EnumOrdinal, new IrLiteralExpression(ordinal)),
+            new(NativeObjectMetadata.EnumValue, value.DirectValue != null ? LowerExpression(value.DirectValue) : new IrLiteralExpression(ordinal))
         };
         if (value.Properties != null)
             properties.AddRange(value.Properties.Select(property => new IrObjectProperty(property.Key, LowerExpression(property.Value))));
@@ -2050,7 +2046,7 @@ public sealed class AstToIrLowerer
                     properties.Add(new IrObjectProperty(field, new IrLiteralExpression(null)));
         }
         foreach (var method in node.Methods)
-            properties.Add(new IrObjectProperty($"__sushi_method_{method.Name}", new IrLiteralExpression($"__sushi_method_{resolvedTypeName}_{method.Name}")));
+            properties.Add(new IrObjectProperty($"{NativeObjectMetadata.MethodPrefix}{method.Name}", new IrLiteralExpression($"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}")));
         return properties;
     }
 
