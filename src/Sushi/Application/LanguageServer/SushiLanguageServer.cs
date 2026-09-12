@@ -6,6 +6,7 @@ using Sushi.Application;
 using Sushi.Build;
 using Sushi.Build.SyntaxTree;
 using Sushi.Transpilation;
+using Sushi.Transpilation.Intrinsics;
 
 /// <summary>
 /// Small, dependency-free LSP 3.17 endpoint. Keeping the protocol boundary here makes
@@ -226,8 +227,8 @@ internal sealed class SushiLanguageServer
             items[symbol.Name] = new CompletionItem(symbol.Name, CompletionKind(symbol.Kind), symbol.Kind);
         foreach (var keyword in Keywords)
             items.TryAdd(keyword, new CompletionItem(keyword, 14, "keyword"));
-        foreach (var builtIn in StandardLibrary)
-            items.TryAdd(builtIn, new CompletionItem(builtIn, builtIn.StartsWith("std.", StringComparison.Ordinal) ? 9 : 3, builtIn.StartsWith("std.", StringComparison.Ordinal) ? "module" : "function"));
+        foreach (var builtIn in StandardLibrary.Functions)
+            items.TryAdd(builtIn.Name, new CompletionItem(builtIn.Name, 3, $"function → {builtIn.ReturnType}"));
 
         return new
         {
@@ -337,7 +338,7 @@ internal sealed class SushiLanguageServer
         if (symbol is null || symbol.Kind is not (SushiSymbolKind.Function or SushiSymbolKind.Method))
             symbol = model.Symbols.FirstOrDefault(candidate => candidate.Name == name.Text && candidate.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method);
 
-        var signature = symbol is null ? BuiltInSignature(name.Text) : SignatureFor(model, symbol);
+        var signature = symbol is null ? BuiltInSignature(CallName(model.Tokens, open, name)) : SignatureFor(model, symbol);
         if (signature is null) return null;
         var activeParameter = ActiveParameter(model.Tokens, open, offset);
         return new
@@ -374,6 +375,16 @@ internal sealed class SushiLanguageServer
         return commas;
     }
 
+    private static string CallName(IReadOnlyList<ClassifiedToken> tokens, ClassifiedToken open, ClassifiedToken name)
+    {
+        var index = tokens.ToList().FindLastIndex(token => token.Start == name.Start);
+        if (index < 0) return name.Text;
+        var parts = new List<string> { name.Text };
+        for (var cursor = index - 1; cursor >= 1 && tokens[cursor].Text == "." && tokens[cursor - 1].Kind == ClassifiedTokenKind.Identifier; cursor -= 2)
+            parts.Insert(0, tokens[cursor - 1].Text);
+        return string.Join(".", parts);
+    }
+
     private static SignatureInformation? SignatureFor(SushiSemanticModel model, SushiSymbol symbol)
     {
         var parameters = ParametersFor(model, symbol)
@@ -382,13 +393,15 @@ internal sealed class SushiLanguageServer
         return new SignatureInformation($"{symbol.Name}({string.Join(", ", parameters)})", parameters, $"{symbol.Kind}: `{symbol.Name}`");
     }
 
-    private static SignatureInformation? BuiltInSignature(string name) => name switch
+    private static SignatureInformation? BuiltInSignature(string name)
     {
-        "println" => new SignatureInformation("println(object value)", ["object value"], "Writes a value followed by a newline."),
-        "print" => new SignatureInformation("print(object value)", ["object value"], "Writes a value without a newline."),
-        "string" => new SignatureInformation("string(object value)", ["object value"], "Converts a value to its string representation."),
-        _ => null
-    };
+        if (!StandardLibrary.TryGetFunction(name, out var function)) return null;
+        var parameters = function.Parameters.Select(parameter => parameter.DisplayName).ToArray();
+        return new SignatureInformation(
+            $"{function.Name}({string.Join(", ", parameters)})",
+            parameters,
+            $"{function.Documentation}\n\nReturns `{function.ReturnType}`.");
+    }
 
     private static IEnumerable<SushiSymbol> ParametersFor(SushiSemanticModel model, SushiSymbol function)
     {
@@ -660,7 +673,7 @@ internal sealed class SushiLanguageServer
         var model = SushiSemanticModel.Create(document.Text);
         var offset = Offset(document.Text, parameters.GetProperty("position"));
         var token = model.TokenAt(offset);
-        return token is null || model.SymbolAt(offset) is null || IsKeyword(token.Text) || StandardLibrary.Contains(token.Text) ? null : TokenRange(document.Text, token);
+        return token is null || model.SymbolAt(offset) is null || IsKeyword(token.Text) || StandardLibraryNames.Contains(token.Text) ? null : TokenRange(document.Text, token);
     }
 
     private object? Rename(JsonElement parameters)
@@ -670,7 +683,7 @@ internal sealed class SushiLanguageServer
         var token = model.TokenAt(Offset(document.Text, parameters.GetProperty("position")));
         var newName = parameters.GetProperty("newName").GetString() ?? "";
         var symbol = token is null ? null : model.SymbolFor(token);
-        if (token is null || symbol is null || !IsIdentifier(newName) || IsKeyword(token.Text) || StandardLibrary.Contains(token.Text)) return null;
+        if (token is null || symbol is null || !IsIdentifier(newName) || IsKeyword(token.Text) || StandardLibraryNames.Contains(token.Text)) return null;
         var changes = new Dictionary<string, object>();
         changes[document.Uri] = model.ReferencesOf(symbol)
             .Select(reference => new { range = TokenRange(document.Text, reference), newText = newName }).ToArray();
@@ -860,7 +873,8 @@ internal sealed class SushiLanguageServer
     private sealed record CompletionItem(string Label, int Kind, string Detail);
     private sealed record SymbolOccurrence(string Uri, ClassifiedToken Token, string Name, string Kind, bool Declaration, bool Exported);
     private static readonly string[] Keywords = ["box", "use", "class", "new", "return", "this", "if", "else", "while", "for", "break", "continue", "true", "false", "null", "var", "switch", "case", "default", "also", "do", "step", "enum", "in", "export", "as"];
-    private static readonly string[] StandardLibrary = ["println", "print", "string", "std.fs", "std.archive", "std.http", "std.string"];
+    private static readonly StandardLibraryCatalog StandardLibrary = StandardLibraryCatalog.CreateDefault();
+    private static readonly HashSet<string> StandardLibraryNames = StandardLibrary.Functions.Select(function => function.Name).ToHashSet(StringComparer.Ordinal);
     // Keep this legend stable: clients cache token indexes for the lifetime of an LSP session.
     private const int SemanticNamespace = 0;
     private const int SemanticClass = 1;

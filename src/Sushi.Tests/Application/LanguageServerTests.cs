@@ -152,13 +152,14 @@ public sealed class LanguageServerTests
     [Fact]
     public async Task Server_ProvidesReadOnlyEditorFeatures()
     {
-        const string source = "string greet(string name) {\n    return name\n}\nvar count = 1\nprintln(greet(\"Ada\"))";
+        const string source = "string greet(string name) {\n    return name\n}\nvar count = 1\nprintln(greet(\"Ada\"))\nstd.fs.readText(\"path\")";
         var input = new MemoryStream(Encoding.UTF8.GetBytes(
             Frame("{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"initialize\",\"params\":{}}") +
             Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/features.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"textDocument/documentHighlight\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/features.sushi\"},\"position\":{\"line\":0,\"character\":7}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/features.sushi\"},\"position\":{\"line\":4,\"character\":14}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/features.sushi\"},\"position\":{\"line\":4,\"character\":8}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/features.sushi\"},\"position\":{\"line\":5,\"character\":16}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"textDocument/foldingRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/features.sushi\"}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/features.sushi\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":5,\"character\":0}}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"greet\"}}") +
@@ -172,7 +173,8 @@ public sealed class LanguageServerTests
         Assert.Contains("\"id\":16,\"result\":[", wire);
         Assert.Contains("\"id\":17,\"result\":{\"signatures\":[{\"label\":\"greet(string name)\"", wire);
         Assert.Contains("\"parameters\":[{\"label\":\"string name\"}]", wire);
-        Assert.Contains("\"id\":24,\"result\":{\"signatures\":[{\"label\":\"println(object value)\"", wire);
+        Assert.Contains("\"id\":24,\"result\":{\"signatures\":[{\"label\":\"println(object value", wire);
+        Assert.Contains("\"id\":25,\"result\":{\"signatures\":[{\"label\":\"std.fs.readText(string path)\"", wire);
         Assert.Contains("\"id\":18,\"result\":[{\"startLine\":0", wire);
         Assert.Contains("\"id\":19,\"result\":[{\"position\":{\"line\":3,\"character\":9},\"label\":\": int\"", wire);
         Assert.Contains("\"id\":20,\"result\":[{\"name\":\"greet\"", wire);

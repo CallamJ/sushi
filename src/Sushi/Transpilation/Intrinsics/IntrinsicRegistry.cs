@@ -329,4 +329,7 @@ public sealed class IntrinsicRegistry
     {
         return _signatures.TryGetValue(canonicalName, out signature!);
     }
+
+    /// <summary>All built-in compiler intrinsics, for shared editor/API metadata.</summary>
+    public IReadOnlyCollection<IntrinsicSignature> Signatures => _signatures.Values;
 }

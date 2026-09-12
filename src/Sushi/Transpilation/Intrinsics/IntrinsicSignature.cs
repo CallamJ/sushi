@@ -5,6 +5,8 @@ using Sushi.Transpilation.IR;
 public sealed class IntrinsicParameter
 {
     public string Name { get; }
+    /// <summary>Source-language type used by tooling and generated API help.</summary>
+    public string TypeName { get; }
     public bool IsVariadic { get; }
     public bool HasDefaultValue { get; }
     public object? DefaultValue { get; }
@@ -13,13 +15,26 @@ public sealed class IntrinsicParameter
         string name,
         bool isVariadic = false,
         bool hasDefaultValue = false,
-        object? defaultValue = null)
+        object? defaultValue = null,
+        string? typeName = null)
     {
         Name = name;
+        TypeName = typeName ?? DefaultTypeFor(name);
         IsVariadic = isVariadic;
         HasDefaultValue = hasDefaultValue;
         DefaultValue = defaultValue;
     }
+
+    private static string DefaultTypeFor(string name) => name switch
+    {
+        "append" or "allowFailure" or "recursive" or "stream" => "bool",
+        "code" or "limit" or "milliseconds" or "timeoutMs" => "int",
+        "args" or "stages" => "array",
+        "cwd" or "input" or "env" or "headers" or "result" => "object",
+        "contentType" or "path" or "source" or "destination" or "command" or "url" or "text" or
+        "sep" or "needle" or "prefix" or "old" or "new" or "pattern" or "name" or "fallback" => "string",
+        _ => "object"
+    };
 }
 
 public sealed class IntrinsicSignature
