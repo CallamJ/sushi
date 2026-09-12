@@ -2583,6 +2583,9 @@ __sushi_native_obj_to_json() {
             case IrEnumDeclarationStatement:
                 break;
 
+            case IrRichEnumDeclarationStatement:
+                break;
+
             case IrVariableDeclarationStatement variable:
             {
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);

@@ -81,6 +81,8 @@ public sealed class ObjectOrientedTranspilationTests
         if (target == TargetLanguage.Powershell7)
         {
             Assert.Contains("class Person", result.EmittedCode);
+            Assert.Contains("class Priority", result.EmittedCode);
+            Assert.Contains("[Priority]::High", result.EmittedCode);
             Assert.Contains("[Person]::new", result.EmittedCode);
             Assert.Contains("ToString()", result.EmittedCode);
             Assert.Contains("enum ExitCode", result.EmittedCode);

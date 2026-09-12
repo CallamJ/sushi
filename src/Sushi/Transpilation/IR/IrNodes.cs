@@ -286,6 +286,38 @@ public sealed class IrEnumValue
     public IrEnumValue(string name, int value, int ordinal) { Name = name; Value = value; Ordinal = ordinal; }
 }
 
+/// <summary>Class-shaped enum values that cannot be represented by a CLR enum.</summary>
+public sealed class IrRichEnumDeclarationStatement : IrStatement
+{
+    public string Name { get; }
+    public List<IrRichEnumValue> Values { get; }
+    public HashSet<string> LegacyVariableNames { get; }
+    public List<IrFunctionParameter> ConstructorParameters { get; }
+    public IrBlockStatement? ConstructorBody { get; }
+    public IrRichEnumDeclarationStatement(string name, IEnumerable<IrRichEnumValue> values, IEnumerable<string> legacyVariableNames,
+        IEnumerable<IrFunctionParameter>? constructorParameters = null, IrBlockStatement? constructorBody = null)
+    {
+        Name = name;
+        Values = values.ToList();
+        LegacyVariableNames = legacyVariableNames.ToHashSet(StringComparer.Ordinal);
+        ConstructorParameters = constructorParameters?.ToList() ?? new List<IrFunctionParameter>();
+        ConstructorBody = constructorBody;
+    }
+}
+
+public sealed class IrRichEnumValue
+{
+    public string Name { get; }
+    public List<IrObjectProperty> Properties { get; }
+    public List<IrExpression> ConstructorArguments { get; }
+    public IrRichEnumValue(string name, IEnumerable<IrObjectProperty> properties, IEnumerable<IrExpression>? constructorArguments = null)
+    {
+        Name = name;
+        Properties = properties.ToList();
+        ConstructorArguments = constructorArguments?.ToList() ?? new List<IrExpression>();
+    }
+}
+
 public sealed class IrReturnStatement : IrStatement
 {
     public IrExpression? Expression { get; }

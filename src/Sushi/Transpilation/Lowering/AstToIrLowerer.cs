@@ -1952,6 +1952,9 @@ public sealed class AstToIrLowerer
         var statements = new List<IrStatement>();
         var resolvedTypeName = ResolveTopLevel(node.Name);
         var nativeEnumValues = TryGetNativeEnumValues(node);
+        var richEnumValues = new List<IrRichEnumValue>();
+        List<IrFunctionParameter>? richConstructorParameters = null;
+        IrBlockStatement? richConstructorBody = null;
         foreach (var method in node.Methods)
         {
             var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}";
@@ -2015,6 +2018,11 @@ public sealed class AstToIrLowerer
                 body.AddRange(LowerBlock(node.ExplicitConstructor.Body).Statements);
                 _allowEnumMutation = previousAllowEnumMutation;
                 body.Add(new IrReturnStatement(new IrIdentifierExpression("this")));
+                if (richConstructorParameters == null)
+                {
+                    richConstructorParameters = parameters;
+                    richConstructorBody = new IrBlockStatement(body.Skip(1).SkipLast(1));
+                }
                 _functionDepth--;
                 _definedVariables = previousVariables;
                 RestoreKnownObjectTypes(previousObjectTypes);
@@ -2046,6 +2054,11 @@ public sealed class AstToIrLowerer
                 if (binding.Success) ValidateCallTypes($"{resolvedTypeName}.{value.Name}", parameters, binding.OrderedArguments);
             }
 
+            if (nativeEnumValues == null)
+            {
+                var constructorArguments = (value.ConstructorArgs ?? new List<ExpressionNode>()).Select(LowerExpression).ToList();
+                richEnumValues.Add(new IrRichEnumValue(value.Name, valueProperties, constructorArguments));
+            }
             statements.Add(new IrVariableDeclarationStatement($"{resolvedTypeName}_{value.Name}", initializer));
         }
 
@@ -2053,6 +2066,11 @@ public sealed class AstToIrLowerer
         {
             statements.Insert(0, new IrEnumDeclarationStatement(resolvedTypeName, nativeEnumValues,
                 node.Values.Select(value => $"{resolvedTypeName}_{value.Name}")));
+        }
+        else if (richEnumValues.Count == node.Values.Count)
+        {
+            statements.Insert(0, new IrRichEnumDeclarationStatement(resolvedTypeName, richEnumValues,
+                node.Values.Select(value => $"{resolvedTypeName}_{value.Name}"), richConstructorParameters, richConstructorBody));
         }
 
         return new IrBlockStatement(statements);

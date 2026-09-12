@@ -30,6 +30,10 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private Dictionary<string, IrClassMethod> _nativeMethods = new(StringComparer.Ordinal);
     private Dictionary<string, (string Type, string Value, int Ordinal)> _nativeEnumValues = new(StringComparer.Ordinal);
     private Dictionary<string, string> _nativeEnumVariableTypes = new(StringComparer.Ordinal);
+    private Dictionary<string, (string Type, string Value)> _richEnumValues = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _richEnumVariableTypes = new(StringComparer.Ordinal);
+    private string? _currentRichEnumReceiver;
+    private string? _fallbackReceiverName;
 
     public string Emit(IrProgram program, EmitContext context)
     {
@@ -44,6 +48,10 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _nativeMethods.Clear();
         _nativeEnumValues.Clear();
         _nativeEnumVariableTypes.Clear();
+        _richEnumValues.Clear();
+        _richEnumVariableTypes.Clear();
+        _currentRichEnumReceiver = null;
+        _fallbackReceiverName = null;
         _context = context;
         _indent = 0;
         _currentFunctionName = null;
@@ -89,6 +97,12 @@ public sealed class PowerShellEmitter : IBackendEmitter
             WriteLine("");
             _suppressedVariables.UnionWith(declaration.LegacyVariableNames);
         }
+        foreach (var declaration in CollectRichEnums(program.Statements))
+        {
+            EmitRichEnum(declaration);
+            WriteLine("");
+            _suppressedVariables.UnionWith(declaration.LegacyVariableNames);
+        }
         foreach (var declaration in OrderClasses(classes))
         {
             EmitNativeClass(declaration);
@@ -120,6 +134,62 @@ public sealed class PowerShellEmitter : IBackendEmitter
             if (statement is IrBlockStatement block)
                 foreach (var nestedDeclaration in CollectEnums(block.Statements)) yield return nestedDeclaration;
         }
+    }
+
+    private static IEnumerable<IrRichEnumDeclarationStatement> CollectRichEnums(IEnumerable<IrStatement> statements)
+    {
+        foreach (var statement in statements)
+        {
+            if (statement is IrRichEnumDeclarationStatement declaration) yield return declaration;
+            if (statement is IrBlockStatement block)
+                foreach (var nestedDeclaration in CollectRichEnums(block.Statements)) yield return nestedDeclaration;
+        }
+    }
+
+    private void EmitRichEnum(IrRichEnumDeclarationStatement declaration)
+    {
+        var typeName = _names.Source(TargetNameKind.Type, declaration.Name);
+        var fields = declaration.Values.SelectMany(value => value.Properties)
+            .Where(property => !property.Name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal) &&
+                               property.Name != NativeObjectMetadata.EnumValue)
+            .Select(property => property.Name).Distinct(StringComparer.Ordinal).ToList();
+        foreach (var value in declaration.Values)
+            _richEnumValues[$"{declaration.Name}_{value.Name}"] = (typeName, SanitizeMemberName(value.Name));
+        WriteLine($"class {typeName} {{");
+        _indent++;
+        foreach (var field in fields) WriteLine($"[object] ${SanitizeMemberName(field)}");
+        var parameters = string.Join(", ", fields.Select(field => $"[object]${SanitizeName(field)}"));
+        WriteLine($"{typeName}({parameters}) {{");
+        _indent++;
+        foreach (var field in fields)
+        {
+            if (declaration.ConstructorBody != null && declaration.ConstructorParameters.Any(parameter => parameter.Name == field) &&
+                ConstructorAssignsParameter(declaration.ConstructorBody, field, field))
+                continue;
+            WriteLine($"$this.{SanitizeMemberName(field)} = ${SanitizeName(field)}");
+        }
+        if (declaration.ConstructorBody != null)
+            EmitClassBody(declaration.ConstructorBody, IrTypeRef.Any);
+        _indent--;
+        WriteLine("}");
+        foreach (var value in declaration.Values)
+        {
+            var valuesByField = value.Properties.ToDictionary(property => property.Name, property => property.Value, StringComparer.Ordinal);
+            var arguments = string.Join(", ", fields.Select(field =>
+            {
+                var parameterIndex = declaration.ConstructorParameters.FindIndex(parameter => parameter.Name == field);
+                if (parameterIndex >= 0 && parameterIndex < value.ConstructorArguments.Count)
+                    return EmitValueExpression(value.ConstructorArguments[parameterIndex]);
+                return valuesByField.TryGetValue(field, out var expression) ? EmitValueExpression(expression) : "$null";
+            }));
+            var valueName = SanitizeMemberName(value.Name);
+            WriteLine($"static [{typeName}] ${valueName} = [{typeName}]::new({arguments})");
+            // Explicit enum constructors are only the portable construction
+            // path. Static native instances above replace them on PowerShell.
+            _suppressedFunctions.Add($"__sushi_new_{declaration.Name}_{value.Name}");
+        }
+        _indent--;
+        WriteLine("}");
     }
 
     private IEnumerable<IrClassDeclarationStatement> OrderClasses(IEnumerable<IrClassDeclarationStatement> classes)
@@ -166,6 +236,8 @@ public sealed class PowerShellEmitter : IBackendEmitter
         foreach (var field in declaration.Fields)
         {
             var matchingParameter = declaration.ConstructorParameters.FirstOrDefault(p => p.Name == field.Name);
+            if (matchingParameter != null && ConstructorAssignsParameter(declaration.ConstructorBody, field.Name, matchingParameter.Name))
+                continue;
             var value = matchingParameter != null
                 ? "$" + SanitizeName(matchingParameter.Name)
                 : field.Initializer != null ? EmitValueExpression(field.Initializer) : "$null";
@@ -190,6 +262,18 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _indent--;
         WriteLine("}");
     }
+
+    private static bool ConstructorAssignsParameter(IrBlockStatement body, string fieldName, string parameterName) =>
+        body.Statements.Any(statement => statement is IrExpressionStatement
+        {
+            Expression: IrMemberAssignmentExpression
+            {
+                Operator: "=",
+                Target: IrIdentifierExpression { Name: "this" },
+                MemberName: var assignedField,
+                Value: IrIdentifierExpression { Name: var assignedParameter }
+            }
+        } && assignedField == fieldName && assignedParameter == parameterName);
 
     private void EmitClassBody(IrBlockStatement body, IrTypeRef returnType)
     {
@@ -929,6 +1013,10 @@ function __sushi_call_method {
                     _nativeEnumVariableTypes[variableName] = enumType;
                 else
                     _nativeEnumVariableTypes.Remove(variableName);
+                if (TryGetRichEnumType(initializer, out var richEnumType))
+                    _richEnumVariableTypes[variableName] = richEnumType;
+                else
+                    _richEnumVariableTypes.Remove(variableName);
                 if (initializer is IrArrayLiteralExpression array)
                 {
                     _arrayInitializers[variableName] = array;
@@ -978,6 +1066,7 @@ function __sushi_call_method {
                 break;
 
             case IrEnumDeclarationStatement:
+            case IrRichEnumDeclarationStatement:
                 break;
 
             case IrReturnStatement returnStatement:
@@ -1073,6 +1162,10 @@ function __sushi_call_method {
         _currentFunctionName = statement.Name;
         _currentFunctionReturnType = statement.ReturnType;
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
+        var previousReceiverName = _fallbackReceiverName;
+        var previousRichEnumReceiver = _currentRichEnumReceiver;
+        _fallbackReceiverName = statement.Parameters.Any(parameter => parameter.Name == "this") ? "self" : null;
+        _currentRichEnumReceiver = GetRichEnumReceiver(statement.Name);
 
         var regularParameters = statement.Parameters
             .Where(parameter => !parameter.IsVarargs)
@@ -1141,6 +1234,8 @@ function __sushi_call_method {
         _currentFunctionName = previousFunctionName;
         _currentFunctionReturnType = previousReturnType;
         _knownIntegerVariables = previousKnownIntegers;
+        _fallbackReceiverName = previousReceiverName;
+        _currentRichEnumReceiver = previousRichEnumReceiver;
         _indent--;
         WriteLine("}");
     }
@@ -1347,10 +1442,19 @@ function __sushi_call_method {
     private string EmitCallCommand(IrCallExpression call)
     {
         var callee = SanitizeFunctionName(call.Callee);
-        var arguments = call.Arguments.Select(argument => EmitValueExpression(argument.Value)).ToList();
+        var arguments = call.Arguments.Select(argument => EmitCommandArgument(argument.Value)).ToList();
         return arguments.Count > 0
             ? $"{callee} {string.Join(" ", arguments)}"
             : callee;
+    }
+
+    private string EmitCommandArgument(IrExpression expression)
+    {
+        var value = EmitValueExpression(expression);
+        return expression is IrIdentifierExpression identifier &&
+               (_nativeEnumValues.ContainsKey(identifier.Name) || _richEnumValues.ContainsKey(identifier.Name))
+            ? $"({value})"
+            : value;
     }
 
     private string EmitMethodCallExpression(IrMethodCallExpression call)
@@ -1443,6 +1547,8 @@ function __sushi_call_method {
     {
         if (_nativeEnumValues.TryGetValue(identifier.Name, out var value))
             return $"[{value.Type}]::{value.Value}";
+        if (_richEnumValues.TryGetValue(identifier.Name, out var richValue))
+            return $"[{richValue.Type}]::{richValue.Value}";
         return $"${SanitizeName(identifier.Name)}";
     }
 
@@ -1472,8 +1578,23 @@ function __sushi_call_method {
                 _ => $"({enumValue}).{SanitizeMemberName(member.MemberName)}"
             };
         }
-        return $"({EmitValueExpression(member.Target)}).{SanitizeMemberName(member.MemberName)}";
+        if (IsRichEnumTarget(member.Target))
+        {
+            var enumValue = EmitMemberTarget(member.Target);
+            return member.MemberName == NativeObjectMetadata.EnumValue
+                ? $"{enumValue}.{SanitizeMemberName(NativeObjectMetadata.EnumOrdinal)}"
+                : $"{enumValue}.{SanitizeMemberName(member.MemberName)}";
+        }
+        return $"{EmitMemberTarget(member.Target)}.{SanitizeMemberName(member.MemberName)}";
     }
+
+    private string EmitMemberTarget(IrExpression target) => target switch
+    {
+        IrIdentifierExpression identifier when _nativeEnumValues.ContainsKey(identifier.Name) || _richEnumValues.ContainsKey(identifier.Name) =>
+            $"({EmitValueExpression(target)})",
+        IrIdentifierExpression => EmitValueExpression(target),
+        _ => $"({EmitValueExpression(target)})"
+    };
 
     private bool TryGetNativeEnumType(IrExpression expression, out string type)
     {
@@ -1484,6 +1605,36 @@ function __sushi_call_method {
         }
         type = "";
         return false;
+    }
+
+    private bool TryGetRichEnumType(IrExpression expression, out string type)
+    {
+        if (expression is IrIdentifierExpression identifier && _richEnumValues.TryGetValue(identifier.Name, out var value))
+        {
+            type = value.Type;
+            return true;
+        }
+        type = "";
+        return false;
+    }
+
+    private bool IsRichEnumTarget(IrExpression expression) => expression switch
+    {
+        IrIdentifierExpression identifier when _richEnumValues.ContainsKey(identifier.Name) => true,
+        IrIdentifierExpression identifier when _richEnumVariableTypes.ContainsKey(SanitizeName(identifier.Name)) => true,
+        IrIdentifierExpression { Name: "this" } when _currentRichEnumReceiver != null => true,
+        _ => false
+    };
+
+    private string? GetRichEnumReceiver(string functionName)
+    {
+        foreach (var richType in _richEnumValues.Keys.Select(key => key[..key.LastIndexOf('_')]).Distinct(StringComparer.Ordinal))
+        {
+            if (functionName.StartsWith($"{NativeObjectMetadata.MethodPrefix}{richType}_", StringComparison.Ordinal) ||
+                functionName.StartsWith($"__sushi_adapter_{richType}_", StringComparison.Ordinal))
+                return richType;
+        }
+        return null;
     }
 
     private string EmitTruthinessExpression(IrTruthinessExpression expression)
@@ -1584,7 +1735,7 @@ function __sushi_call_method {
         if (_nativeClassNames.ContainsKey(method.TypeName) && _nativeMethods.TryGetValue(method.Callee, out var declaration))
         {
             var arguments = string.Join(", ", method.Arguments.Select(argument => EmitValueExpression(argument.Value)));
-            return $"({EmitValueExpression(method.Target)}).{SanitizeMemberName(NativeMethodName(declaration.Name))}({arguments})";
+            return $"{EmitMemberTarget(method.Target)}.{SanitizeMemberName(NativeMethodName(declaration.Name))}({arguments})";
         }
         return EmitCallCommand(method.AsFunctionCall());
     }
@@ -1592,7 +1743,7 @@ function __sushi_call_method {
     private string EmitNativeAdapterCall(IrAdapterCallExpression adapter)
     {
         if (_nativeClassNames.ContainsKey(adapter.SourceTypeName) && _nativeMethods.TryGetValue(adapter.Callee, out var declaration))
-            return $"({EmitValueExpression(adapter.Value)}).{SanitizeMemberName(NativeMethodName(declaration.Name))}()";
+            return $"{EmitMemberTarget(adapter.Value)}.{SanitizeMemberName(NativeMethodName(declaration.Name))}()";
         return EmitCallCommand(adapter.AsFunctionCall());
     }
 
@@ -1702,11 +1853,14 @@ function __sushi_call_method {
         _builder.AppendLine(text);
     }
 
-    private string SanitizeName(string name) => _names.Source(TargetNameKind.Variable, name);
+    private string SanitizeName(string name) =>
+        name == "this" && _fallbackReceiverName != null
+            ? _fallbackReceiverName
+            : _names.Source(TargetNameKind.Variable, name);
 
     // Members live in their own PowerShell namespace. Keeping them separate
     // avoids a local variable allocation changing a public property spelling.
-    private string SanitizeMemberName(string name) => _names.Source(TargetNameKind.Field, name);
+    private static string SanitizeMemberName(string name) => TargetNameAllocator.Normalize(name, "member");
 
     private string SanitizeFunctionName(string name)
     {
@@ -1831,7 +1985,9 @@ function __sushi_call_method {
     private string EmitPrint(IReadOnlyList<IrExpression> arguments, bool newline)
     {
         var value = arguments.Count == 0 ? "''" : Arg(arguments, 0);
-        return newline ? $"Write-Host {value}" : $"Write-Host -NoNewline {value}";
+        // println is part of the script's output stream; Write-Output preserves
+        // that composability while print intentionally remains terminal-style.
+        return newline ? $"Write-Output {value}" : $"Write-Host -NoNewline {value}";
     }
 
     private string EmitStringTrim(IReadOnlyList<IrExpression> arguments)
