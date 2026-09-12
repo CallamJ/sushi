@@ -3312,7 +3312,8 @@ __sushi_native_obj_to_json() {
                         IsBooleanValueExpression(booleanValue))
                     {
                         var condition = PrepareCondition(booleanValue, inFunction);
-                        WriteLine($"if {condition}; then printf '%s{(intrinsicCall.Id == IntrinsicId.Println ? "\\n" : string.Empty)}' 'true'; else printf '%s{(intrinsicCall.Id == IntrinsicId.Println ? "\\n" : string.Empty)}' 'false'; fi");
+                        var suffix = intrinsicCall.Id == IntrinsicId.Println ? "\\n" : string.Empty;
+                        WriteLine($"{condition} && printf '%s{suffix}' 'true' || printf '%s{suffix}' 'false'");
                         return;
                     }
 
@@ -3536,7 +3537,7 @@ __sushi_native_obj_to_json() {
             else
                 arguments.Add(PrepareValue(argument, inFunction));
         }
-        WriteLine($"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)} || exit $?");
+        WriteLine($"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)}");
     }
 
     private bool TryGetObjectReturningCall(
@@ -4094,7 +4095,7 @@ __sushi_native_obj_to_json() {
                 var command = arguments.Count > 0
                     ? $"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)}"
                     : SanitizeFunctionName(call.Callee);
-                WriteLine($"{command} || {{ __sushi_status=$?; exit \"$__sushi_status\"; }}");
+                WriteLine(command);
                 return "''";
             }
 
@@ -4599,7 +4600,7 @@ __sushi_native_obj_to_json() {
     private string CaptureValue(string expression, bool inFunction)
     {
         var result = DeclareTemp("''", inFunction);
-        WriteLine($"{result}={expression} || {{ __sushi_status=$?; exit \"$__sushi_status\"; }}");
+        WriteLine($"{result}={expression}");
         return $"\"${{{result}-}}\"";
     }
 

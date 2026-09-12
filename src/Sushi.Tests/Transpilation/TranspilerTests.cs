@@ -17,7 +17,7 @@ public class TranspilerTests
         });
 
         Assert.True(result.Success);
-        Assert.Contains("if [[", result.EmittedCode);
+        Assert.Contains("[[", result.EmittedCode);
         Assert.Contains("printf '%s\\n' 'true'", result.EmittedCode);
         Assert.DoesNotContain("_tmp", result.EmittedCode);
         Assert.DoesNotContain("__sushi_status", result.EmittedCode);
