@@ -22,7 +22,7 @@ public sealed class ObjectOrientedTranspilationTests
     [Theory]
     [InlineData(TargetLanguage.Bash)]
     [InlineData(TargetLanguage.Zsh)]
-    [InlineData(TargetLanguage.Powershell7)]
+    [InlineData(TargetLanguage.Powershell51)]
     public void ConstructorBodyAndFieldMutation_AreEmitted(TargetLanguage target)
     {
         var result = new Transpiler().Transpile(new TranspileRequest
@@ -38,7 +38,7 @@ public sealed class ObjectOrientedTranspilationTests
     [Theory]
     [InlineData(TargetLanguage.Bash)]
     [InlineData(TargetLanguage.Zsh)]
-    [InlineData(TargetLanguage.Powershell7)]
+    [InlineData(TargetLanguage.Powershell51)]
     public void ClassesEnumsAndAdapters_UseNativeObjectsWithoutJsonHelpers(TargetLanguage target)
     {
         const string source = """
@@ -78,7 +78,7 @@ public sealed class ObjectOrientedTranspilationTests
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
         Assert.DoesNotContain("__sushi_json_member", result.EmittedCode);
         Assert.DoesNotContain("__sushi_call_method", result.EmittedCode);
-        if (target == TargetLanguage.Powershell7)
+        if (target == TargetLanguage.Powershell51)
         {
             Assert.Contains("class Person", result.EmittedCode);
             Assert.Contains("class Priority", result.EmittedCode);

@@ -138,7 +138,7 @@ public sealed class Transpiler
         {
             TargetLanguage.Bash => new BashEmitter(),
             TargetLanguage.Zsh => new ZshEmitter(),
-            TargetLanguage.Powershell7 => new PowerShellEmitter(),
+            TargetLanguage.Powershell51 => new PowerShellEmitter(),
             _ => throw new ArgumentOutOfRangeException(nameof(targetLanguage), targetLanguage, "Unsupported target")
         };
     }
@@ -146,7 +146,7 @@ public sealed class Transpiler
     private static TargetProfile GetLegacyProfile(TargetLanguage shell) => shell switch
     {
         TargetLanguage.Zsh => new TargetProfile(shell, TargetPlatform.Macos),
-        TargetLanguage.Powershell7 => new TargetProfile(shell, TargetPlatform.Windows),
+        TargetLanguage.Powershell51 => new TargetProfile(shell, TargetPlatform.Windows),
         _ => new TargetProfile(shell, TargetPlatform.Linux)
     };
 

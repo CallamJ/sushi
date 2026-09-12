@@ -144,7 +144,12 @@ jobs:
       - name: Transpile M3 verification to PowerShell
         run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t powershell-windows
 
-      - name: Execute PowerShell verification
+      - name: Execute Windows PowerShell 5.1 verification
+        shell: powershell
+        run: |
+          ./examples/m3_verification.powershell-windows.ps1
+
+      - name: Execute PowerShell 7 compatibility verification
         shell: pwsh
         run: |
           ./examples/m3_verification.powershell-windows.ps1

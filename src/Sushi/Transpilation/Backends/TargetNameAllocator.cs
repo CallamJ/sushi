@@ -17,7 +17,7 @@ internal sealed class TargetNameAllocator
 
     public TargetNameAllocator(TargetLanguage target, bool zshMode = false)
     {
-        _caseInsensitive = target == TargetLanguage.Powershell7;
+        _caseInsensitive = target == TargetLanguage.Powershell51;
         _reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "args", "input", "true", "false", "null"
@@ -26,7 +26,7 @@ internal sealed class TargetNameAllocator
         {
             _reserved.UnionWith(new[] { "status", "pipestatus", "_" });
         }
-        if (target == TargetLanguage.Powershell7)
+        if (target == TargetLanguage.Powershell51)
         {
             _reserved.UnionWith(new[] { "psitem", "_", "home", "host", "error", "pid", "profile" });
         }

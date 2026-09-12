@@ -7,7 +7,7 @@ behavior differs between Bash, Zsh, and PowerShell targets.
 
 Default target selection:
 
-- Windows: `Powershell7`
+- Windows: `powershell-windows` (PowerShell 5.1-compatible output)
 - macOS: `Zsh`
 - Linux/WSL: `Bash`
 
@@ -27,9 +27,9 @@ Default target selection:
 - `curl`
 - standard POSIX tools emitted for requested features (`mktemp`, `cat`, `find`, `timeout`)
 
-### 1.4 For running PowerShell output (`-t Powershell7`)
+### 1.4 For running PowerShell output (`-t powershell-windows`)
 
-- PowerShell 7+ (`pwsh`) recommended
+- Windows PowerShell 5.1+ or PowerShell 7+ (`pwsh`)
 - .NET runtime available to PowerShell (for `System.Net.Http.HttpClient`)
 
 ## 2. Intrinsic behavior contract (M3)
@@ -172,8 +172,8 @@ Regex contract:
 ### 4.1 PowerShell target
 
 ```powershell
-dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Powershell7
-pwsh -NoLogo -NoProfile -File examples/m3_verification.ps1
+dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t powershell-windows
+powershell -NoProfile -ExecutionPolicy Bypass -File examples/m3_verification.powershell-windows.ps1
 ```
 
 ### 4.2 Bash target

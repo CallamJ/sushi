@@ -8,7 +8,8 @@ public sealed class TargetProfileTests
     [Theory]
     [InlineData("bash-linux", TargetLanguage.Bash, TargetPlatform.Linux, ".sh")]
     [InlineData("zsh-macos", TargetLanguage.Zsh, TargetPlatform.Macos, ".zsh")]
-    [InlineData("powershell-windows", TargetLanguage.Powershell7, TargetPlatform.Windows, ".ps1")]
+    [InlineData("powershell-windows", TargetLanguage.Powershell51, TargetPlatform.Windows, ".ps1")]
+    [InlineData("powershell-linux", TargetLanguage.Powershell51, TargetPlatform.Linux, ".ps1")]
     public void TryParse_AcceptsSupportedProfiles(string text, TargetLanguage shell, TargetPlatform platform, string extension)
     {
         Assert.True(TargetProfile.TryParse(text, out var target));

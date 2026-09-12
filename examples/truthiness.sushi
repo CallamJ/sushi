@@ -7,8 +7,8 @@ if (?token) {
     println("token configured")
 }
 
-if (!?retries) {
-    println("no retries yet")
+if (?retries) {
+    println("zero is truthy")
 }
 
 // Collections are values when non-null, even when empty.

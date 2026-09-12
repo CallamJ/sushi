@@ -29,7 +29,7 @@ test: restore
 cli *args:
     dotnet run --project {{cli}} --no-restore -- {{args}}
 
-# Transpile a .sushi file to a target shell (Bash|Zsh|Powershell7)
+# Transpile a .sushi file to a target profile (for example, bash-linux or powershell-windows)
 transpile file target="Bash":
     dotnet run --project {{cli}} --no-restore -- transpile {{file}} -t {{target}}
 

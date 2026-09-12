@@ -96,7 +96,7 @@ public sealed class ModuleTranspilationTests
     [Theory]
     [InlineData(TargetLanguage.Bash)]
     [InlineData(TargetLanguage.Zsh)]
-    [InlineData(TargetLanguage.Powershell7)]
+    [InlineData(TargetLanguage.Powershell51)]
     public void ImportedClassAndEnum_AreResolvedStatically(TargetLanguage target)
     {
         WithModules(
@@ -123,7 +123,7 @@ public sealed class ModuleTranspilationTests
             result =>
             {
                 Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
-                if (target == TargetLanguage.Powershell7)
+                if (target == TargetLanguage.Powershell51)
                 {
                     Assert.Contains("class example_model_Person", result.EmittedCode);
                     Assert.Contains("[example_model_State]::Done", result.EmittedCode);

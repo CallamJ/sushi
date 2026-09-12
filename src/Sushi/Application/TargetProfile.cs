@@ -38,7 +38,7 @@ public sealed record TargetProfile(TargetLanguage Shell, TargetPlatform Platform
     public static TargetProfile Host()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            return new(TargetLanguage.Powershell7, TargetPlatform.Windows);
+            return new(TargetLanguage.Powershell51, TargetPlatform.Windows);
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             return new(TargetLanguage.Zsh, TargetPlatform.Macos);
         return new(TargetLanguage.Bash, TargetPlatform.Linux);
@@ -58,9 +58,9 @@ public sealed record TargetProfile(TargetLanguage Shell, TargetPlatform Platform
             "bash-macos" => new(TargetLanguage.Bash, TargetPlatform.Macos),
             "zsh-linux" => new(TargetLanguage.Zsh, TargetPlatform.Linux),
             "zsh-macos" => new(TargetLanguage.Zsh, TargetPlatform.Macos),
-            "powershell-linux" => new(TargetLanguage.Powershell7, TargetPlatform.Linux),
-            "powershell-macos" => new(TargetLanguage.Powershell7, TargetPlatform.Macos),
-            "powershell-windows" => new(TargetLanguage.Powershell7, TargetPlatform.Windows),
+            "powershell-linux" => new(TargetLanguage.Powershell51, TargetPlatform.Linux),
+            "powershell-macos" => new(TargetLanguage.Powershell51, TargetPlatform.Macos),
+            "powershell-windows" => new(TargetLanguage.Powershell51, TargetPlatform.Windows),
             _ => null!
         };
         return profile is not null;

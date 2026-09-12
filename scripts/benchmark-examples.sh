@@ -12,6 +12,12 @@ TARGETS_CSV="bash,zsh,powershell"
 CUSTOM_EXAMPLES=false
 declare -a EXAMPLES=()
 
+case "$(uname -s)" in
+    Darwin) SUSHI_BENCH_PLATFORM="macos" ;;
+    Linux) SUSHI_BENCH_PLATFORM="linux" ;;
+    *) SUSHI_BENCH_PLATFORM="windows" ;;
+esac
+
 RESULTS_FILE=""
 RUN_TIMED_STATUS=0
 RUN_TIMED_ELAPSED="0.000"
@@ -55,7 +61,7 @@ normalize_target() {
     case "${value,,}" in
         bash) printf 'bash' ;;
         zsh) printf 'zsh' ;;
-        powershell|pwsh|powershell7) printf 'powershell' ;;
+        powershell|powershell51|pwsh|powershell7) printf 'powershell' ;;
         *) printf '' ;;
     esac
 }
@@ -278,26 +284,31 @@ for iteration in $(seq 1 "$ITERATIONS"); do
         for target in "${ACTIVE_TARGETS[@]}"; do
             case "$target" in
                 bash)
-                    cli_target="Bash"
+                    cli_target="bash-${SUSHI_BENCH_PLATFORM}"
                     emitted_ext=".sh"
                     run_cmd=(bash)
                     ;;
                 zsh)
-                    cli_target="Zsh"
+                    cli_target="zsh-${SUSHI_BENCH_PLATFORM}"
                     emitted_ext=".zsh"
                     run_cmd=(zsh)
                     ;;
                 powershell)
-                    cli_target="Powershell7"
+                    cli_target="powershell-${SUSHI_BENCH_PLATFORM}"
                     emitted_ext=".ps1"
-                    run_cmd=(pwsh -NoLogo -NoProfile -File)
+                    if [[ "$SUSHI_BENCH_PLATFORM" == "windows" ]]; then
+                        run_cmd=(powershell -NoProfile -ExecutionPolicy Bypass -File)
+                    else
+                        run_cmd=(pwsh -NoLogo -NoProfile -File)
+                    fi
                     ;;
                 *)
                     continue
                     ;;
             esac
 
-            run_timed "$TIME_TOOL" dotnet run --no-build -c Release --project src/Sushi -- transpile "$staged_source" -t "$cli_target"
+            emitted_script="${staged_source%.sushi}${emitted_ext}"
+            run_timed "$TIME_TOOL" dotnet run --no-build -c Release --project src/Sushi -- transpile "$staged_source" -t "$cli_target" -o "$emitted_script"
             transpile_status="$RUN_TIMED_STATUS"
             transpile_elapsed="$RUN_TIMED_ELAPSED"
 
@@ -310,7 +321,6 @@ for iteration in $(seq 1 "$ITERATIONS"); do
             fi
             rm -f "$RUN_TIMED_OUT_FILE" "$RUN_TIMED_ERR_FILE"
 
-            emitted_script="${staged_source%.sushi}${emitted_ext}"
             if [[ ! -f "$emitted_script" ]]; then
                 printf '%s\t%s\t%d\t%s\t%s\t%s\n' "$target" "$example_name" "$iteration" "$transpile_elapsed" "0.000" "missing_output" >> "$RESULTS_FILE"
                 echo "[${target}] ${example_name} (iter ${iteration}): transpile=${transpile_elapsed}s run=0.000s status=missing_output"

@@ -5,7 +5,7 @@ using Sushi.Application.Commands;
 
 // TODO: Move to Models
 public enum TargetLanguage {
-    Powershell7,
+    Powershell51,
     Bash,
     Zsh,
 }

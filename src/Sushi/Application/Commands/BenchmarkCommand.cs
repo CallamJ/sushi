@@ -685,9 +685,10 @@ internal static class BenchmarkCommand
             {
                 "bash" => TargetLanguage.Bash,
                 "zsh" => TargetLanguage.Zsh,
-                "powershell" => TargetLanguage.Powershell7,
-                "pwsh" => TargetLanguage.Powershell7,
-                "powershell7" => TargetLanguage.Powershell7,
+                "powershell" => TargetLanguage.Powershell51,
+                "powershell51" => TargetLanguage.Powershell51,
+                "pwsh" => TargetLanguage.Powershell51,
+                "powershell7" => TargetLanguage.Powershell51,
                 _ => throw new ArgumentException($"Unsupported target: {raw}")
             };
 
@@ -731,10 +732,14 @@ internal static class BenchmarkCommand
         {
             TargetLanguage.Bash => new[] { new Runner("bash", Array.Empty<string>()) },
             TargetLanguage.Zsh => new[] { new Runner("zsh", Array.Empty<string>()) },
+            _ when OperatingSystem.IsWindows() => new[]
+            {
+                new Runner("powershell", new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File" }),
+                new Runner("pwsh", new[] { "-NoLogo", "-NoProfile", "-File" })
+            },
             _ => new[]
             {
-                new Runner("pwsh", new[] { "-NoLogo", "-NoProfile", "-File" }),
-                new Runner("powershell", new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File" })
+                new Runner("pwsh", new[] { "-NoLogo", "-NoProfile", "-File" })
             }
         };
 

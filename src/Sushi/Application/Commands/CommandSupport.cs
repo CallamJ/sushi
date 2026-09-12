@@ -56,7 +56,7 @@ internal static class CommandSupport
 
     // Benchmark infrastructure still models native runners by shell only.
     public static TranspileResult Transpile(string filePath, TargetLanguage target, string sourceText) =>
-        Transpile(filePath, new TargetProfile(target, target == TargetLanguage.Zsh ? TargetPlatform.Macos : target == TargetLanguage.Powershell7 ? TargetPlatform.Windows : TargetPlatform.Linux), sourceText);
+        Transpile(filePath, new TargetProfile(target, target == TargetLanguage.Zsh ? TargetPlatform.Macos : target == TargetLanguage.Powershell51 ? TargetPlatform.Windows : TargetPlatform.Linux), sourceText);
 
     public static bool TryWriteOutput(string outputPath, string code)
     {
@@ -145,10 +145,14 @@ internal static class CommandSupport
             {
                 new RunnerCandidate("zsh", Array.Empty<string>())
             },
+            _ when OperatingSystem.IsWindows() => new[]
+            {
+                new RunnerCandidate("powershell", new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File" }),
+                new RunnerCandidate("pwsh", new[] { "-NoLogo", "-NoProfile", "-File" })
+            },
             _ => new[]
             {
-                new RunnerCandidate("pwsh", new[] { "-NoLogo", "-NoProfile", "-File" }),
-                new RunnerCandidate("powershell", new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File" })
+                new RunnerCandidate("pwsh", new[] { "-NoLogo", "-NoProfile", "-File" })
             }
         };
     }

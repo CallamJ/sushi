@@ -27,7 +27,7 @@ public class TranspilerTests
     [Theory]
     [InlineData(TargetLanguage.Bash)]
     [InlineData(TargetLanguage.Zsh)]
-    [InlineData(TargetLanguage.Powershell7)]
+    [InlineData(TargetLanguage.Powershell51)]
     public void Transpile_TruthinessOperator_IsExplicitAndNative(TargetLanguage target)
     {
         const string source = """
@@ -132,7 +132,7 @@ public class TranspilerTests
         {
             SourceText = source,
             SourcePath = "basic.sushi",
-            TargetLanguage = TargetLanguage.Powershell7
+            TargetLanguage = TargetLanguage.Powershell51
         });
 
         Assert.True(result.Success);
@@ -196,7 +196,7 @@ public class TranspilerTests
         {
             SourceText = source,
             SourcePath = "intrinsic.sushi",
-            TargetLanguage = TargetLanguage.Powershell7
+            TargetLanguage = TargetLanguage.Powershell51
         });
 
         Assert.True(result.Success);
@@ -219,7 +219,7 @@ public class TranspilerTests
         {
             SourceText = source,
             SourcePath = "m3.sushi",
-            TargetLanguage = TargetLanguage.Powershell7
+            TargetLanguage = TargetLanguage.Powershell51
         });
 
         Assert.True(result.Success);
@@ -347,7 +347,7 @@ public class TranspilerTests
         {
             SourceText = source,
             SourcePath = "m4_phase2_unknown_named.sushi",
-            TargetLanguage = TargetLanguage.Powershell7
+            TargetLanguage = TargetLanguage.Powershell51
         });
 
         Assert.False(result.Success);
@@ -528,7 +528,7 @@ public class TranspilerTests
         {
             SourceText = source,
             SourcePath = "m4_phase3_return_bad.sushi",
-            TargetLanguage = TargetLanguage.Powershell7
+            TargetLanguage = TargetLanguage.Powershell51
         });
 
         Assert.False(result.Success);

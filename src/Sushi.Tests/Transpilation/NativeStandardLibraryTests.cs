@@ -20,7 +20,7 @@ public sealed class NativeStandardLibraryTests
     [Fact]
     public void ArchiveZip_LowersDirectlyToPowerShellCmdlet()
     {
-        var result = Transpile("std.archive.zip(\"dist\", \"dist.zip\")", TargetLanguage.Powershell7, TargetPlatform.Windows);
+        var result = Transpile("std.archive.zip(\"dist\", \"dist.zip\")", TargetLanguage.Powershell51, TargetPlatform.Windows);
 
         Assert.True(result.Success);
         Assert.Contains("Compress-Archive", result.EmittedCode);
@@ -40,12 +40,13 @@ public sealed class NativeStandardLibraryTests
     public void HttpDownload_LowersToTheTargetHttpTool()
     {
         var bash = Transpile("std.http.download(\"https://example.test/a\", \"a.txt\")", TargetLanguage.Bash, TargetPlatform.Linux);
-        var powershell = Transpile("std.http.download(\"https://example.test/a\", \"a.txt\")", TargetLanguage.Powershell7, TargetPlatform.Windows);
+        var powershell = Transpile("std.http.download(\"https://example.test/a\", \"a.txt\")", TargetLanguage.Powershell51, TargetPlatform.Windows);
 
         Assert.True(bash.Success);
         Assert.True(powershell.Success);
         Assert.Contains("curl -fsSL", bash.EmittedCode);
         Assert.Contains("Invoke-WebRequest", powershell.EmittedCode);
+        Assert.Contains("-UseBasicParsing", powershell.EmittedCode);
     }
 
     [Fact]
@@ -53,7 +54,7 @@ public sealed class NativeStandardLibraryTests
     {
         const string source = "println(std.path.extension(\"archive.tar.gz\"))\nstd.env.unset(\"TEMP_VALUE\")\nstd.process.sleep(5)\nstd.console.error(\"failed\")";
         var bash = Transpile(source, TargetLanguage.Bash, TargetPlatform.Linux);
-        var powershell = Transpile(source, TargetLanguage.Powershell7, TargetPlatform.Windows);
+        var powershell = Transpile(source, TargetLanguage.Powershell51, TargetPlatform.Windows);
 
         Assert.True(bash.Success);
         Assert.Contains("basename --", bash.EmittedCode);
@@ -65,6 +66,21 @@ public sealed class NativeStandardLibraryTests
         Assert.Contains("Remove-Item", powershell.EmittedCode);
         Assert.Contains("Start-Sleep", powershell.EmittedCode);
         Assert.Contains("[Console]::Error", powershell.EmittedCode);
+    }
+
+    [Fact]
+    public void PowerShellOutput_UsesPowerShell51CompatibleRuntimeApis()
+    {
+        const string source = "var files = std.fs.glob(\"**/*.txt\", \"tmp\")\nvar result = std.process.run(\"tool\", [], timeoutMs: 1, allowFailure: true)\nvar response = std.http.get(\"https://example.test\")";
+        var result = Transpile(source, TargetLanguage.Powershell51, TargetPlatform.Windows);
+
+        Assert.True(result.Success);
+        Assert.Contains(".Kill()", result.EmittedCode);
+        Assert.Contains("-UseBasicParsing", result.EmittedCode);
+        Assert.Contains("ResponseUri", result.EmittedCode);
+        Assert.Contains("SecurityProtocol", result.EmittedCode);
+        Assert.DoesNotContain("GetRelativePath", result.EmittedCode);
+        Assert.DoesNotContain("Kill($true)", result.EmittedCode);
     }
 
     [Fact]
@@ -81,7 +97,7 @@ public sealed class NativeStandardLibraryTests
     public void InterpolatedString_LowersItsEmbeddedExpression()
     {
         var bash = Transpile("var name = \"Sushi\"\nprintln(\"Hello $(name.upper())!\")", TargetLanguage.Bash, TargetPlatform.Linux);
-        var powershell = Transpile("var name = \"Sushi\"\nprintln(\"Hello $(name.upper())!\")", TargetLanguage.Powershell7, TargetPlatform.Windows);
+        var powershell = Transpile("var name = \"Sushi\"\nprintln(\"Hello $(name.upper())!\")", TargetLanguage.Powershell51, TargetPlatform.Windows);
 
         Assert.True(bash.Success);
         Assert.Contains("Hello", bash.EmittedCode);

@@ -38,7 +38,7 @@ public sealed class PowerShellEmitter : IBackendEmitter
     public string Emit(IrProgram program, EmitContext context)
     {
         _builder.Clear();
-        _names = new TargetNameAllocator(TargetLanguage.Powershell7);
+        _names = new TargetNameAllocator(TargetLanguage.Powershell51);
         _generatedFunctionNames.Clear();
         _nativeClassNames.Clear();
         _nativeEnumNames.Clear();
@@ -448,7 +448,7 @@ function __sushi_process_run {
 
             if (-not $process.WaitForExit($timeoutMs)) {
                 $timedOut = $true
-                try { $process.Kill($true) } catch { try { $process.Kill() } catch { } }
+                try { $process.Kill() } catch { }
             }
 
             $process.WaitForExit()
@@ -613,7 +613,26 @@ function __sushi_fs_glob {
     }
     if ([string]::IsNullOrWhiteSpace($cwd)) { return ,@($items | ForEach-Object { $_.FullName }) }
     $cwdPath = (Resolve-Path -LiteralPath $cwd).Path
-    return ,@($items | ForEach-Object { [System.IO.Path]::GetRelativePath($cwdPath, $_.FullName) })
+    return ,@($items | ForEach-Object { __sushi_relative_path $cwdPath $_.FullName })
+}
+
+function __sushi_relative_path {
+    param([string]$basePath, [string]$path)
+
+    $baseFull = [System.IO.Path]::GetFullPath($basePath)
+    $pathFull = [System.IO.Path]::GetFullPath($path)
+    if (-not [string]::Equals(
+        [System.IO.Path]::GetPathRoot($baseFull),
+        [System.IO.Path]::GetPathRoot($pathFull),
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $pathFull
+    }
+
+    $separator = [string][System.IO.Path]::DirectorySeparatorChar
+    if (-not $baseFull.EndsWith($separator)) { $baseFull += $separator }
+    [Uri]$baseUri = $baseFull
+    [Uri]$pathUri = $pathFull
+    return [Uri]::UnescapeDataString($baseUri.MakeRelativeUri($pathUri).ToString()).Replace('/', $separator)
 }
 
 function __sushi_http_request {
@@ -626,6 +645,9 @@ function __sushi_http_request {
     )
 
     $headerMap = __sushi_to_map $headers
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch { }
     if (-not ("System.Net.Http.HttpClient" -as [type])) {
         try { Add-Type -AssemblyName System.Net.Http } catch { }
     }
@@ -1320,7 +1342,7 @@ function __sushi_call_method {
         {
             WriteLine($"${name}_process = {invocation}");
             WriteLine($"${name}_timedOut = $false");
-            WriteLine($"if (-not ${name}_process.WaitForExit({timeoutMs})) {{ ${name}_timedOut = $true; ${name}_process.Kill($true); ${name}_process.WaitForExit() }}");
+            WriteLine($"if (-not ${name}_process.WaitForExit({timeoutMs})) {{ ${name}_timedOut = $true; ${name}_process.Kill(); ${name}_process.WaitForExit() }}");
         }
         else
         {
@@ -1376,8 +1398,10 @@ function __sushi_call_method {
             : "";
         WriteLine("try {");
         _indent++;
-        WriteLine($"${name}_response = Invoke-WebRequest -Method {method} -Uri {url}{extras}");
-        WriteLine($"${name} = [pscustomobject]@{{ status=[int]${name}_response.StatusCode; ok=([int]${name}_response.StatusCode -ge 200 -and [int]${name}_response.StatusCode -lt 300); headers=${name}_response.Headers; body=[string]${name}_response.Content; url=[string]${name}_response.BaseResponse.RequestMessage.RequestUri }}");
+        WriteLine("try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }");
+        WriteLine($"${name}_response = Invoke-WebRequest -UseBasicParsing -Method {method} -Uri {url}{extras}");
+        WriteLine($"${name}_url = if (${name}_response.BaseResponse.PSObject.Properties['RequestMessage']) {{ [string]${name}_response.BaseResponse.RequestMessage.RequestUri }} elseif (${name}_response.BaseResponse.PSObject.Properties['ResponseUri']) {{ [string]${name}_response.BaseResponse.ResponseUri }} else {{ [string]({url}) }}");
+        WriteLine($"${name} = [pscustomobject]@{{ status=[int]${name}_response.StatusCode; ok=([int]${name}_response.StatusCode -ge 200 -and [int]${name}_response.StatusCode -lt 300); headers=${name}_response.Headers; body=[string]${name}_response.Content; url=${name}_url }}");
         _indent--;
         WriteLine("} catch {");
         _indent++;
@@ -2175,7 +2199,7 @@ function __sushi_call_method {
     }
 
     private string EmitHttpDownload(IReadOnlyList<IrExpression> arguments) =>
-        $"(Invoke-WebRequest -Uri {Arg(arguments, 0)} -OutFile {Arg(arguments, 1)})";
+        $"(Invoke-WebRequest -UseBasicParsing -Uri {Arg(arguments, 0)} -OutFile {Arg(arguments, 1)})";
 
     private string Arg(IReadOnlyList<IrExpression> arguments, int index)
     {

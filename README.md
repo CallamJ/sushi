@@ -97,9 +97,9 @@ if (!?token) { println("token missing") }
 if (std.env.has("SUSHI_TOKEN")) { println("variable exists") }
 ```
 
-`?` treats `null`, empty strings, and numeric zero as false. Non-empty strings
-(including `"false"`), non-zero numbers, and non-null arrays or objects are
-true. Add type annotations to values whose type cannot be inferred.
+`?` treats `null` and empty strings as false. Numeric values—including `0`—are
+true. Non-empty strings (including `"false"`) and non-null arrays or objects
+are also true. Add type annotations to values whose type cannot be inferred.
 
 ### Run transpiled Bash scripts
 
@@ -113,10 +113,10 @@ true. Add type annotations to values whose type cannot be inferred.
 
 ### Run transpiled PowerShell scripts
 
-- PowerShell 7+ (`pwsh`) recommended
+- Windows PowerShell 5.1+ or PowerShell 7+ (`pwsh`)
 
-Windows PowerShell 5.1 may work for some scripts, but `Powershell7` is the
-supported target.
+PowerShell output uses a 5.1-compatible baseline. The same output runs on
+PowerShell 7 across Windows, macOS, and Linux.
 
 ## Quickstart (M3 verification)
 
@@ -124,7 +124,7 @@ supported target.
 
 ```powershell
 dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t powershell-windows
-pwsh -NoLogo -NoProfile -File examples/m3_verification.powershell-windows.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File examples/m3_verification.powershell-windows.ps1
 ```
 
 ### Bash target
@@ -143,6 +143,12 @@ zsh examples/m3_verification.zsh-macos.zsh
 
 If your environment blocks outbound HTTP, set `SUSHI_SKIP_HTTP=1` before
 running verification.
+
+## Language guide
+
+See [`docs/language-guide.md`](docs/language-guide.md) for a practical guide
+to Sushi syntax, functions, conditions, standard-library APIs, modules,
+classes, enums, and target selection.
 
 ## Quickstart (M4 workflow)
 
