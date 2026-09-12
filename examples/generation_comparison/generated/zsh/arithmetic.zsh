@@ -1,11 +1,12 @@
 #!/usr/bin/env zsh
 set -eu
 set -o pipefail
-__sushi_result=''
 double() {
-    local -i value="$1"
-    __sushi_result=$(( (value * 2) ))
+    local out="$1"
+    local -i value="$2"
+    : ${(P)out::=$(( (value * 2) ))}
     return 0
 }
-double 21 || { __sushi_status=$?; exit "$__sushi_status"; }
-printf '%s\n' "${__sushi_result-}"
+_tmp1=''
+double '_tmp1' 21 || exit $?
+printf '%s\n' "${_tmp1-}"

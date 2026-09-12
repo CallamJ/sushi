@@ -3,6 +3,7 @@ namespace Sushi.Transpilation.Backends;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Sushi.Application;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
 
@@ -19,10 +20,14 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
     private HashSet<string> _integerReturningFunctions = new(StringComparer.Ordinal);
     private Dictionary<string, IrArrayLiteralExpression> _arrayInitializers = new(StringComparer.Ordinal);
+    private TargetNameAllocator _names = null!;
+    private Dictionary<string, string> _generatedFunctionNames = new(StringComparer.Ordinal);
 
     public string Emit(IrProgram program, EmitContext context)
     {
         _builder.Clear();
+        _names = new TargetNameAllocator(TargetLanguage.Powershell7);
+        _generatedFunctionNames.Clear();
         _context = context;
         _indent = 0;
         _currentFunctionName = null;
@@ -870,7 +875,7 @@ function __sushi_call_method {
 
     private void EmitFunction(IrFunctionDeclarationStatement statement)
     {
-        WriteLine($"function {SanitizeName(statement.Name)} {{");
+        WriteLine($"function {SanitizeFunctionName(statement.Name)} {{");
         _indent++;
 
         var previousFunctionName = _currentFunctionName;
@@ -1152,7 +1157,7 @@ function __sushi_call_method {
 
     private string EmitCallCommand(IrCallExpression call)
     {
-        var callee = SanitizeName(call.Callee);
+        var callee = SanitizeFunctionName(call.Callee);
         var arguments = call.Arguments.Select(argument => EmitValueExpression(argument.Value)).ToList();
         return arguments.Count > 0
             ? $"{callee} {string.Join(" ", arguments)}"
@@ -1233,7 +1238,7 @@ function __sushi_call_method {
             IrCallExpression call =>
                 $"({EmitCallCommand(call)})",
             IrConstructionExpression construction =>
-                $"({SanitizeName(construction.ConstructorName)} {string.Join(" ", construction.Arguments.Select(argument => EmitValueExpression(argument.Value)))})",
+                $"({SanitizeFunctionName(construction.ConstructorName)} {string.Join(" ", construction.Arguments.Select(argument => EmitValueExpression(argument.Value)))})",
             IrResolvedMethodCallExpression method => $"({EmitCallCommand(method.AsFunctionCall())})",
             IrAdapterCallExpression adapter => $"({EmitCallCommand(adapter.AsFunctionCall())})",
             IrMethodCallExpression methodCall =>
@@ -1323,7 +1328,7 @@ function __sushi_call_method {
         // provable mismatches are diagnosed before emission.
     }
 
-    private static string EmitPowerShellParameter(IrFunctionParameter parameter)
+    private string EmitPowerShellParameter(IrFunctionParameter parameter)
     {
         var annotation = parameter.DeclaredType.Kind switch
         {
@@ -1407,9 +1412,29 @@ function __sushi_call_method {
         _builder.AppendLine(text);
     }
 
-    private static string SanitizeName(string name)
+    private string SanitizeName(string name) => _names.Source(TargetNameKind.Variable, name);
+
+    private string SanitizeFunctionName(string name)
     {
-        return name.Replace(".", "_").Replace("-", "_");
+        if (!name.StartsWith("__sushi_", StringComparison.Ordinal))
+            return _names.Source(TargetNameKind.Function, name);
+
+        if (_generatedFunctionNames.TryGetValue(name, out var existing)) return existing;
+        var preferred = name switch
+        {
+            var value when value.StartsWith("__sushi_new_", StringComparison.Ordinal) =>
+                value["__sushi_new_".Length..].ToLowerInvariant() + "_new",
+            var value when value.StartsWith("__sushi_method_", StringComparison.Ordinal) =>
+                value["__sushi_method_".Length..].ToLowerInvariant(),
+            var value when value.StartsWith("__sushi_adapter_", StringComparison.Ordinal) =>
+                value["__sushi_adapter_".Length..].ToLowerInvariant(),
+            var value when value.StartsWith("__sushi_lambda_", StringComparison.Ordinal) =>
+                "_lambda_" + value["__sushi_lambda_".Length..],
+            _ => "_s_" + name["__sushi_".Length..]
+        };
+        var allocated = _names.Generated(TargetNameKind.Function, preferred);
+        _generatedFunctionNames[name] = allocated;
+        return allocated;
     }
 
     private string EmitIntrinsicCommand(IrIntrinsicCallExpression call)

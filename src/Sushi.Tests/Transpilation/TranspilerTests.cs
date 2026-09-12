@@ -283,8 +283,8 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("add 2 5", result.EmittedCode);
-        Assert.Contains("add 3 7", result.EmittedCode);
+        Assert.Contains("add 'x' 2 5", result.EmittedCode);
+        Assert.Contains("add 'y' 3 7", result.EmittedCode);
     }
 
     [Fact]
@@ -309,7 +309,7 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("local -a rest=(\"${@:2}\")", result.EmittedCode);
+        Assert.Contains("local -a rest=(\"${@:3}\")", result.EmittedCode);
         Assert.DoesNotContain("__sushi_array_new", result.EmittedCode);
     }
 
@@ -566,7 +566,7 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("local -a values=(\"${@:1}\")", result.EmittedCode);
+        Assert.Contains("local -a values=(\"${@:2}\")", result.EmittedCode);
         Assert.DoesNotContain("__sushi_json_index", result.EmittedCode);
     }
 

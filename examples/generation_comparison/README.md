@@ -16,10 +16,11 @@ Line counts include shebangs and target setup:
 
 | Example | Native Bash | Generated Bash | Native Zsh | Generated Zsh | Native PowerShell | Generated PowerShell |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| arithmetic | 9 | 10 | 9 | 11 | 7 | 7 |
-| strings | 7 | 8 | 7 | 9 | 4 | 4 |
-| collections | 6 | 5 | 7 | 7 | 5 | 5 |
+| arithmetic | 9 | 11 | 9 | 12 | 7 | 8 |
+| strings | 7 | 8 | 7 | 9 | 4 | 5 |
+| collections | 6 | 5 | 7 | 7 | 5 | 6 |
 
 All native and generated variants produce matching output. Generated scripts
-contain no embedded Sushi helper functions; the few additional arithmetic and
-string lines are target-required result and transformation steps.
+contain no embedded Sushi helper functions. Value-returning Bash and Zsh
+functions receive an explicit destination as their first argument, avoiding a
+global result variable while preserving normal script output.

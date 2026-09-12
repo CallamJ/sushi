@@ -1,6 +1,5 @@
 namespace Sushi.Transpilation;
 
-using System.Text.RegularExpressions;
 using Sushi.Application;
 using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.IR;
@@ -22,17 +21,18 @@ public sealed class Transpiler
         if (root == null || diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return new TranspileResult { Success = false, Diagnostics = diagnostics, DependencyPaths = dependencies };
 
+        var modulePrefixes = AllocateModulePrefixes(moduleLoader.OrderedModules, root);
         var ir = new IrProgram();
         foreach (var module in moduleLoader.OrderedModules)
         {
-            var prefix = module == root ? "" : $"__sushi_module_{SanitizeModuleName(module.BoxName!)}_";
+            var prefix = modulePrefixes[module];
             var externalSymbols = new Dictionary<string, string>(StringComparer.Ordinal);
             var externalFunctions = new Dictionary<string, Sushi.Build.SyntaxTree.FunctionDeclarationNode>(StringComparer.Ordinal);
             var externalClasses = new Dictionary<string, Sushi.Build.SyntaxTree.ClassDeclarationNode>(StringComparer.Ordinal);
             var externalEnums = new Dictionary<string, Sushi.Build.SyntaxTree.EnumDeclarationNode>(StringComparer.Ordinal);
             foreach (var import in module.Imports)
             {
-                var importedPrefix = $"__sushi_module_{SanitizeModuleName(import.Value.BoxName!)}_";
+                var importedPrefix = modulePrefixes[import.Value];
                 foreach (var exported in import.Value.Exports)
                 {
                     var emittedName = importedPrefix + exported.Key;
@@ -109,8 +109,28 @@ public sealed class Transpiler
         };
     }
 
-    private static string SanitizeModuleName(string name) =>
-        Regex.Replace(name, "[^A-Za-z0-9_]", "_");
+    private static Dictionary<LoadedModule, string> AllocateModulePrefixes(
+        IReadOnlyList<LoadedModule> modules,
+        LoadedModule root)
+    {
+        var prefixes = new Dictionary<LoadedModule, string>();
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var module in modules)
+        {
+            if (module == root)
+            {
+                prefixes[module] = "";
+                continue;
+            }
+
+            var baseName = TargetNameAllocator.Normalize(module.BoxName ?? "module", "module").ToLowerInvariant();
+            var candidate = baseName;
+            var suffix = 2;
+            while (!used.Add(candidate)) candidate = baseName + "_" + suffix++;
+            prefixes[module] = candidate + "_";
+        }
+        return prefixes;
+    }
 
     private static IBackendEmitter GetEmitter(TargetLanguage targetLanguage)
     {

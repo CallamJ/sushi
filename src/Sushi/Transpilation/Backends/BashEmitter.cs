@@ -3,6 +3,7 @@ namespace Sushi.Transpilation.Backends;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Sushi.Application;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
 
@@ -28,7 +29,10 @@ public sealed class BashEmitter : IBackendEmitter
     private HashSet<string> _integerArrayVariables = new(StringComparer.Ordinal);
     private Dictionary<string, string> _zshObjectParameterNames = new(StringComparer.Ordinal);
     private Dictionary<string, string> _nativeObjectAliases = new(StringComparer.Ordinal);
-    private bool _captureFunctionResult;
+    private TargetNameAllocator _names = null!;
+    private Dictionary<string, string> _generatedFunctionNames = new(StringComparer.Ordinal);
+    private bool _currentFunctionReturnsValue;
+    private string _currentOutputName = "";
 
     public BashEmitter()
     {
@@ -43,6 +47,8 @@ public sealed class BashEmitter : IBackendEmitter
     public string Emit(IrProgram program, EmitContext context)
     {
         _builder.Clear();
+        _names = new TargetNameAllocator(_zshMode ? TargetLanguage.Zsh : TargetLanguage.Bash, _zshMode);
+        _generatedFunctionNames.Clear();
         _context = context;
         _indent = 0;
         _valueTempId = 0;
@@ -59,7 +65,6 @@ public sealed class BashEmitter : IBackendEmitter
         _integerArrayVariables.Clear();
         _zshObjectParameterNames.Clear();
         _nativeObjectAliases.Clear();
-        _captureFunctionResult = false;
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -81,11 +86,6 @@ public sealed class BashEmitter : IBackendEmitter
         {
             WriteLine("set -euo pipefail");
         }
-        if (program.Statements.OfType<IrFunctionDeclarationStatement>().Any())
-        {
-            WriteLine("__sushi_result=''");
-        }
-
         foreach (var statement in program.Statements)
         {
             EmitStatement(statement, inFunction: false);
@@ -2586,8 +2586,15 @@ __sushi_native_obj_to_json() {
                 if (TryGetObjectReturningCall(initializer, out var objectCall, out var objectFunction))
                 {
                     WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
-                    EmitObjectCallInto(name, objectCall, objectFunction, inFunction);
+                    EmitCallInto(name, objectCall, objectFunction, inFunction);
                     _nativeObjectVariables.Add(name);
+                    break;
+                }
+                if (TryGetReturningCall(initializer, out var valueCall, out var valueFunction))
+                {
+                    WriteLine($"{(inFunction ? "local " : "")}{name}=''");
+                    EmitCallInto(name, valueCall, valueFunction, inFunction);
+                    if (valueFunction.ReturnType.Name == "int") _knownIntegerVariables.Add(name);
                     break;
                 }
                 if (initializer is IrIdentifierExpression objectAlias &&
@@ -2823,6 +2830,8 @@ __sushi_native_obj_to_json() {
 
         var previousFunctionName = _currentFunctionName;
         var previousReturnType = _currentFunctionReturnType;
+        var previousFunctionReturnsValue = _currentFunctionReturnsValue;
+        var previousOutputName = _currentOutputName;
         var previousKnownIntegers = _knownIntegerVariables;
         var previousNativeArrays = _nativeArrayVariables;
         var previousNativeObjects = _nativeObjectVariables;
@@ -2832,6 +2841,10 @@ __sushi_native_obj_to_json() {
         var previousNativeObjectAliases = _nativeObjectAliases;
         _currentFunctionName = statement.Name;
         _currentFunctionReturnType = statement.ReturnType;
+        _currentFunctionReturnsValue = FunctionReturnsValue(statement);
+        _currentOutputName = _currentFunctionReturnsValue
+            ? AllocateFunctionOutputName(statement)
+            : "";
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
         _nativeArrayVariables = new Dictionary<string, string>(StringComparer.Ordinal);
         _nativeObjectVariables = new HashSet<string>(StringComparer.Ordinal);
@@ -2842,7 +2855,7 @@ __sushi_native_obj_to_json() {
 
         var isConstructor = statement.Name.StartsWith("__sushi_new_", StringComparison.Ordinal);
         var returnsObject = !isConstructor && IsNamedObjectType(statement.ReturnType);
-        var argIndex = isConstructor || returnsObject ? 2 : 1;
+        var argIndex = _currentFunctionReturnsValue ? 2 : 1;
         if (isConstructor)
         {
             if (_zshMode)
@@ -2859,9 +2872,15 @@ __sushi_native_obj_to_json() {
         else if (returnsObject)
         {
             if (_zshMode)
-                WriteLine("local __sushi_return_name=\"$1\"");
+                WriteLine($"local {_currentOutputName}=\"$1\"");
             else
-                WriteLine("local -n __sushi_return_object=\"$1\"");
+                WriteLine($"local -n {_currentOutputName}=\"$1\"");
+        }
+        else if (_currentFunctionReturnsValue)
+        {
+            WriteLine(_zshMode
+                ? $"local {_currentOutputName}=\"$1\""
+                : $"local -n {_currentOutputName}=\"$1\"");
         }
         foreach (var parameter in statement.Parameters)
         {
@@ -2928,11 +2947,14 @@ __sushi_native_obj_to_json() {
         if (!EndsWithReturn(statement.Body))
         {
             EmitZshObjectParameterWritebacks();
-            WriteLine("__sushi_result=''");
+            if (_currentFunctionReturnsValue && !isConstructor)
+                EmitFunctionOutputAssignment("''");
             WriteLine("return 0");
         }
         _currentFunctionName = previousFunctionName;
         _currentFunctionReturnType = previousReturnType;
+        _currentFunctionReturnsValue = previousFunctionReturnsValue;
+        _currentOutputName = previousOutputName;
         _knownIntegerVariables = previousKnownIntegers;
         _nativeArrayVariables = previousNativeArrays;
         _nativeObjectVariables = previousNativeObjects;
@@ -2946,6 +2968,32 @@ __sushi_native_obj_to_json() {
 
     private static bool EndsWithReturn(IrBlockStatement block) =>
         block.Statements.LastOrDefault() is IrReturnStatement;
+
+    private static bool FunctionReturnsValue(IrFunctionDeclarationStatement function) =>
+        function.Name.StartsWith("__sushi_new_", StringComparison.Ordinal) ||
+        IsNamedObjectType(function.ReturnType) ||
+        ContainsValueReturn(function.Body);
+
+    private static bool ContainsValueReturn(IrStatement statement) => statement switch
+    {
+        IrReturnStatement { Expression: not null } => true,
+        IrBlockStatement block => block.Statements.Any(ContainsValueReturn),
+        IrIfStatement conditional => ContainsValueReturn(conditional.ThenBlock) ||
+                                   (conditional.ElseBlock != null && ContainsValueReturn(conditional.ElseBlock)),
+        _ => false
+    };
+
+    private string AllocateFunctionOutputName(IrFunctionDeclarationStatement function)
+    {
+        var parameterNames = function.Parameters
+            .Select(parameter => SanitizeVariableName(parameter.Name))
+            .ToHashSet(StringComparer.Ordinal);
+        if (!parameterNames.Contains("out")) return "out";
+
+        var suffix = 2;
+        while (parameterNames.Contains($"out_{suffix}")) suffix++;
+        return $"out_{suffix}";
+    }
 
     private void EmitReturn(IrReturnStatement statement, bool inFunction)
     {
@@ -2974,13 +3022,13 @@ __sushi_native_obj_to_json() {
             {
                 if (_zshMode)
                 {
-                    WriteLine("typeset -gA $__sushi_return_name");
-                    WriteLine($"set -A $__sushi_return_name \"${{(@kv){source}}}\"");
+                    WriteLine($"typeset -gA ${{{_currentOutputName}}}");
+                    WriteLine($"set -A ${{{_currentOutputName}}} \"${{(@kv){source}}}\"");
                 }
                 else
                 {
-                    WriteLine("__sushi_return_object=()");
-                    WriteLine($"for __sushi_key in \"${{!{source}[@]}}\"; do __sushi_return_object[\"$__sushi_key\"]=\"${{{source}[$__sushi_key]}}\"; done");
+                    WriteLine($"{_currentOutputName}=()");
+                    WriteLine($"for _key in \"${{!{source}[@]}}\"; do {_currentOutputName}[\"$_key\"]=\"${{{source}[$_key]}}\"; done");
                 }
                 WriteLine("return 0");
                 return;
@@ -2991,15 +3039,15 @@ __sushi_native_obj_to_json() {
             var value = PrepareValue(statement.Expression, inFunction);
             if (inFunction && _currentFunctionName != null && !_currentFunctionReturnType.IsAnyOrUnknown)
             {
-                WriteLine($"__sushi_result={value}");
+                EmitFunctionOutputAssignment(value);
                 EmitContractCheckForValue(
                     _currentFunctionReturnType,
-                    "\"${__sushi_result:-}\"",
+                    value,
                     $"return value of function '{_currentFunctionName}'");
             }
             else if (inFunction)
             {
-                WriteLine($"__sushi_result={value}");
+                EmitFunctionOutputAssignment(value);
             }
             else
             {
@@ -3008,7 +3056,7 @@ __sushi_native_obj_to_json() {
         }
         else if (inFunction)
         {
-            WriteLine("__sushi_result=''");
+            if (_currentFunctionReturnsValue) EmitFunctionOutputAssignment("''");
         }
 
         WriteLine(inFunction ? "return 0" : "exit 0");
@@ -3031,9 +3079,7 @@ __sushi_native_obj_to_json() {
                     if (intrinsicCall.Arguments.FirstOrDefault() is IrCallExpression directCall &&
                         directCall.Arguments.All(argument => argument.Value is IrLiteralExpression or IrIdentifierExpression))
                     {
-                        _captureFunctionResult = true;
                         var directValue = PrepareValue(directCall, inFunction);
-                        _captureFunctionResult = false;
                         WriteLine(intrinsicCall.Id == IntrinsicId.Println
                             ? $"printf '%s\\n' {directValue}"
                             : $"printf '%s' {directValue}");
@@ -3161,8 +3207,14 @@ __sushi_native_obj_to_json() {
             {
                 if (!_nativeObjectVariables.Contains(name))
                     WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
-                EmitObjectCallInto(name, objectCall, objectFunction, inFunction);
+                EmitCallInto(name, objectCall, objectFunction, inFunction);
                 _nativeObjectVariables.Add(name);
+                return;
+            }
+            if (TryGetReturningCall(assignment.Value, out var valueCall, out var valueFunction))
+            {
+                EmitCallInto(name, valueCall, valueFunction, inFunction);
+                SetKnownInteger(name, valueFunction.ReturnType.Name == "int");
                 return;
             }
             if (assignment.Value is IrArrayLiteralExpression array)
@@ -3233,7 +3285,7 @@ __sushi_native_obj_to_json() {
         _context.Error(AmbiguousShapeCode, "Member assignment requires a statically known native object.");
     }
 
-    private void EmitObjectCallInto(
+    private void EmitCallInto(
         string destination,
         IrCallExpression call,
         IrFunctionDeclarationStatement function,
@@ -3246,10 +3298,12 @@ __sushi_native_obj_to_json() {
             var parameter = index < function.Parameters.Count ? function.Parameters[index] : null;
             if (argument is IrIdentifierExpression identifier && parameter != null && IsNativeObjectType(parameter.DeclaredType))
                 arguments.Add(Escape.BashSingleQuoted(ResolveNativeObjectName(SanitizeVariableName(identifier.Name))));
+            else if (argument is IrConstructionExpression construction && parameter != null && IsNativeObjectType(parameter.DeclaredType))
+                arguments.Add(Escape.BashSingleQuoted(PrepareConstructionReference(construction, inFunction)));
             else
                 arguments.Add(PrepareValue(argument, inFunction));
         }
-        WriteLine($"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)} || {{ __sushi_status=$?; exit \"$__sushi_status\"; }}");
+        WriteLine($"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)} || exit $?");
     }
 
     private bool TryGetObjectReturningCall(
@@ -3270,9 +3324,27 @@ __sushi_native_obj_to_json() {
         return false;
     }
 
+    private bool TryGetReturningCall(
+        IrExpression expression,
+        out IrCallExpression call,
+        out IrFunctionDeclarationStatement function)
+    {
+        call = expression switch
+        {
+            IrCallExpression direct => direct,
+            IrResolvedMethodCallExpression method => method.AsFunctionCall(),
+            IrAdapterCallExpression adapter => adapter.AsFunctionCall(),
+            _ => null!
+        };
+        if (call != null && _functions.TryGetValue(call.Callee, out function!) && FunctionReturnsValue(function))
+            return true;
+        function = null!;
+        return false;
+    }
+
     private string PrepareConstructionReference(IrConstructionExpression construction, bool inFunction)
     {
-        var name = $"__sushi_object_{++_valueTempId}";
+        var name = _names.Generated(TargetNameKind.Variable, "_object" + (++_valueTempId));
         WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
         var arguments = construction.Arguments.Select(argument => PrepareValue(argument.Value, inFunction));
         WriteLine($"{SanitizeFunctionName(construction.ConstructorName)} {Escape.BashSingleQuoted(name)} {string.Join(" ", arguments)}");
@@ -3288,6 +3360,17 @@ __sushi_native_obj_to_json() {
             WriteLine($"typeset -gA ${{{item.Value}}}");
             WriteLine($"set -A ${{{item.Value}}} \"${{(@kv){item.Key}}}\"");
         }
+    }
+
+    private void EmitFunctionOutputAssignment(string value)
+    {
+        if (_zshMode)
+        {
+            WriteLine($": ${{(P){_currentOutputName}::={value}}}");
+            return;
+        }
+
+        WriteLine($"{_currentOutputName}={value}");
     }
 
     private static bool IsNamedObjectType(IrTypeRef type) =>
@@ -3423,16 +3506,18 @@ __sushi_native_obj_to_json() {
             {
                 var callback = PrepareValue(method.Arguments[0].Value, inFunction);
                 WriteLine($"{declaration}-a {name}=()");
-                WriteLine($"for __sushi_item in \"${{{source}[@]}}\"; do");
+                var callbackResult = _names.Generated(TargetNameKind.Variable, "_callback");
+                WriteLine($"{declaration}{callbackResult}=''");
+                WriteLine($"for _item in \"${{{source}[@]}}\"; do");
                 _indent++;
-                WriteLine($"{callback} \"$__sushi_item\"");
+                WriteLine($"{callback} {callbackResult} \"$_item\"");
                 if (method.MethodName == "map")
                 {
-                    WriteLine($"{name}+=(\"${{__sushi_result-}}\")");
+                    WriteLine($"{name}+=(\"${{{callbackResult}-}}\")");
                 }
                 else
                 {
-                    WriteLine($"[[ -n \"${{__sushi_result-}}\" && \"${{__sushi_result-}}\" != false ]] && {name}+=(\"$__sushi_item\")");
+                    WriteLine($"[[ -n \"${{{callbackResult}-}}\" && \"${{{callbackResult}-}}\" != false ]] && {name}+=(\"$_item\")");
                 }
                 _indent--;
                 WriteLine("done");
@@ -3445,10 +3530,12 @@ __sushi_native_obj_to_json() {
                 var seed = method.Arguments.Count > 1 ? PrepareValue(method.Arguments[1].Value, inFunction) : $"\"${{{source}[0]-}}\"";
                 var start = method.Arguments.Count > 1 ? 0 : 1;
                 WriteLine($"{declaration}{name}={seed}");
-                WriteLine($"for ((__sushi_i={start}; __sushi_i<${{#{source}[@]}}; __sushi_i++)); do");
+                var callbackResult = _names.Generated(TargetNameKind.Variable, "_callback");
+                WriteLine($"{declaration}{callbackResult}=''");
+                WriteLine($"for ((_i={start}; _i<${{#{source}[@]}}; _i++)); do");
                 _indent++;
-                WriteLine($"{callback} \"${{{name}-}}\" \"${{{source}[__sushi_i]}}\"");
-                WriteLine($"{name}=\"${{__sushi_result-}}\"");
+                WriteLine($"{callback} {callbackResult} \"${{{name}-}}\" \"${{{source}[_i]}}\"");
+                WriteLine($"{name}=\"${{{callbackResult}-}}\"");
                 _indent--;
                 WriteLine("done");
                 return true;
@@ -3705,6 +3792,13 @@ __sushi_native_obj_to_json() {
             {
                 var arguments = new List<string>();
                 _functions.TryGetValue(call.Callee, out var function);
+                if (function != null && FunctionReturnsValue(function))
+                {
+                    var result = DeclareTemp("''", inFunction);
+                    EmitCallInto(result, call, function, inFunction);
+                    if (_integerReturningFunctions.Contains(call.Callee)) _knownIntegerVariables.Add(result);
+                    return $"\"${{{result}-}}\"";
+                }
                 for (var index = 0; index < call.Arguments.Count; index++)
                 {
                     var argument = call.Arguments[index].Value;
@@ -3750,16 +3844,7 @@ __sushi_native_obj_to_json() {
                     ? $"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)}"
                     : SanitizeFunctionName(call.Callee);
                 WriteLine($"{command} || {{ __sushi_status=$?; exit \"$__sushi_status\"; }}");
-                if (_captureFunctionResult)
-                {
-                    return "\"${__sushi_result-}\"";
-                }
-                var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
-                if (_integerReturningFunctions.Contains(call.Callee))
-                {
-                    _knownIntegerVariables.Add(result);
-                }
-                return $"\"${{{result}-}}\"";
+                return "''";
             }
 
             case IrResolvedMethodCallExpression method:
@@ -4161,7 +4246,7 @@ __sushi_native_obj_to_json() {
 
     private string DeclareTemp(string value, bool inFunction)
     {
-        var name = $"__sushi_value_{++_valueTempId}";
+        var name = _names.Generated(TargetNameKind.Variable, "_tmp" + (++_valueTempId));
         WriteLine($"{(inFunction ? "local " : "")}{name}={value}");
         return name;
     }
@@ -4511,27 +4596,33 @@ __sushi_native_obj_to_json() {
         _builder.Append('\n');
     }
 
-    private static string SanitizeFunctionName(string name)
+    private string SanitizeFunctionName(string name)
     {
-        return name.Replace(".", "_").Replace("-", "_");
+        if (!name.StartsWith("__sushi_", StringComparison.Ordinal))
+            return _names.Source(TargetNameKind.Function, name);
+
+        if (_generatedFunctionNames.TryGetValue(name, out var existing)) return existing;
+
+        var preferred = name switch
+        {
+            var value when value.StartsWith("__sushi_new_", StringComparison.Ordinal) =>
+                value["__sushi_new_".Length..].ToLowerInvariant() + "_new",
+            var value when value.StartsWith("__sushi_method_", StringComparison.Ordinal) =>
+                value["__sushi_method_".Length..].ToLowerInvariant(),
+            var value when value.StartsWith("__sushi_adapter_", StringComparison.Ordinal) =>
+                value["__sushi_adapter_".Length..].ToLowerInvariant(),
+            var value when value.StartsWith("__sushi_lambda_", StringComparison.Ordinal) =>
+                "_lambda_" + value["__sushi_lambda_".Length..],
+            _ => "_s_" + name["__sushi_".Length..]
+        };
+        var allocated = _names.Generated(TargetNameKind.Function, preferred);
+        _generatedFunctionNames[name] = allocated;
+        return allocated;
     }
 
     private string SanitizeVariableName(string name)
     {
-        var sanitized = SanitizeFunctionName(name);
-        if (_zshMode && IsZshReservedVariableName(sanitized))
-        {
-            return $"__sushi_var_{sanitized}";
-        }
-
-        return sanitized;
-    }
-
-    private static bool IsZshReservedVariableName(string name)
-    {
-        return string.Equals(name, "status", StringComparison.Ordinal) ||
-               string.Equals(name, "pipestatus", StringComparison.Ordinal) ||
-               string.Equals(name, "_", StringComparison.Ordinal);
+        return _names.Source(TargetNameKind.Variable, name);
     }
 
     private string EmitIntrinsicCommand(IrIntrinsicCallExpression call)

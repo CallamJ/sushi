@@ -62,6 +62,54 @@ public class EmitterTests
     }
 
     [Fact]
+    public void BashEmitter_PassesValueResultsToTheContextualDestination()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrFunctionDeclarationStatement(
+                "double",
+                new[] { new IrFunctionParameter("value", false, null, IrTypeRef.Primitive("int")) },
+                new IrBlockStatement(new IrStatement[]
+                {
+                    new IrReturnStatement(new IrBinaryExpression(
+                        new IrIdentifierExpression("value"), "*", new IrLiteralExpression(2)))
+                }),
+                IrTypeRef.Primitive("int")),
+            new IrVariableDeclarationStatement("doubled", new IrCallExpression(
+                "double", new IrExpression[] { new IrLiteralExpression(21) }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new BashEmitter().Emit(program, new EmitContext("values.sushi", diagnostics));
+
+        Assert.Contains("local -n out=\"$1\"", script);
+        Assert.Contains("double 'doubled' 21", script);
+        Assert.DoesNotContain("__sushi_result", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ZshEmitter_UsesSupportedIndirectAssignmentForContextualResults()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrFunctionDeclarationStatement(
+                "identity",
+                new[] { new IrFunctionParameter("value", false, null, IrTypeRef.Primitive("string")) },
+                new IrBlockStatement(new IrStatement[] { new IrReturnStatement(new IrIdentifierExpression("value")) }),
+                IrTypeRef.Primitive("string"))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new ZshEmitter().Emit(program, new EmitContext("values.sushi", diagnostics));
+
+        Assert.Contains("local out=\"$1\"", script);
+        Assert.Contains(": ${(P)out::=", script);
+        Assert.DoesNotContain("typeset -n", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
     public void BashEmitter_EmitsStdIoExistsIntrinsic()
     {
         var program = new IrProgram(new IrStatement[]
@@ -419,8 +467,9 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("varargs.sushi", diagnostics));
 
-        Assert.Contains("local head=\"$1\"", script);
-        Assert.Contains("local -a rest=(\"${@:2}\")", script);
+        Assert.Contains("local -n out=\"$1\"", script);
+        Assert.Contains("local head=\"$2\"", script);
+        Assert.Contains("local -a rest=(\"${@:3}\")", script);
         Assert.DoesNotContain("__sushi_array_new", script);
         Assert.Empty(diagnostics);
     }
@@ -482,10 +531,11 @@ public class EmitterTests
         var emitter = new BashEmitter();
         var script = emitter.Emit(program, new EmitContext("contracts.sushi", diagnostics));
 
-        Assert.Contains("local user_name=\"$1\"", script);
-        Assert.Contains("local -i user_age=\"$2\"", script);
-        Assert.Contains("local -i count=\"$3\"", script);
-        Assert.Contains("__sushi_result=", script);
+        Assert.Contains("local -n out=\"$1\"", script);
+        Assert.Contains("local user_name=\"$2\"", script);
+        Assert.Contains("local -i user_age=\"$3\"", script);
+        Assert.Contains("local -i count=\"$4\"", script);
+        Assert.Contains("out=", script);
         Assert.DoesNotContain("__sushi_type_check", script);
         Assert.Empty(diagnostics);
     }

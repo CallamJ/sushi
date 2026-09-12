@@ -27,7 +27,7 @@ public sealed class ModuleTranspilationTests
             });
 
             Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(d => d.Message)));
-            Assert.Contains("sushi_module_Example_Helper_greet", result.EmittedCode);
+            Assert.Contains("example_helper_greet", result.EmittedCode);
             Assert.Single(result.DependencyPaths);
             Assert.Equal(Path.GetFullPath(helperPath), result.DependencyPaths[0]);
         }
@@ -123,8 +123,8 @@ public sealed class ModuleTranspilationTests
             result =>
             {
                 Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
-                Assert.Contains("sushi_module_Example_Model_Person", result.EmittedCode);
-                Assert.Contains("sushi_module_Example_Model_State_Done", result.EmittedCode);
+                Assert.Contains("example_model_person", result.EmittedCode);
+                Assert.Contains("example_model_State_Done", result.EmittedCode);
             },
             target);
     }

@@ -78,7 +78,7 @@ public sealed class ObjectOrientedTranspilationTests
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
         Assert.DoesNotContain("__sushi_json_member", result.EmittedCode);
         Assert.DoesNotContain("__sushi_call_method", result.EmittedCode);
-        Assert.Contains("__sushi_adapter_Person_string", result.EmittedCode);
+        Assert.Contains("person_string", result.EmittedCode);
         Assert.Contains("Priority_High", result.EmittedCode);
     }
 
@@ -123,7 +123,7 @@ public sealed class ObjectOrientedTranspilationTests
             """;
         var result = Transpile(source, TargetLanguage.Bash);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(d => d.Message)));
-        Assert.Contains("__sushi_new_Status_Good", result.EmittedCode);
+        Assert.Contains("status_good_new", result.EmittedCode);
     }
 
     [Fact]

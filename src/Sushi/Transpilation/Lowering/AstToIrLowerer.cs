@@ -582,7 +582,16 @@ public sealed class AstToIrLowerer
     private string CreateTempName(string prefix)
     {
         _tempId++;
-        return $"__sushi_{prefix}_{_tempId}";
+        var readablePrefix = prefix switch
+        {
+            "each_collection" => "each",
+            "each_index" => "index",
+            "destructure_value" => "value",
+            "destructure_nested" => "nested",
+            "switch_value" => "switch",
+            _ => prefix
+        };
+        return $"_{readablePrefix}_{_tempId}";
     }
 
     private IrExpression LowerUnary(UnaryExpressionNode unary)
