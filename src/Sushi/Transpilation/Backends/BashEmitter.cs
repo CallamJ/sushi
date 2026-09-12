@@ -4467,7 +4467,7 @@ __sushi_native_obj_to_json() {
         {
             var name = SanitizeVariableName(identifier.Name);
             return _knownIntegerVariables.Contains(name)
-                ? $"(( {name} != 0 ))"
+                ? "true"
                 : $"[[ -n \"${{{name}:-}}\" ]]";
         }
 
@@ -4478,7 +4478,7 @@ __sushi_native_obj_to_json() {
                 null => "false",
                 bool boolean => boolean ? "true" : "false",
                 sbyte or byte or short or ushort or int or uint or long or ulong =>
-                    Convert.ToInt64(literal.Value, CultureInfo.InvariantCulture) == 0 ? "false" : "true",
+                    "true",
                 string text => text.Length == 0 ? "false" : "true",
                 _ => "true"
             };
@@ -4509,8 +4509,7 @@ __sushi_native_obj_to_json() {
         var value = PrepareValue(expression.Operand, inFunction);
         return type switch
         {
-            "int" => $"(( {value} != 0 ))",
-            "float" => $"[[ ! {value} =~ ^[-+]?0+([.]0*)?$ ]]",
+            "int" or "float" => "true",
             "string" => $"[[ -n {value} ]]",
             _ => "false"
         };
@@ -4826,8 +4825,7 @@ __sushi_native_obj_to_json() {
         var value = EmitValueExpression(expression.Operand);
         return type switch
         {
-            "int" => $"(( {value} != 0 ))",
-            "float" => $"[[ ! {value} =~ ^[-+]?0+([.]0*)?$ ]]",
+            "int" or "float" => "true",
             "string" => $"[[ -n {value} ]]",
             _ => "false"
         };

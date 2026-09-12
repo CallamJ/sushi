@@ -1668,7 +1668,7 @@ function __sushi_call_method {
         return type switch
         {
             "bool" => $"([string]({value}) -eq 'true')",
-            "int" or "float" => $"([double]({value}) -ne 0)",
+            "int" or "float" => "$true",
             "string" => $"(-not [string]::IsNullOrEmpty({value}))",
             _ => "$false"
         };
