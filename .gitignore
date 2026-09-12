@@ -4,3 +4,11 @@ src/*/obj
 **/.idea/
 publish/
 tmp/
+
+# Editor-client build outputs
+editors/vscode/node_modules/
+editors/vscode/out/
+editors/vscode/*.vsix
+editors/jetbrains/.gradle/
+editors/jetbrains/.intellijPlatform/
+editors/jetbrains/build/

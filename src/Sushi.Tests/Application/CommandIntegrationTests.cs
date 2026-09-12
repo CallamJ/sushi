@@ -19,6 +19,7 @@ public sealed class CommandIntegrationTests
         Assert.Contains("check", names);
         Assert.Contains("run", names);
         Assert.Contains("transpile", names);
+        Assert.Contains("lsp", names);
         Assert.DoesNotContain("fmt", names);
     }
 

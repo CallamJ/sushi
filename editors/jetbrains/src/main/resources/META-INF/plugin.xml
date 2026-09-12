@@ -1,0 +1,17 @@
+<idea-plugin>
+  <id>dev.sushi.language</id>
+  <name>Sushi</name>
+  <vendor url="https://github.com/CallamJ/sushi">Sushi</vendor>
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.modules.lang</depends>
+  <depends>com.intellij.modules.lsp</depends>
+  <depends>com.intellij.modules.ultimate</depends>
+  <extensions defaultExtensionNs="com.intellij">
+    <fileType name="Sushi" implementationClass="dev.sushi.jetbrains.SushiFileType" fieldName="INSTANCE" language="Sushi" extensions="sushi" />
+    <lang.parserDefinition language="Sushi" implementationClass="dev.sushi.jetbrains.SushiParserDefinition" />
+    <lang.syntaxHighlighterFactory language="Sushi" implementationClass="dev.sushi.jetbrains.SushiSyntaxHighlighterFactory" />
+    <platform.lsp.integrationProvider implementation="dev.sushi.jetbrains.SushiLspIntegrationProvider" />
+    <applicationService serviceImplementation="dev.sushi.jetbrains.SushiSettings" />
+    <applicationConfigurable parentId="tools" instance="dev.sushi.jetbrains.SushiConfigurable" id="dev.sushi.settings" displayName="Sushi" />
+  </extensions>
+</idea-plugin>

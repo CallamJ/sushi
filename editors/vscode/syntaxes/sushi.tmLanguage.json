@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Sushi",
+  "scopeName": "source.sushi",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#members" }
+  ],
+  "repository": {
+    "comments": { "patterns": [
+      { "match": "//.*$", "name": "comment.line.double-slash.sushi" },
+      { "begin": "/\\*", "end": "\\*/", "name": "comment.block.sushi" }
+    ] },
+    "strings": { "patterns": [
+      { "begin": "\"", "end": "\"", "name": "string.quoted.double.sushi", "patterns": [
+        { "match": "\\\\.", "name": "constant.character.escape.sushi" },
+        { "begin": "\\$\\(", "end": "\\)", "name": "meta.interpolation.sushi", "patterns": [ { "include": "$self" } ] }
+      ] },
+      { "begin": "'", "end": "'", "name": "string.quoted.single.sushi", "patterns": [ { "match": "\\\\.", "name": "constant.character.escape.sushi" } ] }
+    ] },
+    "declarations": { "patterns": [
+      { "match": "\\b(class|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "storage.type.sushi" }, "2": { "name": "entity.name.type.sushi" } } },
+      { "match": "\\b(box)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)", "captures": { "1": { "name": "storage.modifier.sushi" }, "2": { "name": "entity.name.namespace.sushi" } } },
+      { "match": "\\b(use)\\s+(\"[^\"]+\")(?:\\s+(as)\\s+([A-Za-z_][A-Za-z0-9_]*))?", "captures": { "1": { "name": "keyword.control.import.sushi" }, "2": { "name": "string.quoted.double.sushi" }, "3": { "name": "keyword.control.import.sushi" }, "4": { "name": "entity.name.namespace.sushi" } } },
+      { "match": "\\b(?:[A-Za-z_][A-Za-z0-9_]*\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()", "captures": { "1": { "name": "entity.name.function.sushi" } } },
+      { "match": "\\b(var)\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "storage.modifier.sushi" }, "2": { "name": "variable.other.declaration.sushi" } } },
+      { "match": "\\b(string|int|float|bool|array|object)\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "support.type.primitive.sushi" }, "2": { "name": "variable.other.declaration.sushi" } } }
+    ] },
+    "keywords": { "patterns": [
+      { "match": "\\b(box|use|as|export|class|enum|new|return|this|if|else|while|for|in|switch|case|default|also|do|step|break|continue|var)\\b", "name": "keyword.control.sushi" },
+      { "match": "\\b(true|false|null)\\b", "name": "constant.language.sushi" },
+      { "match": "\\b(string|int|float|bool|array|object)\\b", "name": "support.type.primitive.sushi" }
+    ] },
+    "numbers": { "patterns": [ { "match": "\\b[0-9]+(?:\\.[0-9]+)?\\b", "name": "constant.numeric.sushi" } ] },
+    "operators": { "patterns": [ { "match": "(?:==|!=|<=|>=|&&|\\|\\||\\+\\+|--|\\+=|-=|\\*=|/=|->|\\.\\.\\.|\\.\\.|[+*/%!=<>?&|=-])", "name": "keyword.operator.sushi" } ] },
+    "members": { "patterns": [
+      { "match": "(?<=\\.)[A-Za-z_][A-Za-z0-9_]*", "name": "variable.other.property.sushi" },
+      { "match": "\\b[A-Z][A-Za-z0-9_]*\\b", "name": "entity.name.type.sushi" }
+    ] }
+  }
+}

@@ -19,5 +19,6 @@ static class CommandRegistry
         root.Subcommands.Add(RunCommand.Create());
         root.Subcommands.Add(WatchCommand.Create());
         root.Subcommands.Add(BenchmarkCommand.Create());
+        root.Subcommands.Add(LspCommand.Create());
     }
 }

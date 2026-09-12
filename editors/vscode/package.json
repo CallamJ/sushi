@@ -1,0 +1,27 @@
+{
+  "name": "sushi-language",
+  "displayName": "Sushi",
+  "description": "Language support for Sushi shell scripts.",
+  "version": "0.1.0",
+  "publisher": "callamj",
+  "repository": { "type": "git", "url": "https://github.com/CallamJ/sushi.git" },
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:sushi"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [{ "id": "sushi", "aliases": ["Sushi", "sushi"], "extensions": [".sushi"], "configuration": "./language-configuration.json" }],
+    "grammars": [{ "language": "sushi", "scopeName": "source.sushi", "path": "./syntaxes/sushi.tmLanguage.json" }],
+    "configuration": {
+      "title": "Sushi",
+      "properties": {
+        "sushi.serverPath": { "type": "string", "default": "sushi", "description": "Path to the Sushi executable." },
+        "sushi.targetProfile": { "type": "string", "default": "auto", "description": "Target profile used for Sushi diagnostics." },
+        "sushi.trace.server": { "type": "string", "default": "off", "enum": ["off", "messages", "verbose"], "description": "Trace Sushi LSP traffic." }
+      }
+    }
+  },
+  "scripts": { "compile": "tsc -p ./", "package": "npm run compile && npx @vscode/vsce package" },
+  "dependencies": { "vscode-languageclient": "^9.0.1" },
+  "devDependencies": { "@types/node": "^20.0.0", "@types/vscode": "^1.90.0", "typescript": "^5.5.0", "@vscode/vsce": "^3.0.0" }
+}

@@ -150,6 +150,13 @@ See [`docs/language-guide.md`](docs/language-guide.md) for a practical guide
 to Sushi syntax, functions, conditions, standard-library APIs, modules,
 classes, enums, and target selection.
 
+## IDE support
+
+Sushi includes `sushi lsp --stdio` for editor integration. The initial server
+provides diagnostics, completion, hover, semantic highlighting, definitions,
+symbols, references, and rename. See [`docs/ide-support.md`](docs/ide-support.md)
+for generic LSP use plus the VS Code and JetBrains extensions.
+
 ## Quickstart (M4 workflow)
 
 ```powershell
