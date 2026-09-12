@@ -1955,6 +1955,9 @@ public sealed class AstToIrLowerer
         var richEnumValues = new List<IrRichEnumValue>();
         List<IrFunctionParameter>? richConstructorParameters = null;
         IrBlockStatement? richConstructorBody = null;
+        var richMethods = new List<IrClassMethod>();
+        var richAdapters = new List<IrClassMethod>();
+        var richLegacyFunctions = new List<string>();
         foreach (var method in node.Methods)
         {
             var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}";
@@ -1986,15 +1989,24 @@ public sealed class AstToIrLowerer
             _currentFunctionName = previousFunctionName;
             _currentFunctionReturnType = previousReturnType;
 
-            statements.Add(new IrFunctionDeclarationStatement(
+            var loweredMethod = new IrFunctionDeclarationStatement(
                 methodName,
                 parameters,
                 body,
-                IrTypeRef.Any));
+                IrTypeRef.Any);
+            statements.Add(loweredMethod);
+            richMethods.Add(new IrClassMethod(method.Name, parameters.Skip(1), body, loweredMethod.ReturnType, methodName));
+            richLegacyFunctions.Add(methodName);
         }
 
         foreach (var adapter in node.TypeAdapters)
-            statements.Add(LowerAdapter(resolvedTypeName, adapter));
+        {
+            var loweredAdapter = (IrFunctionDeclarationStatement)LowerAdapter(resolvedTypeName, adapter);
+            statements.Add(loweredAdapter);
+            richAdapters.Add(new IrClassMethod(adapter.TargetType, loweredAdapter.Parameters.Skip(1), loweredAdapter.Body,
+                loweredAdapter.ReturnType, loweredAdapter.Name));
+            richLegacyFunctions.Add(loweredAdapter.Name);
+        }
 
         for (var ordinal = 0; ordinal < node.Values.Count; ordinal++)
         {
@@ -2070,7 +2082,8 @@ public sealed class AstToIrLowerer
         else if (richEnumValues.Count == node.Values.Count)
         {
             statements.Insert(0, new IrRichEnumDeclarationStatement(resolvedTypeName, richEnumValues,
-                node.Values.Select(value => $"{resolvedTypeName}_{value.Name}"), richConstructorParameters, richConstructorBody));
+                node.Values.Select(value => $"{resolvedTypeName}_{value.Name}"), richConstructorParameters, richConstructorBody,
+                richMethods, richAdapters, richLegacyFunctions));
         }
 
         return new IrBlockStatement(statements);

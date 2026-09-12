@@ -294,14 +294,22 @@ public sealed class IrRichEnumDeclarationStatement : IrStatement
     public HashSet<string> LegacyVariableNames { get; }
     public List<IrFunctionParameter> ConstructorParameters { get; }
     public IrBlockStatement? ConstructorBody { get; }
+    public List<IrClassMethod> Methods { get; }
+    public List<IrClassMethod> Adapters { get; }
+    public HashSet<string> LegacyFunctionNames { get; }
     public IrRichEnumDeclarationStatement(string name, IEnumerable<IrRichEnumValue> values, IEnumerable<string> legacyVariableNames,
-        IEnumerable<IrFunctionParameter>? constructorParameters = null, IrBlockStatement? constructorBody = null)
+        IEnumerable<IrFunctionParameter>? constructorParameters = null, IrBlockStatement? constructorBody = null,
+        IEnumerable<IrClassMethod>? methods = null, IEnumerable<IrClassMethod>? adapters = null,
+        IEnumerable<string>? legacyFunctionNames = null)
     {
         Name = name;
         Values = values.ToList();
         LegacyVariableNames = legacyVariableNames.ToHashSet(StringComparer.Ordinal);
         ConstructorParameters = constructorParameters?.ToList() ?? new List<IrFunctionParameter>();
         ConstructorBody = constructorBody;
+        Methods = methods?.ToList() ?? new List<IrClassMethod>();
+        Adapters = adapters?.ToList() ?? new List<IrClassMethod>();
+        LegacyFunctionNames = legacyFunctionNames?.ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
     }
 }
 

@@ -97,7 +97,15 @@ public sealed class PowerShellEmitter : IBackendEmitter
             WriteLine("");
             _suppressedVariables.UnionWith(declaration.LegacyVariableNames);
         }
-        foreach (var declaration in CollectRichEnums(program.Statements))
+        var richEnums = CollectRichEnums(program.Statements).ToList();
+        foreach (var declaration in richEnums)
+        {
+            _nativeClassNames[declaration.Name] = _names.Source(TargetNameKind.Type, declaration.Name);
+            _suppressedFunctions.UnionWith(declaration.LegacyFunctionNames);
+            foreach (var method in declaration.Methods.Concat(declaration.Adapters))
+                _nativeMethods[method.LegacyName] = method;
+        }
+        foreach (var declaration in richEnums)
         {
             EmitRichEnum(declaration);
             WriteLine("");
@@ -172,6 +180,16 @@ public sealed class PowerShellEmitter : IBackendEmitter
             EmitClassBody(declaration.ConstructorBody, IrTypeRef.Any);
         _indent--;
         WriteLine("}");
+        foreach (var method in declaration.Methods.Concat(declaration.Adapters))
+        {
+            var returnType = ContainsValueReturn(method.Body) ? EmitPowerShellType(method.ReturnType, declaration.Name) : "[void]";
+            var methodParameters = string.Join(", ", method.Parameters.Select(parameter => EmitPowerShellParameter(parameter, declaration.Name)));
+            WriteLine($"{returnType} {SanitizeMemberName(NativeMethodName(method.Name))}({methodParameters}) {{");
+            _indent++;
+            EmitClassBody(method.Body, method.ReturnType);
+            _indent--;
+            WriteLine("}");
+        }
         foreach (var value in declaration.Values)
         {
             var valuesByField = value.Properties.ToDictionary(property => property.Name, property => property.Value, StringComparer.Ordinal);
