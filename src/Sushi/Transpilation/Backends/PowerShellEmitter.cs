@@ -160,7 +160,10 @@ public sealed class PowerShellEmitter : IBackendEmitter
         var fields = declaration.Values.SelectMany(value => value.Properties)
             .Where(property => !property.Name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal) &&
                                property.Name != NativeObjectMetadata.EnumValue)
-            .Select(property => property.Name).Distinct(StringComparer.Ordinal).ToList();
+            .Select(property => property.Name).Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name == NativeObjectMetadata.EnumName ? 1 :
+                             name == NativeObjectMetadata.EnumOrdinal ? 2 : 0)
+            .ToList();
         foreach (var value in declaration.Values)
             _richEnumValues[$"{declaration.Name}_{value.Name}"] = (typeName, SanitizeMemberName(value.Name));
         WriteLine($"class {typeName} {{");
