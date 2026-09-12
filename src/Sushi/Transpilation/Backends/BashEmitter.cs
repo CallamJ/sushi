@@ -29,6 +29,7 @@ public sealed class BashEmitter : IBackendEmitter
     private Dictionary<string, IrFunctionDeclarationStatement> _functions = new(StringComparer.Ordinal);
     private HashSet<string> _integerArrayVariables = new(StringComparer.Ordinal);
     private Dictionary<string, string> _zshObjectParameterNames = new(StringComparer.Ordinal);
+    private HashSet<string> _zshReadOnlyObjectParameters = new(StringComparer.Ordinal);
     private Dictionary<string, string> _nativeObjectAliases = new(StringComparer.Ordinal);
     private TargetNameAllocator _names = null!;
     private Dictionary<string, string> _generatedFunctionNames = new(StringComparer.Ordinal);
@@ -67,6 +68,7 @@ public sealed class BashEmitter : IBackendEmitter
         _needsDynamicMethodMetadata = program.Statements.Any(ContainsDynamicMethodDispatch);
         _integerArrayVariables.Clear();
         _zshObjectParameterNames.Clear();
+        _zshReadOnlyObjectParameters.Clear();
         _nativeObjectAliases.Clear();
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
@@ -2607,7 +2609,7 @@ __sushi_native_obj_to_json() {
                 }
                 if (TryGetReturningCall(initializer, out var valueCall, out var valueFunction))
                 {
-                    WriteLine($"{(inFunction ? "local " : "")}{name}=''");
+                    if (inFunction) WriteLine($"local {name}");
                     EmitCallInto(name, valueCall, valueFunction, inFunction);
                     if (valueFunction.ReturnType.Name == "int") _knownIntegerVariables.Add(name);
                     break;
@@ -2859,6 +2861,7 @@ __sushi_native_obj_to_json() {
         var previousRecords = _recordVariables;
         var previousIntegerArrays = _integerArrayVariables;
         var previousZshObjectParameters = _zshObjectParameterNames;
+        var previousZshReadOnlyParameters = _zshReadOnlyObjectParameters;
         var previousNativeObjectAliases = _nativeObjectAliases;
         _currentFunctionName = statement.Name;
         _currentFunctionReturnType = statement.ReturnType;
@@ -2872,9 +2875,11 @@ __sushi_native_obj_to_json() {
         _recordVariables = new HashSet<string>(StringComparer.Ordinal);
         _integerArrayVariables = new HashSet<string>(StringComparer.Ordinal);
         _zshObjectParameterNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        _zshReadOnlyObjectParameters = new HashSet<string>(StringComparer.Ordinal);
         _nativeObjectAliases = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var isConstructor = statement.Name.StartsWith("__sushi_new_", StringComparison.Ordinal);
+        var mutatesReceiver = FunctionMutatesReceiver(statement.Body);
         var returnsObject = !isConstructor && IsNamedObjectType(statement.ReturnType);
         var argIndex = _currentFunctionReturnsValue ? 2 : 1;
         if (isConstructor)
@@ -2932,15 +2937,18 @@ __sushi_native_obj_to_json() {
                     {
                         var referenceName = $"{param}_name";
                         WriteLine($"local {referenceName}=\"${argIndex}\"");
-                        WriteLine($"local -A {param}=( \"${{(@kvP){referenceName}}}\" )");
                         _zshObjectParameterNames[param] = referenceName;
+                        if (parameter.Name == "this" && !mutatesReceiver)
+                            _zshReadOnlyObjectParameters.Add(param);
+                        else
+                            WriteLine($"local -A {param}=( \"${{(@kvP){referenceName}}}\" )");
                     }
                     else
                     {
                         WriteLine($"local -n {param}=\"${argIndex}\"");
                     }
                     if (parameter.DeclaredType.Name == "array") _nativeArrayVariables[param] = param;
-                    else _nativeObjectVariables.Add(param);
+                    else if (!_zshReadOnlyObjectParameters.Contains(param)) _nativeObjectVariables.Add(param);
                 }
                 else if (parameter.DeclaredType.Name == "int")
                 {
@@ -2982,6 +2990,7 @@ __sushi_native_obj_to_json() {
         _recordVariables = previousRecords;
         _integerArrayVariables = previousIntegerArrays;
         _zshObjectParameterNames = previousZshObjectParameters;
+        _zshReadOnlyObjectParameters = previousZshReadOnlyParameters;
         _nativeObjectAliases = previousNativeObjectAliases;
         _indent--;
         WriteLine("}");
@@ -3025,7 +3034,6 @@ __sushi_native_obj_to_json() {
                 WriteLine("typeset -gA $this_name");
                 WriteLine("set -A $this_name \"${(@kv)this}\"");
             }
-            WriteLine("return 0");
             return;
         }
         if (inFunction) EmitZshObjectParameterWritebacks();
@@ -3051,7 +3059,6 @@ __sushi_native_obj_to_json() {
                     WriteLine($"{_currentOutputName}=()");
                     WriteLine($"for _key in \"${{!{source}[@]}}\"; do {_currentOutputName}[\"$_key\"]=\"${{{source}[$_key]}}\"; done");
                 }
-                WriteLine("return 0");
                 return;
             }
         }
@@ -3060,10 +3067,9 @@ __sushi_native_obj_to_json() {
             if (inFunction && IsBooleanValueExpression(statement.Expression))
             {
                 EmitBooleanOutput(statement.Expression);
-                WriteLine("return 0");
                 return;
             }
-            var value = PrepareValue(statement.Expression, inFunction);
+                var value = PrepareValue(statement.Expression, inFunction);
             if (inFunction && _currentFunctionName != null && !_currentFunctionReturnType.IsAnyOrUnknown)
             {
                 EmitFunctionOutputAssignment(value);
@@ -3086,7 +3092,7 @@ __sushi_native_obj_to_json() {
             if (_currentFunctionReturnsValue) EmitFunctionOutputAssignment("''");
         }
 
-        WriteLine(inFunction ? "return 0" : "exit 0");
+        if (!inFunction) WriteLine("exit 0");
     }
 
     private void EmitExpressionStatement(IrExpression expression, bool inFunction)
@@ -3398,10 +3404,23 @@ __sushi_native_obj_to_json() {
         if (!_zshMode) return;
         foreach (var item in _zshObjectParameterNames)
         {
+            if (_zshReadOnlyObjectParameters.Contains(item.Key)) continue;
             WriteLine($"typeset -gA ${{{item.Value}}}");
             WriteLine($"set -A ${{{item.Value}}} \"${{(@kv){item.Key}}}\"");
         }
     }
+
+    private static bool FunctionMutatesReceiver(IrStatement statement) => statement switch
+    {
+        IrExpressionStatement { Expression: IrMemberAssignmentExpression { Target: IrIdentifierExpression { Name: "this" } } } => true,
+        IrBlockStatement block => block.Statements.Any(FunctionMutatesReceiver),
+        IrIfStatement conditional => FunctionMutatesReceiver(conditional.ThenBlock) ||
+                                     (conditional.ElseBlock != null && FunctionMutatesReceiver(conditional.ElseBlock)),
+        IrWhileStatement loop => FunctionMutatesReceiver(loop.Body),
+        IrForStatement loop => FunctionMutatesReceiver(loop.Body),
+        IrDoWhileStatement loop => FunctionMutatesReceiver(loop.Body),
+        _ => false
+    };
 
     private void EmitFunctionOutputAssignment(string value)
     {
@@ -3770,7 +3789,13 @@ __sushi_native_obj_to_json() {
                 }
                 if (member.Target is IrIdentifierExpression directIdentifier)
                 {
-                    var directName = ResolveNativeObjectName(SanitizeVariableName(directIdentifier.Name));
+                    var sourceName = SanitizeVariableName(directIdentifier.Name);
+                    var directName = ResolveNativeObjectName(sourceName);
+                    if (_zshMode && _zshReadOnlyObjectParameters.Contains(sourceName) &&
+                        _zshObjectParameterNames.TryGetValue(sourceName, out var readOnlyReference))
+                    {
+                        return "\"${${(@P)" + readOnlyReference + "}[" + EmitObjectSubscript(member.MemberName) + "]-}\"";
+                    }
                     if (_nativeObjectVariables.Contains(directName))
                     {
                         return $"\"${{{directName}[{EmitObjectSubscript(member.MemberName)}]-}}\"";
@@ -3834,7 +3859,7 @@ __sushi_native_obj_to_json() {
                 _functions.TryGetValue(call.Callee, out var function);
                 if (function != null && FunctionReturnsValue(function))
                 {
-                    var result = DeclareTemp("''", inFunction);
+                    var result = DeclareUninitializedTemp(inFunction);
                     EmitCallInto(result, call, function, inFunction);
                     if (_integerReturningFunctions.Contains(call.Callee)) _knownIntegerVariables.Add(result);
                     return $"\"${{{result}-}}\"";
@@ -4143,6 +4168,13 @@ __sushi_native_obj_to_json() {
             case IrMemberAccessExpression { Target: IrIdentifierExpression target } member:
             {
                 var targetName = ResolveNativeObjectName(SanitizeVariableName(target.Name));
+                var sourceName = SanitizeVariableName(target.Name);
+                if (_zshMode && _zshReadOnlyObjectParameters.Contains(sourceName) &&
+                    _zshObjectParameterNames.TryGetValue(sourceName, out var readOnlyReference))
+                {
+                    value = $"${{${{(@P){readOnlyReference}}}[{EmitObjectSubscript(member.MemberName)}]-}}";
+                    return true;
+                }
                 if (_nativeObjectVariables.Contains(targetName))
                 {
                     value = $"${{{targetName}[{EmitObjectSubscript(member.MemberName)}]-}}";
@@ -4393,6 +4425,13 @@ __sushi_native_obj_to_json() {
         return name;
     }
 
+    private string DeclareUninitializedTemp(bool inFunction)
+    {
+        var name = _names.Generated(TargetNameKind.Variable, "_tmp" + (++_valueTempId));
+        if (inFunction) WriteLine($"local {name}");
+        return name;
+    }
+
     private bool IsDefinitelyInteger(IrExpression expression)
     {
         return expression switch
@@ -4543,7 +4582,7 @@ __sushi_native_obj_to_json() {
             IrIdentifierExpression identifier => $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\"",
             IrArrayLiteralExpression array => EmitArrayLiteral(array),
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
-            IrMemberAccessExpression member => $"\"$(__sushi_json_member {EmitValueExpression(member.Target)} {Escape.BashSingleQuoted(member.MemberName)})\"",
+            IrMemberAccessExpression member => EmitMemberValueExpression(member),
             IrIndexExpression index => $"\"$(__sushi_json_index {EmitValueExpression(index.Target)} {EmitValueExpression(index.Index)})\"",
             IrUnaryExpression unary when unary.Operator == "!" =>
                 $"\"$(if {EmitConditionCommand(unary.Operand)}; then printf '%s' 'false'; else printf '%s' 'true'; fi)\"",
@@ -4568,6 +4607,20 @@ __sushi_native_obj_to_json() {
             IrAssignmentExpression assignment => $"$({EmitAssignmentExpression(assignment)}; printf '%s' \"${{{SanitizeVariableName(assignment.Target.Name)}:-}}\")",
             _ => "''"
         };
+    }
+
+    private string EmitMemberValueExpression(IrMemberAccessExpression member)
+    {
+        if (_zshMode && member.Target is IrIdentifierExpression identifier)
+        {
+            var sourceName = SanitizeVariableName(identifier.Name);
+            if (_zshReadOnlyObjectParameters.Contains(sourceName) &&
+                _zshObjectParameterNames.TryGetValue(sourceName, out var referenceName))
+            {
+                return "\"${${(@P)" + referenceName + "}[" + EmitObjectSubscript(member.MemberName) + "]-}\"";
+            }
+        }
+        return $"\"$(__sushi_json_member {EmitValueExpression(member.Target)} {Escape.BashSingleQuoted(member.MemberName)})\"";
     }
 
     private string EmitTruthinessCommand(IrTruthinessExpression expression)
