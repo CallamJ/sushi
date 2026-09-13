@@ -322,6 +322,20 @@ public class AstToIrLowererTests
     }
 
     [Fact]
+    public void Lower_InferredStructuralVariableAcceptsMatchingStructuralResult()
+    {
+        const string source = """
+            var result = std.process.run("echo", ["first"], allowFailure: true)
+            result = std.process.run("echo", ["second"], allowFailure: true)
+            """;
+
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(Parse(source), "test.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
     public void Lower_StaticStructuralFieldMismatch_ReportsDiagnostic()
     {
         const string source = """

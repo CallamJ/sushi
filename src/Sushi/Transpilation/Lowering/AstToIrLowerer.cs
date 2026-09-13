@@ -2919,7 +2919,7 @@ public sealed class AstToIrLowerer
         if (expression is not IrObjectLiteralExpression objectLiteral)
         {
             if (TryInferStaticType(expression, out var actualType) &&
-                !IsTypeAssignable(IrTypeRef.Primitive("object"), actualType))
+                !IsTypeAssignable(expectedType, actualType))
             {
                 AddDiagnostic(
                     mismatchCode,
@@ -3078,6 +3078,28 @@ public sealed class AstToIrLowerer
 
         if (expected.Kind == IrTypeKind.Structural)
         {
+            if (actual.Kind == IrTypeKind.Structural)
+            {
+                foreach (var expectedField in expected.StructuralFields)
+                {
+                    var actualField = actual.StructuralFields
+                        .FirstOrDefault(field => string.Equals(field.Name, expectedField.Name, StringComparison.Ordinal));
+
+                    if (actualField == null)
+                    {
+                        if (!expectedField.Optional)
+                            return false;
+
+                        continue;
+                    }
+
+                    if (!IsTypeAssignable(expectedField.Type, actualField.Type))
+                        return false;
+                }
+
+                return true;
+            }
+
             return actual.Kind == IrTypeKind.Primitive && IsObjectTypeName(actual.Name);
         }
 
