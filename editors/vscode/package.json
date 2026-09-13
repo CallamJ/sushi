@@ -2,7 +2,7 @@
   "name": "sushi-language",
   "displayName": "Sushi",
   "description": "Language support for Sushi shell scripts.",
-  "version": "0.1.1",
+  "version": "0.0.0",
   "publisher": "callamj",
   "repository": { "type": "git", "url": "https://github.com/CallamJ/sushi.git" },
   "engines": { "vscode": "^1.90.0" },

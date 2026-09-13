@@ -59,14 +59,24 @@ pack: restore
     dotnet pack {{cli}} -c {{config}} --no-restore -o publish/nupkg
 
 # Compile and package the VS Code extension as a VSIX
-vscode:
-    npm --prefix editors/vscode run compile
-    cd editors/vscode && ./node_modules/.bin/vsce package --allow-missing-repository --no-dependencies
-    tmp_dir=$(mktemp -d); mkdir -p "$tmp_dir/extension/node_modules"; cp -R editors/vscode/node_modules/vscode-languageclient editors/vscode/node_modules/vscode-jsonrpc editors/vscode/node_modules/vscode-languageserver-protocol editors/vscode/node_modules/vscode-languageserver-types editors/vscode/node_modules/semver editors/vscode/node_modules/minimatch editors/vscode/node_modules/brace-expansion editors/vscode/node_modules/balanced-match "$tmp_dir/extension/node_modules/"; (cd "$tmp_dir" && zip -q -r "$OLDPWD/editors/vscode/sushi-language-0.1.1.vsix" extension/node_modules); rm -rf "$tmp_dir"
+vscode version="0.0.0":
+    (cd editors/vscode && npm ci)
+    bash scripts/package-vscode.sh {{version}} publish/editors
 
 # Build the IntelliJ-based plugin ZIP
-jetbrains:
-    gradle -p editors/jetbrains buildPlugin
+jetbrains version="0.0.0":
+    gradle -p editors/jetbrains -PsushiVersion={{version}} buildPlugin
+
+# Build both editor packages with a shared version
+package-editors version="0.0.0":
+    (cd editors/vscode && npm ci)
+    bash scripts/package-vscode.sh {{version}} publish/editors
+    gradle -p editors/jetbrains -PsushiVersion={{version}} buildPlugin
+    cp editors/jetbrains/build/distributions/*.zip publish/editors/
+
+# Build every supported standalone runtime
+package-all:
+    bash scripts/build.sh win-x64 win-x86 win-arm64 linux-x64 linux-arm64 linux-arm osx-x64 osx-arm64
 
 # Format check / apply
 fmt:
@@ -74,6 +84,27 @@ fmt:
 
 fmt-check:
     dotnet format {{sln}} --verify-no-changes
+
+# Run the checks used before publishing a release
+ready: ci
+    (cd editors/vscode && npm ci && npm run compile)
+    gradle -p editors/jetbrains buildPlugin
+
+# Validate a release version without creating a tag or pushing
+release-check kind="patch":
+    bash scripts/release.sh --check {{kind}}
+
+# Create and push a release tag; GitHub Actions publishes the artifacts
+release kind="patch":
+    bash scripts/release.sh {{kind}}
+
+# Alias matching the publishing workflow vocabulary
+publish kind="patch":
+    bash scripts/release.sh {{kind}}
+
+# Regenerate the compact benchmark section in README.md
+benchmark-readme results:
+    python3 scripts/update-benchmark-readme.py {{results}}
 
 # Remove build output
 clean:

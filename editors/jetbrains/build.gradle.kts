@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.sushi"
-version = "0.1.0"
+version = providers.gradleProperty("sushiVersion").orElse("0.0.0").get()
 
 repositories { mavenCentral(); intellijPlatform { defaultRepositories() } }
 
