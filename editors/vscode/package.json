@@ -2,20 +2,20 @@
   "name": "sushi-language",
   "displayName": "Sushi",
   "description": "Language support for Sushi shell scripts.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "callamj",
   "repository": { "type": "git", "url": "https://github.com/CallamJ/sushi.git" },
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Programming Languages"],
-  "activationEvents": ["onLanguage:sushi", "onCommand:sushi.run", "onCommand:sushi.check", "onCommand:sushi.openGenerated", "onCommand:sushi.restartLanguageServer"],
+  "activationEvents": ["onLanguage:sushi", "onCommand:sushi.runCurrentBuffer", "onCommand:sushi.checkCurrentBuffer", "onCommand:sushi.previewGenerated", "onCommand:sushi.restartLanguageServer"],
   "main": "./out/extension.js",
   "contributes": {
     "languages": [{ "id": "sushi", "aliases": ["Sushi", "sushi"], "extensions": [".sushi"], "configuration": "./language-configuration.json" }],
     "grammars": [{ "language": "sushi", "scopeName": "source.sushi", "path": "./syntaxes/sushi.tmLanguage.json" }],
     "commands": [
-      { "command": "sushi.run", "title": "Sushi: Run Current Buffer", "icon": "$(play)" },
-      { "command": "sushi.check", "title": "Sushi: Check Current Buffer", "icon": "$(check)" },
-      { "command": "sushi.openGenerated", "title": "Sushi: Preview Generated Output", "icon": "$(file-code)" },
+      { "command": "sushi.runCurrentBuffer", "title": "Sushi: Run Current Buffer", "icon": "$(play)" },
+      { "command": "sushi.checkCurrentBuffer", "title": "Sushi: Check Current Buffer", "icon": "$(check)" },
+      { "command": "sushi.previewGenerated", "title": "Sushi: Preview Generated Output", "icon": "$(file-code)" },
       { "command": "sushi.restartLanguageServer", "title": "Sushi: Restart Language Server" }
     ],
     "configuration": {

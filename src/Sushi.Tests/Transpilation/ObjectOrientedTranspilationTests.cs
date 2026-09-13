@@ -35,6 +35,34 @@ public sealed class ObjectOrientedTranspilationTests
         Assert.Contains("count", result.EmittedCode);
     }
 
+    [Fact]
+    public void ClassFieldInitializerTypeMismatch_IsReported()
+    {
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourcePath = "field-type-mismatch.sushi",
+            SourceText = "class Settings { string label = 9 }",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1048");
+    }
+
+    [Fact]
+    public void CommaSeparatedAndChainedClassFields_AreLoweredAsIndependentFields()
+    {
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourcePath = "shared-fields.sushi",
+            SourceText = "class Settings { string dee = \"hello\", dum = \"world\", doo = too = foo = \"many things\" }",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        Assert.All(new[] { "dee", "dum", "doo", "too", "foo" }, field => Assert.Contains(field, result.EmittedCode));
+    }
+
     [Theory]
     [InlineData(TargetLanguage.Bash)]
     [InlineData(TargetLanguage.Zsh)]

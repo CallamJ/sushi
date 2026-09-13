@@ -16,7 +16,11 @@ interface TranspileResult {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-    void startLanguageClient();
+    void startLanguageClient().catch(error => {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`Sushi language server could not start: ${message}`);
+        vscode.window.createOutputChannel("Sushi Language Server").appendLine(message);
+    });
     context.subscriptions.push({ dispose: () => { void client?.stop(); } });
     const checkOutput = vscode.window.createOutputChannel("Sushi Check");
     context.subscriptions.push(checkOutput);
@@ -27,7 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
     });
     context.subscriptions.push(provider);
 
-    context.subscriptions.push(vscode.commands.registerCommand("sushi.check", async (uri?: vscode.Uri) => {
+    context.subscriptions.push(vscode.commands.registerCommand("sushi.checkCurrentBuffer", async (uri?: vscode.Uri) => {
         const result = await transpile(activeSushiDocument(uri));
         checkOutput.clear();
         checkOutput.appendLine(result.success
@@ -35,7 +39,7 @@ export function activate(context: vscode.ExtensionContext): void {
             : result.diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}`).join("\n") || "Sushi check failed.");
         checkOutput.show(true);
     }));
-    context.subscriptions.push(vscode.commands.registerCommand("sushi.openGenerated", async (uri?: vscode.Uri) => {
+    context.subscriptions.push(vscode.commands.registerCommand("sushi.previewGenerated", async (uri?: vscode.Uri) => {
         const result = await transpile(activeSushiDocument(uri));
         if (!result.success) { vscode.window.showErrorMessage("Sushi could not generate output; fix the reported diagnostics first."); return; }
         const name = activeSushiDocument(uri).uri.path.split("/").pop()?.replace(/\.sushi$/, "") ?? "script";
@@ -45,7 +49,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await vscode.languages.setTextDocumentLanguage(preview, result.languageId);
         await vscode.window.showTextDocument(preview, { preview: true, viewColumn: vscode.ViewColumn.Beside });
     }));
-    context.subscriptions.push(vscode.commands.registerCommand("sushi.run", async (uri?: vscode.Uri) => {
+    context.subscriptions.push(vscode.commands.registerCommand("sushi.runCurrentBuffer", async (uri?: vscode.Uri) => {
         const result = await transpile(activeSushiDocument(uri));
         if (!result.success) { vscode.window.showErrorMessage("Sushi could not run this buffer; fix the reported diagnostics first."); return; }
         const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sushi-"));

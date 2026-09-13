@@ -328,6 +328,19 @@ namespace Sushi.Tests
             Assert.NotNull(classDecl.Constructor);
             Assert.Single(classDecl.Methods);
         }
+
+        [Fact]
+        public void TestClassFieldsSupportCommaSeparatedAndChainedInitializers()
+        {
+            var ast = Parse("class Settings { string dee = \"hello\", dum = \"world\", doo = too = foo = \"many things\" }");
+
+            var declaration = Assert.IsType<ClassDeclarationNode>(ast.Declarations[0]);
+            Assert.Equal(new[] { "dee", "dum", "doo", "too", "foo" }, declaration.Fields.Select(field => field.Name));
+            Assert.All(declaration.Fields, field => Assert.Equal("string", field.Type));
+            Assert.Equal("many things", Assert.IsType<LiteralExpressionNode>(declaration.Fields[2].Initializer).Value);
+            Assert.Equal("many things", Assert.IsType<LiteralExpressionNode>(declaration.Fields[3].Initializer).Value);
+            Assert.Equal("many things", Assert.IsType<LiteralExpressionNode>(declaration.Fields[4].Initializer).Value);
+        }
         
         // ═══════════════════════════════════════════════════════════════════
         // FLOAT LITERALS

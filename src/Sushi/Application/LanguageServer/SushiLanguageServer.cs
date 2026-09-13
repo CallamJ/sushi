@@ -341,7 +341,11 @@ internal sealed class SushiLanguageServer
         if (token is null) return null;
         var symbol = model.SymbolAt(offset);
         var text = symbol is null
-            ? (StandardLibrary.TryGetFunction(token.Text, out var builtIn) ? SushiCode($"{builtIn.ReturnType} {builtIn.Name}({string.Join(", ", builtIn.Parameters.Select(parameter => parameter.DisplayName))})") + "\n\n" + builtIn.Documentation : SushiCode(token.Text))
+            ? (SushiSemanticModel.IsTypeName(token.Text)
+                ? SushiCode(token.Text)
+                : StandardLibrary.TryGetFunction(token.Text, out var builtIn)
+                    ? SushiCode($"{builtIn.ReturnType} {builtIn.Name}({string.Join(", ", builtIn.Parameters.Select(parameter => parameter.DisplayName))})") + "\n\n" + builtIn.Documentation
+                    : SushiCode(token.Text))
             : HoverText(model, symbol);
         return new { contents = new { kind = "markdown", value = text }, range = TokenRange(document.Text, token) };
     }
@@ -350,15 +354,50 @@ internal sealed class SushiLanguageServer
     {
         var signature = symbol.Kind switch
         {
-            SushiSymbolKind.Function or SushiSymbolKind.Method => $"{symbol.DeclaredType ?? "void"} {symbol.Name}({string.Join(", ", ParametersFor(model, symbol).Select(parameter => parameter.DeclaredType is null ? parameter.Name : $"{parameter.DeclaredType} {parameter.Name}"))})",
-            SushiSymbolKind.Constructor => $"new({string.Join(", ", ParametersFor(model, symbol).Select(parameter => parameter.DeclaredType is null ? parameter.Name : $"{parameter.DeclaredType} {parameter.Name}"))})",
+            SushiSymbolKind.Function or SushiSymbolKind.Method => $"{symbol.DeclaredType ?? "void"} {symbol.Name}({string.Join(", ", ParametersFor(model, symbol).Select(parameter => ParameterSignature(model, parameter)))})",
+            SushiSymbolKind.Constructor => $"new({string.Join(", ", ParametersFor(model, symbol).Select(parameter => ParameterSignature(model, parameter)))})",
             SushiSymbolKind.Field or SushiSymbolKind.Variable => $"{symbol.DeclaredType ?? "var"} {symbol.Name}",
+            SushiSymbolKind.Parameter => ParameterSignature(model, symbol),
             SushiSymbolKind.Class => $"class {symbol.Name}",
             SushiSymbolKind.Enum => $"enum {symbol.Name}",
             _ => $"{symbol.Kind.ToString().ToLowerInvariant()} {symbol.Name}"
         };
         signature = DeclarationWithInitializer(model, symbol) ?? signature;
         return SushiCode(signature) + DocumentationMarkdown(symbol.Documentation);
+    }
+
+    private static string ParameterSignature(SushiSemanticModel model, SushiSymbol symbol)
+    {
+        var signature = $"{symbol.DeclaredType ?? "var"} {symbol.Name}";
+        var index = symbol.DeclarationIndex + 1;
+        if (index >= model.Tokens.Count || !model.Tokens[index].IsOperator("=")) return signature;
+
+        var valueStart = model.Tokens[index].End;
+        var valueEnd = model.Text.Length;
+        var parentheses = 0;
+        var brackets = 0;
+        var braces = 0;
+        for (var tokenIndex = index + 1; tokenIndex < model.Tokens.Count; tokenIndex++)
+        {
+            var token = model.Tokens[tokenIndex];
+            switch (token.Kind)
+            {
+                case ClassifiedTokenKind.LeftParen: parentheses++; break;
+                case ClassifiedTokenKind.RightParen:
+                    if (parentheses == 0 && brackets == 0 && braces == 0) { valueEnd = token.Start; goto Done; }
+                    parentheses--; break;
+                case ClassifiedTokenKind.LeftBracket: brackets++; break;
+                case ClassifiedTokenKind.RightBracket: brackets--; break;
+                case ClassifiedTokenKind.LeftBrace: braces++; break;
+                case ClassifiedTokenKind.RightBrace: braces--; break;
+                case ClassifiedTokenKind.Comma when parentheses == 0 && brackets == 0 && braces == 0:
+                    valueEnd = token.Start; goto Done;
+            }
+        }
+
+    Done:
+        var value = model.Text[valueStart..valueEnd].Trim();
+        return value.Length == 0 ? signature : $"{signature} = {value}";
     }
 
     private static string? DeclarationWithInitializer(SushiSemanticModel model, SushiSymbol symbol)
@@ -517,7 +556,7 @@ internal sealed class SushiLanguageServer
     private static SignatureInformation? SignatureFor(SushiSemanticModel model, SushiSymbol symbol)
     {
         var parameters = ParametersFor(model, symbol)
-            .Select(parameter => new SignatureParameter(parameter.DeclaredType is null ? parameter.Name : $"{parameter.DeclaredType} {parameter.Name}", symbol.Documentation?.ParameterDocumentation(parameter.Name)))
+            .Select(parameter => new SignatureParameter(ParameterSignature(model, parameter), symbol.Documentation?.ParameterDocumentation(parameter.Name)))
             .ToArray();
         return new SignatureInformation($"{symbol.Name}({string.Join(", ", parameters.Select(parameter => parameter.Label))})", parameters, $"{symbol.Kind}: `{symbol.Name}`" + DocumentationMarkdown(symbol.Documentation));
     }

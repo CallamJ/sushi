@@ -40,6 +40,41 @@ public sealed class LanguageServerTests
     }
 
     [Fact]
+    public async Task Server_DoesNotTreatBuiltInTypesAsConversionFunctionsInHover()
+    {
+        const string source = "class Settings { string dee = \"hello\", d2 = \"hi\" }";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/type-hover.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/type-hover.sushi\"},\"position\":{\"line\":0,\"character\":18}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("\"id\":48", wire);
+        Assert.Contains("string\\n", wire);
+        Assert.DoesNotContain("string(object value)", wire);
+    }
+
+    [Fact]
+    public async Task Server_ShowsParameterTypeInHover()
+    {
+        const string source = "string greet(string name = \"Ada\") { return name }\ngreet(\"Ada\")";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/parameter-hover.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":49,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/parameter-hover.sushi\"},\"position\":{\"line\":0,\"character\":20}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("\"id\":49", wire);
+        Assert.Contains("string name = \\u0022Ada\\u0022", wire);
+    }
+
+    [Fact]
     public async Task Server_ShowsFieldDocumentationForObjectMemberAccess()
     {
         const string source = "class Person {\n    /// The person's display name.\n    string name\n}\nvar person = new Person()\nprintln(person.name)";
@@ -339,6 +374,41 @@ public sealed class LanguageServerTests
         var wire = Encoding.UTF8.GetString(output.ToArray());
         Assert.Contains("var answer = 40 \\u002B 2", wire);
         Assert.Contains("string label = \\u0022first\\u0022 \\u002B\\n        \\u0022 second\\u0022", wire);
+    }
+
+    [Fact]
+    public async Task Server_BindsUntypedConstructorParametersAndPublishesFieldDiagnostics()
+    {
+        const string source = "class Clazz {\n    string dee = 9 d2\n    new(str, str2) {\n        println(str2)\n    }\n}";
+        const string uri = "file:///tmp/class-fields.sushi";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":47,\"method\":\"textDocument/definition\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":3,\"character\":16}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("textDocument/publishDiagnostics", wire);
+        Assert.Contains("SUSHI1000", wire);
+        Assert.Contains("\"id\":47,\"result\":[{\"uri\":\"file:///tmp/class-fields.sushi\",\"range\":{\"start\":{\"line\":2,\"character\":13}", wire);
+    }
+
+    [Fact]
+    public async Task Server_PublishesTypeDiagnosticsForClassFieldInitializers()
+    {
+        const string source = "class Clazz {\n    string dee = 9\n}";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/field-type.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("SUSHI1048", wire);
+        Assert.Contains("initializer for field \\u0027dee\\u0027 expects type \\u0027string\\u0027 but value has type \\u0027int\\u0027", wire);
     }
 
     [Fact]

@@ -237,16 +237,17 @@ public class Parser
         
         while (!Check(ClassifiedTokenKind.RightBrace) && !IsAtEnd())
         {
-            var member = ParseClassMember();
-            
-            if (member is FieldDeclarationNode field)
-                classNode.Fields.Add(field);
-            else if (member is ConstructorDeclarationNode constructor)
-                classNode.Constructor = constructor;
-            else if (member is FunctionDeclarationNode method)
-                classNode.Methods.Add(method);
-            else if (member is TypeAdapterDeclarationNode adapter)
-                classNode.TypeAdapters.Add(adapter);
+            foreach (var member in ParseClassMember())
+            {
+                if (member is FieldDeclarationNode field)
+                    classNode.Fields.Add(field);
+                else if (member is ConstructorDeclarationNode constructor)
+                    classNode.Constructor = constructor;
+                else if (member is FunctionDeclarationNode method)
+                    classNode.Methods.Add(method);
+                else if (member is TypeAdapterDeclarationNode adapter)
+                    classNode.TypeAdapters.Add(adapter);
+            }
         }
         
         Expect(ClassifiedTokenKind.RightBrace);
@@ -257,7 +258,7 @@ public class Parser
         return classNode;
     }
 
-    private AstNode ParseClassMember()
+    private IReadOnlyList<AstNode> ParseClassMember()
     {
         // Skip empty statements (bare semicolons from implicit insertion)
         if (Match(ClassifiedTokenKind.Semicolon))
@@ -268,7 +269,7 @@ public class Parser
         // Check for constructor: new(...)
         if (Check(ClassifiedTokenKind.Keyword, "new"))
         {
-            return ParseConstructor();
+            return new AstNode[] { ParseConstructor() };
         }
         
         // Check for type adapter: string() -> ... or string() { ... }
@@ -286,7 +287,7 @@ public class Parser
                     var identifierName = Current().Text;
                     if (IsTypeName(identifierName))
                     {
-                        return ParseTypeAdapter();
+                        return new AstNode[] { ParseTypeAdapter() };
                     }
                     // Otherwise fall through to ParseFieldOrMethod
                 }
@@ -338,7 +339,7 @@ public class Parser
         return adapter;
     }
 
-    private AstNode ParseFieldOrMethod()
+    private IReadOnlyList<AstNode> ParseFieldOrMethod()
     {
         var start = Current();
         
@@ -362,7 +363,7 @@ public class Parser
                 name = firstToken.Text;
                 type = null;
                 // DON'T consume the ( - ParseMethodDeclaration expects it
-                return ParseMethodDeclaration(type, name, start.Line, start.Column);
+                return new AstNode[] { ParseMethodDeclaration(type, name, start.Line, start.Column) };
             }
             else if (Check(ClassifiedTokenKind.Identifier))
             {
@@ -386,22 +387,75 @@ public class Parser
         if (Check(ClassifiedTokenKind.LeftParen))
         {
             // It's a method - don't consume the (, let ParseMethodDeclaration do it
-            return ParseMethodDeclaration(type, name, start.Line, start.Column);
+            return new AstNode[] { ParseMethodDeclaration(type, name, start.Line, start.Column) };
         }
         
-        // Otherwise it's a field
+        // Otherwise it is one or more fields with a shared type. Commas are
+        // deliberately handled here rather than as general expressions so a
+        // trailing identifier (for example `string name = value extra`) is a
+        // syntax error instead of being silently accepted.
+        var fields = ParseFieldDeclarators(type, name, start.Line, start.Column);
+        ExpectClassFieldTerminator();
+        return fields.Cast<AstNode>().ToArray();
+    }
+
+    private void ExpectClassFieldTerminator()
+    {
+        if (Match(ClassifiedTokenKind.Semicolon) || Check(ClassifiedTokenKind.RightBrace) || IsAtEnd())
+        {
+            return;
+        }
+
+        var token = Current();
+        throw new Exception($"Unexpected token after class field declaration: {token.Kind} \"{token.Text}\" @ {token.Line}:{token.Column}");
+    }
+
+    private List<FieldDeclarationNode> ParseFieldDeclarators(string? type, string firstName, int line, int column)
+    {
+        var fields = new List<FieldDeclarationNode>();
+        ParseFieldDeclarator(type, firstName, line, column, fields);
+
+        while (Match(ClassifiedTokenKind.Comma))
+        {
+            var nameToken = Expect(ClassifiedTokenKind.Identifier);
+            ParseFieldDeclarator(type, nameToken.Text, nameToken.Line, nameToken.Column, fields);
+        }
+
+        return fields;
+    }
+
+    private void ParseFieldDeclarator(
+        string? type,
+        string name,
+        int line,
+        int column,
+        ICollection<FieldDeclarationNode> fields)
+    {
         ExpressionNode? initializer = null;
         if (MatchOperator("="))
         {
             initializer = ParseExpression();
         }
-        
-        ExpectSemicolon();
-        
-        return new FieldDeclarationNode(type, name, start.Line, start.Column)
+
+        var chainedNames = new List<(string Name, int Line, int Column)> { (name, line, column) };
+        while (initializer is BinaryExpressionNode { Operator: "=", Left: IdentifierExpressionNode identifier } assignment)
         {
-            Initializer = initializer
-        };
+            chainedNames.Add((identifier.Name, identifier.Line, identifier.Column));
+            initializer = assignment.Right;
+        }
+
+        // `a = b = value` is field shorthand. Other assignment targets cannot
+        // declare a field and would otherwise produce misleading generated code.
+        if (initializer is BinaryExpressionNode { Operator: "=" })
+            throw new Exception($"Field initializer for '{name}' can only chain identifier assignments.");
+
+        foreach (var chainedName in chainedNames)
+        {
+            fields.Add(new FieldDeclarationNode(type, chainedName.Name, chainedName.Line, chainedName.Column)
+            {
+                Initializer = initializer
+            });
+        }
     }
 
     private FunctionDeclarationNode ParseMethodDeclaration(

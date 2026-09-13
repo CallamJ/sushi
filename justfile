@@ -58,6 +58,16 @@ package *platforms:
 pack: restore
     dotnet pack {{cli}} -c {{config}} --no-restore -o publish/nupkg
 
+# Compile and package the VS Code extension as a VSIX
+vscode:
+    npm --prefix editors/vscode run compile
+    cd editors/vscode && ./node_modules/.bin/vsce package --allow-missing-repository --no-dependencies
+    tmp_dir=$(mktemp -d); mkdir -p "$tmp_dir/extension/node_modules"; cp -R editors/vscode/node_modules/vscode-languageclient editors/vscode/node_modules/vscode-jsonrpc editors/vscode/node_modules/vscode-languageserver-protocol editors/vscode/node_modules/vscode-languageserver-types editors/vscode/node_modules/semver editors/vscode/node_modules/minimatch editors/vscode/node_modules/brace-expansion editors/vscode/node_modules/balanced-match "$tmp_dir/extension/node_modules/"; (cd "$tmp_dir" && zip -q -r "$OLDPWD/editors/vscode/sushi-language-0.1.1.vsix" extension/node_modules); rm -rf "$tmp_dir"
+
+# Build the IntelliJ-based plugin ZIP
+jetbrains:
+    gradle -p editors/jetbrains buildPlugin
+
 # Format check / apply
 fmt:
     dotnet format {{sln}}

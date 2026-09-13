@@ -16,6 +16,7 @@ public sealed class AstToIrLowerer
     private const string UnresolvedNamedCallCode = "SUSHI1017";
     private const string UnsupportedTypeCode = "SUSHI1020";
     private const string ParameterTypeMismatchCode = "SUSHI1021";
+    private const string FieldTypeMismatchCode = "SUSHI1048";
     private const string StructuralFieldMissingCode = "SUSHI1022";
     private const string StructuralFieldTypeMismatchCode = "SUSHI1023";
     private const string ReturnTypeMismatchCode = "SUSHI1024";
@@ -1893,8 +1894,18 @@ public sealed class AstToIrLowerer
         {
             var matchingCtorParameter = ctorSignature.Parameters.FirstOrDefault(p => p.Name == field.Name);
             var fieldInitializer = field.Initializer != null ? LowerExpression(field.Initializer) : null;
-            nativeFields.Add(new IrClassField(field.Name,
-                LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'"), fieldInitializer));
+            var fieldType = LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'");
+            if (fieldInitializer != null)
+            {
+                ValidateExpressionAgainstType(
+                    fieldInitializer,
+                    fieldType,
+                    field.Line,
+                    field.Column,
+                    $"initializer for field '{field.Name}'",
+                    FieldTypeMismatchCode);
+            }
+            nativeFields.Add(new IrClassField(field.Name, fieldType, fieldInitializer));
             if (matchingCtorParameter != null)
             {
                 objectProperties.Add(new IrObjectProperty(field.Name, new IrIdentifierExpression(field.Name)));

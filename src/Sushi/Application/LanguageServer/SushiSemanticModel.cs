@@ -187,15 +187,29 @@ internal sealed class SushiSemanticModel
 
     private static void CollectParameters(ClassifiedToken[] tokens, int start, int end, Scope scope, Action<int, SushiSymbolKind, Scope?, string?, bool> add)
     {
-        for (var index = start; index < end; index++)
+        // Parse comma-delimited parameter segments rather than guessing from
+        // neighbouring tokens. The old rule missed the final untyped parameter
+        // in forms such as `new(first, second)` because it looked beyond the
+        // supplied parameter range for the closing parenthesis.
+        for (var segmentStart = start; segmentStart < end;)
         {
-            if (tokens[index].Kind != ClassifiedTokenKind.Identifier) continue;
-            var previous = index > start ? tokens[index - 1] : null;
-            var next = index + 1 < end ? tokens[index + 1] : null;
-            var name = previous?.Kind == ClassifiedTokenKind.Identifier && IsTypeName(previous.Text) ? index :
-                (previous?.Kind is ClassifiedTokenKind.Comma or ClassifiedTokenKind.LeftParen || index == start) &&
-                (next?.Kind is ClassifiedTokenKind.Comma or ClassifiedTokenKind.RightParen or ClassifiedTokenKind.Operator) ? index : -1;
-            if (name >= 0) add(name, SushiSymbolKind.Parameter, scope, previous?.Kind == ClassifiedTokenKind.Identifier ? previous.Text : null, false);
+            var segmentEnd = segmentStart;
+            while (segmentEnd < end && tokens[segmentEnd].Kind != ClassifiedTokenKind.Comma) segmentEnd++;
+
+            var identifiers = Enumerable.Range(segmentStart, segmentEnd - segmentStart)
+                .Where(index => tokens[index].Kind == ClassifiedTokenKind.Identifier)
+                .ToArray();
+            if (identifiers.Length > 0)
+            {
+                // A typed parameter has a type followed by its name (including
+                // arbitrary user-defined types); otherwise the first identifier
+                // is the untyped parameter name.
+                var name = identifiers.Length > 1 ? identifiers[1] : identifiers[0];
+                var type = identifiers.Length > 1 ? tokens[identifiers[0]].Text : null;
+                add(name, SushiSymbolKind.Parameter, scope, type, false);
+            }
+
+            segmentStart = segmentEnd + 1;
         }
     }
 
