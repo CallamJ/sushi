@@ -245,6 +245,83 @@ public class AstToIrLowererTests
     }
 
     [Fact]
+    public void Lower_InferredFunctionReturnType_IsUsedByCallers()
+    {
+        const string source = """
+            answer() { return 42 }
+            int value = answer()
+            """;
+
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(Parse(source), "test.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        var function = Assert.IsType<IrFunctionDeclarationStatement>(ir.Statements[0]);
+        Assert.Equal("int", function.ReturnType.Name);
+    }
+
+    [Fact]
+    public void Lower_InferredReturnTypes_WidenIntegersAndFloats()
+    {
+        const string source = """
+            number() {
+                if (true) return 1
+                return 2.5
+            }
+            """;
+
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(Parse(source), "test.sushi");
+
+        Assert.DoesNotContain(lowerer.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        var function = Assert.IsType<IrFunctionDeclarationStatement>(ir.Statements[0]);
+        Assert.Equal("float", function.ReturnType.Name);
+    }
+
+    [Fact]
+    public void Lower_IncompatibleInferredReturnTypes_ReportDiagnostic()
+    {
+        const string source = """
+            mixed() {
+                if (true) return "text"
+                return 1
+            }
+            """;
+
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(Parse(source), "test.sushi");
+
+        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1049");
+    }
+
+    [Fact]
+    public void Lower_VoidFunctionRejectsValueReturn()
+    {
+        const string source = "void log() { return 1 }";
+        var lowerer = new AstToIrLowerer();
+        _ = lowerer.Lower(Parse(source), "test.sushi");
+
+        Assert.Contains(lowerer.Diagnostics, d => d.Code == "SUSHI1051");
+    }
+
+    [Fact]
+    public void Lower_VariableTypesAreLockedUnlessDeclaredAny()
+    {
+        const string source = """
+            var inferred = 1
+            inferred = "wrong"
+            any flexible = 1
+            flexible = "allowed"
+        """;
+
+        var lowerer = new AstToIrLowerer();
+        var ir = lowerer.Lower(Parse(source), "test.sushi");
+
+        Assert.IsType<IrExpressionStatement>(ir.Statements[1]);
+        Assert.Single(lowerer.Diagnostics, d => d.Code == "SUSHI1049");
+    }
+
+    [Fact]
     public void Lower_StaticStructuralFieldMismatch_ReportsDiagnostic()
     {
         const string source = """

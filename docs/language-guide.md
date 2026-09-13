@@ -32,7 +32,9 @@ Targets are profiles combining shell and platform:
 ## Values and variables
 
 Sushi supports strings, integers, floats, booleans, arrays, objects, and null.
-Variables are declared with `var` and reassigned without a declaration:
+`var` infers its type from its initializer when possible and keeps that type for
+every later assignment. Use `any` only when a value is intentionally allowed to
+change type:
 
 ```sushi
 var count = 3
@@ -40,6 +42,30 @@ count += 1
 var tags = ["build", "test"]
 var result = { ok: true, code: 0 }
 println(result.code)
+```
+
+```sushi
+var count = 3
+count = 4        // valid
+// count = "four"  // error: count is an int
+
+any response = null
+response = "ready"
+response = 200
+```
+
+Functions can declare a return type, including `void`. When omitted, Sushi
+infers one consistent return type from every return path; integers and floats
+combine as `float`. A function whose returns conflict needs an annotation
+(use `any` for deliberately mixed returns).
+
+```sushi
+double(int value) { return value * 2 } // inferred int
+void announce(string message) { println(message) }
+any parseOrFallback(bool useText) {
+    if (useText) return "fallback"
+    return 0
+}
 ```
 
 Object and array shapes are tracked when they can be determined statically.

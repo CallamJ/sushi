@@ -54,7 +54,7 @@ public class TranspilerTests
     }
 
     [Fact]
-    public void Transpile_ConditionRequiresBool_AndTruthinessRequiresKnownType()
+    public void Transpile_ConditionRequiresBool_AndInferredFunctionResultsSupportTruthiness()
     {
         const string source = """
             var text = "ready"
@@ -72,7 +72,7 @@ public class TranspilerTests
 
         Assert.False(result.Success);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1046");
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1047");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1047");
     }
 
     [Fact]

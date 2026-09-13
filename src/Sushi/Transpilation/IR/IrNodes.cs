@@ -143,6 +143,7 @@ public sealed class IrTypeRef
 
     public static IrTypeRef Any { get; } = new(IrTypeKind.Any, null, null);
     public static IrTypeRef Unknown { get; } = new(IrTypeKind.Unknown, null, null);
+    public static IrTypeRef Void { get; } = new(IrTypeKind.Primitive, "void", null);
 
     public static IrTypeRef Primitive(string name)
     {

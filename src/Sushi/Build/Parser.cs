@@ -564,17 +564,13 @@ public class Parser
             }
             else
             {
-                // Pattern: name = ... → variable without type
-                if (!CheckOperator("="))
-                {
-                    _position = declarationStart;
-                    var expr = ParseExpression();
-                    ExpectSemicolon();
-                    return new ExpressionStatementNode(expr, expr.Line, expr.Column);
-                }
-
-                name = firstToken.Text;
-                type = null;
+                // A bare name is an expression, including assignment.  Only `var`
+                // or `Type name` declares a variable; otherwise a top-level
+                // reassignment would accidentally shadow the previous variable.
+                _position = declarationStart;
+                var expr = ParseExpression();
+                ExpectSemicolon();
+                return new ExpressionStatementNode(expr, expr.Line, expr.Column);
             }
         }
         else

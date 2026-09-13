@@ -32,6 +32,9 @@ public sealed class AstToIrLowerer
     private const string ReadOnlyExportCode = "SUSHI1045";
     private const string BooleanContextCode = "SUSHI1046";
     private const string UnknownTruthinessCode = "SUSHI1047";
+    private const string InferredTypeConflictCode = "SUSHI1049";
+    private const string VoidReturnValueCode = "SUSHI1051";
+    private const string MissingReturnValueCode = "SUSHI1052";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -121,6 +124,7 @@ public sealed class AstToIrLowerer
         _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
         _validateIdentifiers = false;
         CollectFunctionSignatures(program);
+        InferNamedFunctionReturnTypes(program);
         _validateIdentifiers = true;
 
         var output = new IrProgram();
@@ -240,7 +244,7 @@ public sealed class AstToIrLowerer
                 TrackVariableObjectType(declaration.Name, declaration.Type, declaration.Initializer);
                 var initializer = declaration.Initializer != null ? LowerExpression(declaration.Initializer) : null;
                 var declarationName = _functionDepth == 0 ? ResolveTopLevel(declaration.Name) : declaration.Name;
-                TrackVariableType(declaration.Name, declaration.Type, initializer);
+                DeclareVariableType(declaration.Name, declaration.Type, initializer, declaration.Line, declaration.Column);
                 if (declarationName != declaration.Name)
                     _knownVariableTypes[declarationName] = _knownVariableTypes[declaration.Name];
                 _definedVariables.Add(declaration.Name);
@@ -872,8 +876,9 @@ public sealed class AstToIrLowerer
             var assignmentValue = LowerExpression(node.Right);
             if (node.Operator == "=")
             {
-                TrackVariableObjectType(identifier.Name, null, node.Right);
-                TrackVariableType(identifier.Name, null, assignmentValue);
+                ValidateVariableAssignment(identifier.Name, assignmentValue, node.Line, node.Column);
+                if (!_knownObjectTypes.ContainsKey(identifier.Name))
+                    TrackVariableObjectType(identifier.Name, null, node.Right);
             }
 
             return new IrAssignmentExpression(
@@ -1368,7 +1373,10 @@ public sealed class AstToIrLowerer
                     new("this", false, null, IrTypeRef.Primitive("object"))
                 };
                 methodParameters.AddRange(BuildParameterList(method.Parameters, methodName));
-                _functionSignatures[methodName] = new IrFunctionSignature(IrTypeRef.Any, methodParameters);
+                _functionSignatures[methodName] = new IrFunctionSignature(
+                    LowerDeclaredType(method.ReturnType, method.Line, method.Column, $"return type for method '{method.Name}'"),
+                    methodParameters);
+                TrackFunctionReturnType(methodName, method.ReturnType);
             }
             foreach (var adapter in enumDeclaration.TypeAdapters)
             {
@@ -1379,6 +1387,210 @@ public sealed class AstToIrLowerer
             }
         }
     }
+
+    /// <summary>
+    /// Resolves omitted return annotations before lowering bodies.  This deliberately
+    /// operates on named declarations only: lambdas remain dynamically typed until a
+    /// future function-type feature gives them a source-level annotation site.
+    /// </summary>
+    private void InferNamedFunctionReturnTypes(ProgramNode program)
+    {
+        var callables = CollectNamedCallables(program);
+        if (callables.Count == 0) return;
+
+        // Calls may refer to functions declared later (and recursive functions), so
+        // repeatedly refine signatures until no new concrete return type is learned.
+        for (var pass = 0; pass < callables.Count + 2; pass++)
+        {
+            var changed = false;
+            foreach (var callable in callables.Where(candidate => candidate.Node.ReturnType == null))
+            {
+                var inference = InferReturnType(callable);
+                if (inference.Conflict || inference.Type.IsAnyOrUnknown ||
+                    !_functionSignatures.TryGetValue(callable.EmittedName, out var existing) ||
+                    SameType(existing.ReturnType, inference.Type))
+                {
+                    continue;
+                }
+
+                _functionSignatures[callable.EmittedName] = new IrFunctionSignature(inference.Type, existing.Parameters);
+                if (inference.Type.Kind == IrTypeKind.Primitive &&
+                    TryResolveDeclaredObjectType(inference.Type.Name, out var objectType))
+                    _functionObjectReturnTypes[callable.EmittedName] = objectType;
+                changed = true;
+            }
+            if (!changed) break;
+        }
+
+        foreach (var callable in callables)
+        {
+            if (callable.Node.ReturnType != null)
+            {
+                ValidateExplicitReturnShape(callable);
+                continue;
+            }
+
+            var inference = InferReturnType(callable);
+            if (inference.Conflict)
+            {
+                AddDiagnostic(
+                    InferredTypeConflictCode,
+                    $"Cannot infer one return type for function '{callable.DisplayName}'; return values have incompatible types. Add an explicit 'any' return type to allow mixed values.",
+                    callable.Node.Line,
+                    callable.Node.Column);
+            }
+        }
+    }
+
+    private List<NamedCallable> CollectNamedCallables(ProgramNode program)
+    {
+        var result = new List<NamedCallable>();
+        foreach (var raw in program.Declarations)
+        {
+            var declaration = raw is ExportDeclarationNode export ? export.Declaration : raw;
+            switch (declaration)
+            {
+                case FunctionDeclarationNode function:
+                    result.Add(new NamedCallable(ResolveTopLevel(function.Name), function, function.Name));
+                    break;
+                case ClassDeclarationNode @class:
+                {
+                    var typeName = ResolveTopLevel(@class.Name);
+                    result.AddRange(@class.Methods.Select(method => new NamedCallable(
+                        $"{NativeObjectMetadata.MethodPrefix}{typeName}_{method.Name}", method, $"{@class.Name}.{method.Name}")));
+                    break;
+                }
+                case EnumDeclarationNode @enum:
+                {
+                    var typeName = ResolveTopLevel(@enum.Name);
+                    result.AddRange(@enum.Methods.Select(method => new NamedCallable(
+                        $"{NativeObjectMetadata.MethodPrefix}{typeName}_{method.Name}", method, $"{@enum.Name}.{method.Name}")));
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    private ReturnInference InferReturnType(NamedCallable callable)
+    {
+        var locals = new Dictionary<string, IrTypeRef>(StringComparer.Ordinal);
+        if (_functionSignatures.TryGetValue(callable.EmittedName, out var signature))
+            foreach (var parameter in signature.Parameters)
+                locals[parameter.Name] = parameter.DeclaredType;
+
+        var candidates = new List<IrTypeRef>();
+        CollectReturnCandidates(callable.Node.Body, locals, candidates);
+        if (!AlwaysReturns(callable.Node.Body)) candidates.Add(IrTypeRef.Void);
+        return MergeReturnTypes(candidates);
+    }
+
+    private void ValidateExplicitReturnShape(NamedCallable callable)
+    {
+        if (!_functionSignatures.TryGetValue(callable.EmittedName, out var signature)) return;
+        var isVoid = SameType(signature.ReturnType, IrTypeRef.Void);
+        if (isVoid)
+        {
+            return;
+        }
+
+        if (signature.ReturnType.IsAnyOrUnknown) return;
+        if (!AlwaysReturns(callable.Node.Body))
+            AddDiagnostic(MissingReturnValueCode, $"Function '{callable.DisplayName}' can complete without returning a value of type '{DescribeType(signature.ReturnType)}'.", callable.Node.Line, callable.Node.Column);
+    }
+
+    private void CollectReturnCandidates(StatementNode statement, Dictionary<string, IrTypeRef> locals, List<IrTypeRef> candidates)
+    {
+        switch (statement)
+        {
+            case ReturnStatementNode returned:
+                candidates.Add(returned.Expression == null ? IrTypeRef.Void : InferAstExpressionType(returned.Expression, locals));
+                return;
+            case BlockStatementNode block:
+                foreach (var item in block.Statements)
+                {
+                    if (item is VariableDeclarationStatementNode variable && variable.Initializer != null)
+                        locals[variable.Name] = InferAstExpressionType(variable.Initializer, locals);
+                    CollectReturnCandidates(item, locals, candidates);
+                }
+                return;
+            case IfStatementNode conditional:
+                CollectReturnCandidates(conditional.ThenBranch, new Dictionary<string, IrTypeRef>(locals, StringComparer.Ordinal), candidates);
+                if (conditional.ElseBranch != null)
+                    CollectReturnCandidates(conditional.ElseBranch, new Dictionary<string, IrTypeRef>(locals, StringComparer.Ordinal), candidates);
+                return;
+            case WhileStatementNode loop: CollectReturnCandidates(loop.Body, new Dictionary<string, IrTypeRef>(locals, StringComparer.Ordinal), candidates); return;
+            case ForStatementNode loop: CollectReturnCandidates(loop.Body, new Dictionary<string, IrTypeRef>(locals, StringComparer.Ordinal), candidates); return;
+            case DoWhileStatementNode loop: CollectReturnCandidates(loop.Body, new Dictionary<string, IrTypeRef>(locals, StringComparer.Ordinal), candidates); return;
+            case ForRangeStatementNode loop: CollectReturnCandidates(loop.Body, new Dictionary<string, IrTypeRef>(locals, StringComparer.Ordinal), candidates); return;
+            case ForEachStatementNode loop: CollectReturnCandidates(loop.Body, new Dictionary<string, IrTypeRef>(locals, StringComparer.Ordinal), candidates); return;
+        }
+    }
+
+    private IrTypeRef InferAstExpressionType(ExpressionNode expression, IReadOnlyDictionary<string, IrTypeRef> locals)
+    {
+        switch (expression)
+        {
+            case LiteralExpressionNode literal: return InferLiteralType(literal.Value);
+            case InterpolatedStringExpressionNode: return IrTypeRef.Primitive("string");
+            case ArrayLiteralExpressionNode: return IrTypeRef.Primitive("array");
+            case ObjectLiteralExpressionNode: return IrTypeRef.Primitive("object");
+            case ParenthesizedExpressionNode parenthesized: return InferAstExpressionType(parenthesized.Expression, locals);
+            case IdentifierExpressionNode identifier when locals.TryGetValue(identifier.Name, out var type): return type;
+            case ThisExpressionNode: return IrTypeRef.Primitive("object");
+            case NewExpressionNode constructed:
+                return TryResolveDeclaredObjectType(constructed.TypeName, out var objectType) ? IrTypeRef.Primitive(objectType) : IrTypeRef.Unknown;
+            case UnaryExpressionNode { Operator: "!" }: return IrTypeRef.Primitive("bool");
+            case ConditionalExpressionNode conditional:
+                return MergeReturnTypes(new[] { InferAstExpressionType(conditional.TrueExpression, locals), InferAstExpressionType(conditional.FalseExpression, locals) }).Type;
+            case BinaryExpressionNode binary when binary.Operator is "==" or "===" or "!=" or "!==" or "<" or ">" or "<=" or ">=" or "&&" or "||":
+                return IrTypeRef.Primitive("bool");
+            case BinaryExpressionNode binary when binary.Operator is "=" or "+=" or "-=" or "*=" or "/=":
+                return InferAstExpressionType(binary.Right, locals);
+            case BinaryExpressionNode binary:
+                return InferBinaryType(binary, locals);
+            case CallExpressionNode call when TryGetCalleePath(call.Callee, out var callee):
+                if (_intrinsicRegistry.TryResolve(callee, out var intrinsic)) return intrinsic.ReturnType;
+                return _functionSignatures.TryGetValue(ResolveCallable(callee), out var callable) ? callable.ReturnType : IrTypeRef.Unknown;
+            default:
+                return IrTypeRef.Unknown;
+        }
+    }
+
+    private IrTypeRef InferBinaryType(BinaryExpressionNode binary, IReadOnlyDictionary<string, IrTypeRef> locals)
+    {
+        var left = InferAstExpressionType(binary.Left, locals);
+        var right = InferAstExpressionType(binary.Right, locals);
+        if (binary.Operator == "+" && (SameType(left, IrTypeRef.Primitive("string")) || SameType(right, IrTypeRef.Primitive("string"))))
+            return IrTypeRef.Primitive("string");
+        return MergeReturnTypes(new[] { left, right }).Type;
+    }
+
+    private static ReturnInference MergeReturnTypes(IEnumerable<IrTypeRef> candidates)
+    {
+        IrTypeRef? result = null;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.IsAnyOrUnknown) continue;
+            if (result == null) { result = candidate; continue; }
+            if (SameType(result, candidate)) continue;
+            if (SameType(result, IrTypeRef.Primitive("int")) && SameType(candidate, IrTypeRef.Primitive("float"))) { result = IrTypeRef.Primitive("float"); continue; }
+            if (SameType(result, IrTypeRef.Primitive("float")) && SameType(candidate, IrTypeRef.Primitive("int"))) continue;
+            return new ReturnInference(IrTypeRef.Unknown, true);
+        }
+        return new ReturnInference(result ?? IrTypeRef.Unknown, false);
+    }
+
+    private static bool AlwaysReturns(StatementNode statement) => statement switch
+    {
+        ReturnStatementNode => true,
+        BlockStatementNode block when block.Statements.Count > 0 => AlwaysReturns(block.Statements[^1]),
+        IfStatementNode conditional when conditional.ElseBranch != null => AlwaysReturns(conditional.ThenBranch) && AlwaysReturns(conditional.ElseBranch),
+        _ => false
+    };
+
+    private static bool SameType(IrTypeRef left, IrTypeRef right) =>
+        left.Kind == right.Kind && string.Equals(left.Name, right.Name, StringComparison.Ordinal);
 
     private void CollectTypes(ProgramNode program)
     {
@@ -1479,18 +1691,51 @@ public sealed class AstToIrLowerer
         foreach (var item in snapshot) _knownVariableTypes[item.Key] = item.Value;
     }
 
-    private void TrackVariableType(string name, string? declaredType, IrExpression? initializer)
+    private void DeclareVariableType(string name, string? declaredType, IrExpression? initializer, int line, int column)
     {
         var declared = LowerDeclaredType(declaredType, 1, 1, $"variable '{name}'");
-        if (!declared.IsAnyOrUnknown)
+        if (declaredType != null)
         {
             _knownVariableTypes[name] = declared;
+            if (initializer != null && !declared.IsAnyOrUnknown)
+            {
+                ValidateExpressionAgainstType(
+                    initializer,
+                    declared,
+                    line,
+                    column,
+                    $"initializer for variable '{name}'",
+                    InferredTypeConflictCode);
+            }
             return;
         }
+
         if (initializer != null && TryInferStaticType(initializer, out var inferred))
+        {
             _knownVariableTypes[name] = inferred;
+        }
         else
+        {
             _knownVariableTypes.Remove(name);
+        }
+    }
+
+    private void ValidateVariableAssignment(string name, IrExpression value, int line, int column)
+    {
+        if (!_knownVariableTypes.TryGetValue(name, out var expectedType))
+        {
+            if (TryInferStaticType(value, out var inferredType))
+                _knownVariableTypes[name] = inferredType;
+            return;
+        }
+
+        ValidateExpressionAgainstType(
+            value,
+            expectedType,
+            line,
+            column,
+            $"assignment to variable '{name}'",
+            InferredTypeConflictCode);
     }
 
     private void TrackVariableObjectType(string name, string? declaredType, ExpressionNode? initializer)
@@ -1814,6 +2059,7 @@ public sealed class AstToIrLowerer
             parameters.AddRange(BuildParameterList(method.Parameters, methodName));
             var previousVariables = _definedVariables;
             var previousObjectTypes = new Dictionary<string, string>(_knownObjectTypes, StringComparer.Ordinal);
+            var previousVariableTypes = new Dictionary<string, IrTypeRef>(_knownVariableTypes, StringComparer.Ordinal);
             var previousFunctionName = _currentFunctionName;
             var previousReturnType = _currentFunctionReturnType;
             _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal) { "this" };
@@ -1821,10 +2067,11 @@ public sealed class AstToIrLowerer
             foreach (var parameter in parameters)
             {
                 _definedVariables.Add(parameter.Name);
+                _knownVariableTypes[parameter.Name] = parameter.DeclaredType;
             }
             TrackParameterObjectTypes(method.Parameters, parameters.Skip(1).ToList());
             _currentFunctionName = methodName;
-            _currentFunctionReturnType = LowerDeclaredType(method.ReturnType, method.Line, method.Column, $"return type for method '{method.Name}'");
+            _currentFunctionReturnType = _functionSignatures[methodName].ReturnType;
             _functionDepth++;
             var body = method.Body is StatementNode statementBody
                 ? StatementToBlock(statementBody)
@@ -1832,6 +2079,7 @@ public sealed class AstToIrLowerer
             _functionDepth--;
             _definedVariables = previousVariables;
             RestoreKnownObjectTypes(previousObjectTypes);
+            RestoreKnownVariableTypes(previousVariableTypes);
             _currentFunctionName = previousFunctionName;
             _currentFunctionReturnType = previousReturnType;
 
@@ -2007,6 +2255,7 @@ public sealed class AstToIrLowerer
             parameters.AddRange(BuildParameterList(method.Parameters, methodName));
             var previousVariables = _definedVariables;
             var previousObjectTypes = new Dictionary<string, string>(_knownObjectTypes, StringComparer.Ordinal);
+            var previousVariableTypes = new Dictionary<string, IrTypeRef>(_knownVariableTypes, StringComparer.Ordinal);
             var previousFunctionName = _currentFunctionName;
             var previousReturnType = _currentFunctionReturnType;
             _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal) { "this" };
@@ -2014,10 +2263,11 @@ public sealed class AstToIrLowerer
             foreach (var parameter in parameters)
             {
                 _definedVariables.Add(parameter.Name);
+                _knownVariableTypes[parameter.Name] = parameter.DeclaredType;
             }
             TrackParameterObjectTypes(method.Parameters, parameters.Skip(1).ToList());
             _currentFunctionName = methodName;
-            _currentFunctionReturnType = IrTypeRef.Any;
+            _currentFunctionReturnType = _functionSignatures[methodName].ReturnType;
             _functionDepth++;
             var body = method.Body is StatementNode statementBody
                 ? StatementToBlock(statementBody)
@@ -2025,6 +2275,7 @@ public sealed class AstToIrLowerer
             _functionDepth--;
             _definedVariables = previousVariables;
             RestoreKnownObjectTypes(previousObjectTypes);
+            RestoreKnownVariableTypes(previousVariableTypes);
             _currentFunctionName = previousFunctionName;
             _currentFunctionReturnType = previousReturnType;
 
@@ -2032,7 +2283,7 @@ public sealed class AstToIrLowerer
                 methodName,
                 parameters,
                 body,
-                IrTypeRef.Any);
+                _functionSignatures[methodName].ReturnType);
             statements.Add(loweredMethod);
             richMethods.Add(new IrClassMethod(method.Name, parameters.Skip(1), body, loweredMethod.ReturnType, methodName));
             richLegacyFunctions.Add(methodName);
@@ -2450,6 +2701,7 @@ public sealed class AstToIrLowerer
             "array" or "list" => IrTypeRef.Primitive("array"),
             "object" or "map" or "dictionary" or "dict" => IrTypeRef.Primitive("object"),
             "any" or "var" => IrTypeRef.Any,
+            "void" => IrTypeRef.Void,
             _ => null
         };
         if (primitive != null) return primitive;
@@ -2590,11 +2842,24 @@ public sealed class AstToIrLowerer
             return;
         }
 
+        if (SameType(_currentFunctionReturnType, IrTypeRef.Void))
+        {
+            if (expression != null)
+            {
+                AddDiagnostic(
+                    VoidReturnValueCode,
+                    $"Void function '{_currentFunctionName}' cannot return a value.",
+                    line,
+                    column);
+            }
+            return;
+        }
+
         if (expression == null)
         {
             AddDiagnostic(
-                ReturnTypeMismatchCode,
-                $"Return value for function '{_currentFunctionName}' must match type '{DescribeType(_currentFunctionReturnType)}'.",
+                MissingReturnValueCode,
+                $"Function '{_currentFunctionName}' must return a value of type '{DescribeType(_currentFunctionReturnType)}'.",
                 line,
                 column);
             return;
@@ -2840,7 +3105,7 @@ public sealed class AstToIrLowerer
 
     private static bool IsObjectTypeName(string? name) =>
         name != null && name.ToLowerInvariant() is not
-            ("string" or "int" or "float" or "bool" or "array" or "any");
+            ("string" or "int" or "float" or "bool" or "array" or "any" or "void");
 
     private static string DescribeType(IrTypeRef type)
     {
@@ -2916,4 +3181,8 @@ public sealed class AstToIrLowerer
             Parameters = parameters;
         }
     }
+
+    private sealed record NamedCallable(string EmittedName, FunctionDeclarationNode Node, string DisplayName);
+
+    private sealed record ReturnInference(IrTypeRef Type, bool Conflict);
 }
