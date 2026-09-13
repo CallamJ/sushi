@@ -27,6 +27,7 @@ internal object SushiTokenTypes {
     val STRING = IElementType("SUSHI_STRING", SushiLanguage)
     val NUMBER = IElementType("SUSHI_NUMBER", SushiLanguage)
     val COMMENT = IElementType("SUSHI_COMMENT", SushiLanguage)
+    val DOC_COMMENT = IElementType("SUSHI_DOC_COMMENT", SushiLanguage)
     val OPERATOR = IElementType("SUSHI_OPERATOR", SushiLanguage)
 }
 
@@ -39,6 +40,7 @@ private class SushiSyntaxHighlighter : SyntaxHighlighterBase() {
         SushiTokenTypes.STRING -> pack(DefaultLanguageHighlighterColors.STRING)
         SushiTokenTypes.NUMBER -> pack(DefaultLanguageHighlighterColors.NUMBER)
         SushiTokenTypes.COMMENT -> pack(DefaultLanguageHighlighterColors.LINE_COMMENT)
+        SushiTokenTypes.DOC_COMMENT -> pack(DefaultLanguageHighlighterColors.DOC_COMMENT)
         SushiTokenTypes.OPERATOR -> pack(DefaultLanguageHighlighterColors.OPERATION_SIGN)
         else -> TextAttributesKey.EMPTY_ARRAY
     }
@@ -85,9 +87,10 @@ internal class SushiLexer : LexerBase() {
                 TokenType.WHITE_SPACE
             }
             current == '/' && position + 1 < limit && text[position + 1] == '/' -> {
+                val documentation = position + 2 < limit && text[position + 2] == '/'
                 position += 2
                 while (position < limit && text[position] != '\n') position++
-                SushiTokenTypes.COMMENT
+                if (documentation) SushiTokenTypes.DOC_COMMENT else SushiTokenTypes.COMMENT
             }
             current == '/' && position + 1 < limit && text[position + 1] == '*' -> {
                 position += 2

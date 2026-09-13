@@ -55,4 +55,17 @@ public class IntrinsicRegistryTests
         Assert.Equal(IntrinsicId.StringSplit, split.Id);
         Assert.Equal(IntrinsicId.StringMatch, match.Id);
     }
+
+    [Theory]
+    [InlineData("print")]
+    [InlineData("println")]
+    [InlineData("std.fs.writeText")]
+    [InlineData("std.process.sleep")]
+    public void Resolve_SideEffectingIntrinsic_HasVoidReturnType(string name)
+    {
+        var registry = IntrinsicRegistry.CreateDefault();
+
+        Assert.True(registry.TryResolve(name, out var signature));
+        Assert.Equal("void", signature.ReturnType.Name);
+    }
 }

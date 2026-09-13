@@ -37,6 +37,7 @@ internal sealed class SushiSemanticModel
         var tokens = new Lexer(raw).Lex().Where(token => token.Kind != ClassifiedTokenKind.EndOfFile).ToArray();
         var scopes = BuildScopes(tokens);
         var symbols = CollectDeclarations(tokens, scopes);
+        AttachDocumentation(raw, tokens, symbols);
         var byStart = new Dictionary<int, SushiSymbol>();
 
         foreach (var symbol in symbols)
@@ -49,15 +50,34 @@ internal sealed class SushiSemanticModel
         {
             var token = tokens[index];
             if (token.Kind != ClassifiedTokenKind.Identifier || byStart.ContainsKey(token.Start)) continue;
-            var resolved = Resolve(token, index, scopes[index], symbols);
+            var resolved = Resolve(token, index, scopes[index], symbols, tokens);
             if (resolved is not null) byStart[token.Start] = resolved;
         }
 
         return new SushiSemanticModel(text, raw, tokens, symbols, byStart);
     }
 
+    private static void AttachDocumentation(IReadOnlyList<UnclassifiedToken> raw, ClassifiedToken[] tokens, List<SushiSymbol> symbols)
+    {
+        var documentation = DocumentationParser.Parse(string.Concat(raw.Select(token => token.Text)));
+        foreach (var comment in documentation)
+        {
+            var index = Array.FindIndex(tokens, token => token.Start == comment.TargetOffset);
+            if (index < 0) continue;
+            if (tokens[index].IsKeyword("export")) index++;
+            if (index >= tokens.Length) continue;
+            var declaration = tokens[index];
+            if (declaration.IsKeyword("class") || declaration.IsKeyword("enum") || declaration.IsKeyword("var")) index++;
+            else if (declaration.Kind == ClassifiedTokenKind.Identifier && index + 1 < tokens.Length &&
+                     tokens[index + 1].Kind == ClassifiedTokenKind.Identifier) index++;
+            if (index >= tokens.Length) continue;
+            var symbol = symbols.FirstOrDefault(candidate => candidate.Token.Start == tokens[index].Start);
+            if (symbol is not null) symbol.Documentation = comment;
+        }
+    }
+
     public ClassifiedToken? TokenAt(int offset) => Tokens.FirstOrDefault(token =>
-        token.Start <= offset && offset < token.End && token.Kind == ClassifiedTokenKind.Identifier);
+        token.Start <= offset && offset < token.End && (token.Kind == ClassifiedTokenKind.Identifier || token.IsKeyword("new")));
 
     public SushiSymbol? SymbolAt(int offset)
     {
@@ -97,7 +117,9 @@ internal sealed class SushiSemanticModel
 
         void Add(int index, SushiSymbolKind kind, Scope? scope = null, string? declaredType = null, bool exported = false)
         {
-            if (index < 0 || index >= tokens.Length || tokens[index].Kind != ClassifiedTokenKind.Identifier || !declarationIndexes.Add(index)) return;
+            if (index < 0 || index >= tokens.Length ||
+                (tokens[index].Kind != ClassifiedTokenKind.Identifier && !(kind == SushiSymbolKind.Constructor && tokens[index].IsKeyword("new"))) ||
+                !declarationIndexes.Add(index)) return;
             symbols.Add(new SushiSymbol(nextId++, tokens[index], kind, scope ?? scopes[index], index, declaredType, exported));
         }
 
@@ -121,6 +143,17 @@ internal sealed class SushiSemanticModel
 
         for (var index = 0; index < tokens.Length; index++)
         {
+            if (tokens[index].IsKeyword("new") && IsInClassBody(tokens, index) && index + 1 < tokens.Length && tokens[index + 1].Kind == ClassifiedTokenKind.LeftParen)
+            {
+                var close = FindMatching(tokens, index + 1, ClassifiedTokenKind.LeftParen, ClassifiedTokenKind.RightParen);
+                Add(index, SushiSymbolKind.Constructor);
+                if (close > index)
+                {
+                    var bodyScope = close + 1 < scopes.Length && tokens[close + 1].Kind == ClassifiedTokenKind.LeftBrace ? scopes[close + 1] : scopes[index];
+                    CollectParameters(tokens, index + 2, close, bodyScope, Add);
+                }
+                continue;
+            }
             if (tokens[index].Kind != ClassifiedTokenKind.Identifier) continue;
             var openParen = index + 1 < tokens.Length && tokens[index + 1].Kind == ClassifiedTokenKind.LeftParen ? index + 1 : -1;
             var closeParen = openParen >= 0 ? FindMatching(tokens, openParen, ClassifiedTokenKind.LeftParen, ClassifiedTokenKind.RightParen) : -1;
@@ -129,7 +162,10 @@ internal sealed class SushiSemanticModel
             if (isFunction)
             {
                 var kind = IsInClassBody(tokens, index) ? SushiSymbolKind.Method : SushiSymbolKind.Function;
-                Add(index, kind);
+                var returnType = index > 0 && tokens[index - 1].Kind == ClassifiedTokenKind.Identifier && IsTypeName(tokens[index - 1].Text)
+                    ? tokens[index - 1].Text
+                    : "void";
+                Add(index, kind, declaredType: returnType);
                 var bodyScope = closeParen + 1 < scopes.Length && tokens[closeParen + 1].Kind == ClassifiedTokenKind.LeftBrace
                     ? scopes[closeParen + 1] : scopes[index];
                 CollectParameters(tokens, openParen + 1, closeParen, bodyScope, Add);
@@ -182,8 +218,18 @@ internal sealed class SushiSemanticModel
         }
     }
 
-    private static SushiSymbol? Resolve(ClassifiedToken token, int index, Scope scope, IEnumerable<SushiSymbol> symbols)
+    private static SushiSymbol? Resolve(ClassifiedToken token, int index, Scope scope, IEnumerable<SushiSymbol> symbols, IReadOnlyList<ClassifiedToken> tokens)
     {
+        // Member declarations live in their class scope, not the scope where an
+        // arbitrary object is used. Keep their documentation usable for the
+        // common `object.member` form even when receiver type inference is not
+        // available in an incomplete editor buffer.
+        if (index > 0 && tokens[index - 1].Kind == ClassifiedTokenKind.Dot)
+        {
+            var member = symbols.FirstOrDefault(candidate => candidate.Name == token.Text &&
+                candidate.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method && candidate.DeclarationIndex <= index);
+            if (member is not null) return member;
+        }
         SushiSymbol? best = null;
         var bestDistance = int.MaxValue;
         foreach (var candidate in symbols)
@@ -235,7 +281,7 @@ internal sealed class SushiSemanticModel
     }
 
     private static bool IsDeclarationTerminator(ClassifiedToken[] tokens, int index) => index >= tokens.Length ||
-        tokens[index].Kind is ClassifiedTokenKind.Semicolon or ClassifiedTokenKind.Operator or ClassifiedTokenKind.Comma;
+        tokens[index].Kind is ClassifiedTokenKind.Semicolon or ClassifiedTokenKind.RightBrace or ClassifiedTokenKind.Operator or ClassifiedTokenKind.Comma;
     internal static bool IsTypeName(string name) => name is "string" or "int" or "float" or "bool" or "array" or "object" or "any" or "void" ||
         (name.Length > 0 && char.IsUpper(name[0]));
     private static bool IsInClassBody(ClassifiedToken[] tokens, int index)
@@ -265,6 +311,7 @@ internal sealed record SushiSymbol(int Id, ClassifiedToken Token, SushiSymbolKin
 {
     public string Name => Token.Text;
     public object Scope => ScopeHandle;
+    public DocumentationComment? Documentation { get; set; }
 }
 
 internal enum SushiSymbolKind
@@ -276,6 +323,7 @@ internal enum SushiSymbolKind
     EnumMember,
     Function,
     Method,
+    Constructor,
     Field,
     Parameter,
     Variable

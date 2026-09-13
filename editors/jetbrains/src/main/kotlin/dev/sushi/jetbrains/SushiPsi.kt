@@ -25,7 +25,7 @@ class SushiParserDefinition : ParserDefinition {
     override fun createLexer(project: com.intellij.openapi.project.Project?): Lexer = SushiLexer()
     override fun createParser(project: com.intellij.openapi.project.Project?): PsiParser = SushiParser()
     override fun getFileNodeType(): IFileElementType = SushiFileElementType
-    override fun getCommentTokens(): TokenSet = TokenSet.create(SushiTokenTypes.COMMENT)
+    override fun getCommentTokens(): TokenSet = TokenSet.create(SushiTokenTypes.COMMENT, SushiTokenTypes.DOC_COMMENT)
     override fun getStringLiteralElements(): TokenSet = TokenSet.create(SushiTokenTypes.STRING)
     override fun createElement(node: ASTNode): PsiElement = ASTWrapperPsiElement(node)
     override fun createFile(viewProvider: FileViewProvider) = SushiPsiFile(viewProvider)

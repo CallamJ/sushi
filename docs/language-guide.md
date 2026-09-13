@@ -197,3 +197,8 @@ supplied by an explicit external dependency.
 
 More runtime prerequisites and target differences are documented in
 [`runtime-prereqs-and-portability.md`](runtime-prereqs-and-portability.md).
+
+# Documentation
+
+See [Documentation comments](documentation.md) for `///` API docs, tags,
+cross-references, editor help, and Markdown API generation.

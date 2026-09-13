@@ -20,6 +20,7 @@ public sealed class CommandIntegrationTests
         Assert.Contains("run", names);
         Assert.Contains("transpile", names);
         Assert.Contains("lsp", names);
+        Assert.Contains("docs", names);
         Assert.DoesNotContain("fmt", names);
     }
 
@@ -53,6 +54,27 @@ public sealed class CommandIntegrationTests
             Assert.Equal(0, exitCode);
             Assert.True(File.Exists(outputPath));
             Assert.Contains("printf '%s\\n'", File.ReadAllText(outputPath));
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+            File.Delete(outputPath);
+        }
+    }
+
+    [Fact]
+    public async Task Docs_ExportedApi_WritesMarkdown()
+    {
+        var sourcePath = CreateSource("/// Say hello.\n/// @param name Who to greet.\n/// @returns A greeting.\nexport string greet(string name) { return name }");
+        var outputPath = Path.ChangeExtension(sourcePath, ".md");
+        try
+        {
+            var exitCode = await CreateRoot().Parse(new[] { "docs", sourcePath, "--output", outputPath }).InvokeAsync(null, TestContext.Current.CancellationToken);
+            Assert.Equal(0, exitCode);
+            var markdown = File.ReadAllText(outputPath);
+            Assert.Contains("### greet", markdown);
+            Assert.Contains("Say hello.", markdown);
+            Assert.Contains("Who to greet.", markdown);
         }
         finally
         {

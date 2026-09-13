@@ -71,7 +71,7 @@ internal sealed class SushiLanguageServer
                     {
                         positionEncoding = "utf-16",
                         textDocumentSync = 1,
-                        completionProvider = new { triggerCharacters = new[] { "." } },
+                        completionProvider = new { triggerCharacters = new[] { ".", "@", "{" } },
                         hoverProvider = true,
                         definitionProvider = true,
                         typeDefinitionProvider = true,
@@ -87,6 +87,7 @@ internal sealed class SushiLanguageServer
                         documentFormattingProvider = true,
                         documentRangeFormattingProvider = true,
                         codeActionProvider = new { codeActionKinds = new[] { "quickfix", "refactor.extract", "refactor.inline" } },
+                        documentLinkProvider = new { resolveProvider = false },
                         semanticTokensProvider = new
                         {
                             legend = new { tokenTypes = SemanticTokenTypes, tokenModifiers = SemanticTokenModifiers },
@@ -129,6 +130,9 @@ internal sealed class SushiLanguageServer
                 break;
             case "textDocument/definition":
                 await ReplyAsync(id, Definitions(parameters), null, cancellationToken);
+                break;
+            case "textDocument/documentLink":
+                await ReplyAsync(id, DocumentLinks(parameters), null, cancellationToken);
                 break;
             case "textDocument/references":
                 await ReplyAsync(id, References(parameters), null, cancellationToken);
@@ -208,7 +212,18 @@ internal sealed class SushiLanguageServer
         if (!_documents.TryGetValue(uri, out var document)) return;
         var path = PathForUri(uri);
         var result = new Transpiler().Transpile(new TranspileRequest { SourcePath = path, SourceText = document.Text, TargetLanguage = _targetProfile.Shell, TargetProfile = _targetProfile });
-        var diagnostics = result.Diagnostics.Select(d => new
+        var allDiagnostics = result.Diagnostics.ToList();
+        var knownNames = AnalyzeAll().Where(symbol => symbol.Declaration).Select(symbol => symbol.Name).Concat(StandardLibraryNames).Append("string").ToHashSet(StringComparer.Ordinal);
+        foreach (var comment in DocumentationParser.Parse(document.Text))
+        {
+            foreach (var link in DocumentationParser.Links(comment))
+            {
+                var finalName = link.Target.Split('.').Last();
+                if (!knownNames.Contains(finalName))
+                    allDiagnostics.Add(Diagnostic.Warning("SUSHI1109", $"Documentation link '{link.Target}' cannot be resolved.", new SourceSpan(path, comment.Line, comment.Column, comment.Start, comment.End)));
+            }
+        }
+        var diagnostics = allDiagnostics.Select(d => new
         {
             range = Range(document.Text, d.Span.StartOffset, d.Span.EndOffset > d.Span.StartOffset ? d.Span.EndOffset : d.Span.StartOffset + 1, d.Span.Line, d.Span.Column),
             severity = d.Severity == DiagnosticSeverity.Error ? 1 : 2,
@@ -222,19 +237,25 @@ internal sealed class SushiLanguageServer
     private object Completion(JsonElement parameters)
     {
         var document = Document(parameters);
+        var offset = Offset(document.Text, parameters.GetProperty("position"));
+        if (IsDocumentationTagContext(document.Text, offset))
+            return new { isIncomplete = false, items = new[] { "param", "returns", "throws", "deprecated", "example" }.Select(tag => new { label = "@" + tag, kind = 14, detail = "documentation tag" }).ToArray() };
         var items = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
-        foreach (var symbol in AnalyzeAll().Where(symbol => symbol.Uri == document.Uri || symbol.Exported))
-            items[symbol.Name] = new CompletionItem(symbol.Name, CompletionKind(symbol.Kind), symbol.Kind);
+        var localModel = SushiSemanticModel.Create(document.Text);
+        foreach (var symbol in localModel.Symbols)
+            items[symbol.Name] = new CompletionItem(symbol.Name, CompletionKind(symbol.Kind.ToString().ToLowerInvariant()), symbol.Kind.ToString().ToLowerInvariant(), DocumentationMarkdown(symbol.Documentation), symbol.Documentation?.DeprecationMessage);
+        foreach (var symbol in AnalyzeAll().Where(symbol => symbol.Uri != document.Uri && symbol.Exported))
+            items.TryAdd(symbol.Name, new CompletionItem(symbol.Name, CompletionKind(symbol.Kind), symbol.Kind, null, null));
         foreach (var keyword in Keywords)
-            items.TryAdd(keyword, new CompletionItem(keyword, 14, "keyword"));
+            items.TryAdd(keyword, new CompletionItem(keyword, 14, "keyword", null, null));
         foreach (var builtIn in StandardLibrary.Functions)
-            items.TryAdd(builtIn.Name, new CompletionItem(builtIn.Name, 3, $"function → {builtIn.ReturnType}"));
+            items.TryAdd(builtIn.Name, new CompletionItem(builtIn.Name, 3, $"function → {builtIn.ReturnType}", builtIn.Documentation, null));
 
         return new
         {
             isIncomplete = false,
             items = items.Values.OrderBy(item => item.Label, StringComparer.Ordinal)
-                .Select(item => new { label = item.Label, kind = item.Kind, detail = item.Detail }).ToArray()
+                .Select(item => new { label = item.Label, kind = item.Kind, detail = item.Detail, documentation = item.Documentation is null ? null : new { kind = "markdown", value = item.Documentation }, tags = item.Deprecated is null ? null : new[] { 1 } }).ToArray()
         };
     }
 
@@ -259,18 +280,48 @@ internal sealed class SushiLanguageServer
         var token = model.TokenAt(offset);
         if (token is null) return null;
         var symbol = model.SymbolAt(offset);
-        var text = symbol is null ? $"`{token.Text}`" : HoverText(symbol);
+        var text = symbol is null
+            ? (StandardLibrary.TryGetFunction(token.Text, out var builtIn) ? SushiCode($"{builtIn.ReturnType} {builtIn.Name}({string.Join(", ", builtIn.Parameters.Select(parameter => parameter.DisplayName))})") + "\n\n" + builtIn.Documentation : SushiCode(token.Text))
+            : HoverText(model, symbol);
         return new { contents = new { kind = "markdown", value = text }, range = TokenRange(document.Text, token) };
     }
 
-    private static string HoverText(SushiSymbol symbol)
+    private static string HoverText(SushiSemanticModel model, SushiSymbol symbol)
     {
-        var type = symbol.DeclaredType is null ? "" : $": {symbol.DeclaredType}";
-        return $"`{symbol.Kind.ToString().ToLowerInvariant()} {symbol.Name}{type}`";
+        var signature = symbol.Kind switch
+        {
+            SushiSymbolKind.Function or SushiSymbolKind.Method => $"{symbol.DeclaredType ?? "void"} {symbol.Name}({string.Join(", ", ParametersFor(model, symbol).Select(parameter => parameter.DeclaredType is null ? parameter.Name : $"{parameter.DeclaredType} {parameter.Name}"))})",
+            SushiSymbolKind.Constructor => $"new({string.Join(", ", ParametersFor(model, symbol).Select(parameter => parameter.DeclaredType is null ? parameter.Name : $"{parameter.DeclaredType} {parameter.Name}"))})",
+            SushiSymbolKind.Field or SushiSymbolKind.Variable => $"{symbol.DeclaredType ?? "var"} {symbol.Name}",
+            SushiSymbolKind.Class => $"class {symbol.Name}",
+            SushiSymbolKind.Enum => $"enum {symbol.Name}",
+            _ => $"{symbol.Kind.ToString().ToLowerInvariant()} {symbol.Name}"
+        };
+        return SushiCode(signature) + DocumentationMarkdown(symbol.Documentation);
     }
+
+    private static string SushiCode(string text) => $"```sushi\n{text}\n```";
 
     private object Definitions(JsonElement parameters) => LocationsForToken(parameters, declarationsOnly: true);
     private object References(JsonElement parameters) => LocationsForToken(parameters, declarationsOnly: false);
+
+    private object DocumentLinks(JsonElement parameters)
+    {
+        var document = Document(parameters);
+        var links = new List<object>();
+        foreach (var comment in new Tokenizer(document.Text).Tokenize().Where(token => token.Kind == TokenKind.Comment && token.Text.StartsWith("///", StringComparison.Ordinal)))
+        {
+            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(comment.Text, "\\{@link\\s+(?<target>[A-Za-z_][A-Za-z0-9_.]*)(?:\\s+[^}]+)?\\}"))
+            {
+                var targetName = match.Groups["target"].Value.Split('.').Last();
+                var target = AnalyzeAll().FirstOrDefault(symbol => symbol.Declaration && symbol.Name == targetName);
+                if (target is null) continue;
+                var destination = $"{target.Uri}#L{target.Token.Line},{target.Token.Column}";
+                links.Add(new { range = Range(document.Text, comment.Start + match.Index, comment.Start + match.Index + match.Length, comment.Line, comment.Column), target = destination, tooltip = $"Go to {match.Groups["target"].Value}" });
+            }
+        }
+        return links;
+    }
 
     private object LocationsForToken(JsonElement parameters, bool declarationsOnly)
     {
@@ -293,7 +344,7 @@ internal sealed class SushiLanguageServer
         var document = Document(parameters);
         var model = SushiSemanticModel.Create(document.Text);
         return model.Symbols
-            .Select(symbol => new { name = symbol.Name, kind = SymbolKind(symbol.Kind), range = TokenRange(document.Text, symbol.Token), selectionRange = TokenRange(document.Text, symbol.Token) }).ToArray();
+            .Select(symbol => new { name = symbol.Name, detail = symbol.Documentation?.Summary ?? "", kind = SymbolKind(symbol.Kind), range = TokenRange(document.Text, symbol.Token), selectionRange = TokenRange(document.Text, symbol.Token) }).ToArray();
     }
 
     private object DocumentHighlights(JsonElement parameters)
@@ -343,7 +394,9 @@ internal sealed class SushiLanguageServer
         var activeParameter = ActiveParameter(model.Tokens, open, offset);
         return new
         {
-            signatures = new[] { new { label = signature.Label, documentation = new { kind = "markdown", value = signature.Documentation }, parameters = signature.Parameters.Select(parameter => new { label = parameter }).ToArray() } },
+            signatures = new[] { new { label = signature.Label, documentation = new { kind = "markdown", value = signature.Documentation }, parameters = signature.Parameters.Select(parameter => parameter.Documentation is null
+                ? (object)new { label = parameter.Label }
+                : new { label = parameter.Label, documentation = new { kind = "markdown", value = parameter.Documentation } }).ToArray() } },
             activeSignature = 0,
             activeParameter = Math.Min(activeParameter, Math.Max(0, signature.Parameters.Length - 1))
         };
@@ -388,17 +441,17 @@ internal sealed class SushiLanguageServer
     private static SignatureInformation? SignatureFor(SushiSemanticModel model, SushiSymbol symbol)
     {
         var parameters = ParametersFor(model, symbol)
-            .Select(parameter => parameter.DeclaredType is null ? parameter.Name : $"{parameter.DeclaredType} {parameter.Name}")
+            .Select(parameter => new SignatureParameter(parameter.DeclaredType is null ? parameter.Name : $"{parameter.DeclaredType} {parameter.Name}", symbol.Documentation?.ParameterDocumentation(parameter.Name)))
             .ToArray();
-        return new SignatureInformation($"{symbol.Name}({string.Join(", ", parameters)})", parameters, $"{symbol.Kind}: `{symbol.Name}`");
+        return new SignatureInformation($"{symbol.Name}({string.Join(", ", parameters.Select(parameter => parameter.Label))})", parameters, $"{symbol.Kind}: `{symbol.Name}`" + DocumentationMarkdown(symbol.Documentation));
     }
 
     private static SignatureInformation? BuiltInSignature(string name)
     {
         if (!StandardLibrary.TryGetFunction(name, out var function)) return null;
-        var parameters = function.Parameters.Select(parameter => parameter.DisplayName).ToArray();
+        var parameters = function.Parameters.Select(parameter => new SignatureParameter(parameter.DisplayName, null)).ToArray();
         return new SignatureInformation(
-            $"{function.Name}({string.Join(", ", parameters)})",
+            $"{function.Name}({string.Join(", ", parameters.Select(parameter => parameter.Label))})",
             parameters,
             $"{function.Documentation}\n\nReturns `{function.ReturnType}`.");
     }
@@ -489,7 +542,41 @@ internal sealed class SushiLanguageServer
             actions.Add(new { title = $"Inline '{inlineName}'", kind = "refactor.inline", edit = inlineEdit, isPreferred = true });
         if (TryExtractVariable(document, model, start, end, out var extractEdit, out var extractName))
             actions.Add(new { title = $"Extract variable '{extractName}'", kind = "refactor.extract", edit = extractEdit, isPreferred = true });
+        if (TryGenerateDocumentation(document, model, start, out var documentationEdit, out var documentationName))
+            actions.Add(new { title = $"Generate documentation for '{documentationName}'", kind = "quickfix", edit = documentationEdit });
+        if (TryAddMissingParameterDocumentation(document, model, start, out var parametersEdit, out var parameterName))
+            actions.Add(new { title = $"Document parameter '{parameterName}'", kind = "quickfix", edit = parametersEdit });
         return actions;
+    }
+
+    private static bool TryGenerateDocumentation(OpenDocument document, SushiSemanticModel model, int offset, out object edit, out string name)
+    {
+        edit = null!;
+        name = "";
+        var symbol = model.SymbolAt(offset);
+        if (symbol is null || symbol.Documentation is not null || symbol.Kind is SushiSymbolKind.Parameter or SushiSymbolKind.Variable or SushiSymbolKind.Namespace or SushiSymbolKind.Module) return false;
+        var parameters = symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method ? ParametersFor(model, symbol).ToArray() : Array.Empty<SushiSymbol>();
+        var text = new StringBuilder("/// TODO: Describe ").Append(symbol.Name).Append(".\n");
+        foreach (var parameter in parameters) text.Append("/// @param ").Append(parameter.Name).Append(" TODO.\n");
+        if (symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method) text.Append("/// @returns TODO.\n");
+        var insertion = LineStart(document.Text, symbol.Token.Start);
+        edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = text.ToString() } } } };
+        name = symbol.Name;
+        return true;
+    }
+
+    private static bool TryAddMissingParameterDocumentation(OpenDocument document, SushiSemanticModel model, int offset, out object edit, out string parameterName)
+    {
+        edit = null!;
+        parameterName = "";
+        var symbol = model.SymbolAt(offset);
+        if (symbol?.Documentation is null || symbol.Kind is not (SushiSymbolKind.Function or SushiSymbolKind.Method)) return false;
+        var missing = ParametersFor(model, symbol).FirstOrDefault(parameter => symbol.Documentation.ParameterDocumentation(parameter.Name) is null);
+        if (missing is null) return false;
+        var insertion = symbol.Documentation.End;
+        edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = $"\n/// @param {missing.Name} TODO." } } } };
+        parameterName = missing.Name;
+        return true;
     }
 
     private static bool TryInlineVariable(OpenDocument document, SushiSemanticModel model, int offset, out object edit, out string name)
@@ -822,6 +909,23 @@ internal sealed class SushiLanguageServer
     private static string PathForUri(string uri) => Uri.TryCreate(uri, UriKind.Absolute, out var parsed) && parsed.IsFile ? parsed.LocalPath : uri;
     private static bool IsIdentifier(string value) => value.Length > 0 && (char.IsLetter(value[0]) || value[0] == '_') && value.All(character => char.IsLetterOrDigit(character) || character == '_');
     private static bool IsKeyword(string value) => Keywords.Contains(value);
+    private static string DocumentationMarkdown(DocumentationComment? documentation)
+    {
+        if (documentation is null) return "";
+        string Render(string text) => System.Text.RegularExpressions.Regex.Replace(text, "\\{@link\\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\\s+([^}]+))?\\}", match => $"`{(match.Groups[2].Success ? match.Groups[2].Value.Trim() : match.Groups[1].Value)}`");
+        var text = new StringBuilder();
+        if (!String.IsNullOrWhiteSpace(documentation.Body)) text.Append(Render(documentation.Body));
+        if (documentation.ReturnsDocumentation is { Length: > 0 } returns) text.Append("\n\n**Returns:** ").Append(Render(returns));
+        if (documentation.DeprecationMessage is { Length: > 0 } deprecated) text.Append("\n\n> **Deprecated:** ").Append(Render(deprecated));
+        foreach (var throws in documentation.TagsNamed("throws")) text.Append("\n\n**Throws:** ").Append(Render(throws.Description));
+        foreach (var example in documentation.TagsNamed("example")) text.Append("\n\n**Example**\n```sushi\n").Append(example.Description).Append("\n```");
+        return text.Length == 0 ? "" : "\n\n" + text;
+    }
+    private static bool IsDocumentationTagContext(string text, int offset)
+    {
+        var start = LineStart(text, offset);
+        return text[start..Math.Clamp(offset, start, text.Length)].TrimStart().StartsWith("/// @", StringComparison.Ordinal);
+    }
     private static int SymbolKind(string kind) => kind switch { "class" => 5, "enum" => 10, "function" => 12, "module" => 2, _ => 13 };
     private static int SymbolKind(SushiSymbolKind kind) => kind switch
     {
@@ -831,6 +935,7 @@ internal sealed class SushiLanguageServer
         SushiSymbolKind.EnumMember => 22,
         SushiSymbolKind.Function => 12,
         SushiSymbolKind.Method => 6,
+        SushiSymbolKind.Constructor => 9,
         SushiSymbolKind.Field => 8,
         SushiSymbolKind.Parameter => 26,
         _ => 13
@@ -869,8 +974,9 @@ internal sealed class SushiLanguageServer
     }
 
     private sealed record OpenDocument(string Uri, string Text, int Version);
-    private sealed record SignatureInformation(string Label, string[] Parameters, string Documentation);
-    private sealed record CompletionItem(string Label, int Kind, string Detail);
+    private sealed record SignatureInformation(string Label, SignatureParameter[] Parameters, string Documentation);
+    private sealed record SignatureParameter(string Label, string? Documentation);
+    private sealed record CompletionItem(string Label, int Kind, string Detail, string? Documentation, string? Deprecated);
     private sealed record SymbolOccurrence(string Uri, ClassifiedToken Token, string Name, string Kind, bool Declaration, bool Exported);
     private static readonly string[] Keywords = ["box", "use", "class", "new", "return", "this", "if", "else", "while", "for", "break", "continue", "true", "false", "null", "var", "switch", "case", "default", "also", "do", "step", "enum", "in", "export", "as"];
     private static readonly StandardLibraryCatalog StandardLibrary = StandardLibraryCatalog.CreateDefault();

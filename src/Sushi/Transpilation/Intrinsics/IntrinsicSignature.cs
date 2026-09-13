@@ -56,6 +56,15 @@ public sealed class IntrinsicSignature
 
     private static IrTypeRef DefaultReturnType(IntrinsicId id) => id switch
     {
+        // These operations are intentionally statement-oriented. They either
+        // perform a side effect or terminate the process and must not be
+        // presented as producing an arbitrary object in source tooling.
+        IntrinsicId.Print or IntrinsicId.Println or IntrinsicId.IoWriteText or
+        IntrinsicId.EnvSet or IntrinsicId.EnvUnset or IntrinsicId.ProcessExit or
+        IntrinsicId.ProcessFail or IntrinsicId.OsChdir or IntrinsicId.ProcessSleep or
+        IntrinsicId.ConsoleError or IntrinsicId.FsCreateDirectory or IntrinsicId.FsRemove or
+        IntrinsicId.FsCopy or IntrinsicId.FsMove or IntrinsicId.ArchiveZip or
+        IntrinsicId.ArchiveUnzip or IntrinsicId.HttpDownload => IrTypeRef.Primitive("void"),
         IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or
         IntrinsicId.StringIsMatch or IntrinsicId.IoExists or IntrinsicId.EnvHas => IrTypeRef.Primitive("bool"),
         IntrinsicId.StringSplit or IntrinsicId.ProcessArgs or IntrinsicId.FsGlob => IrTypeRef.Primitive("array"),

@@ -13,6 +13,7 @@
   ],
   "repository": {
     "comments": { "patterns": [
+      { "match": "///.*$", "name": "comment.line.documentation.sushi" },
       { "match": "//.*$", "name": "comment.line.double-slash.sushi" },
       { "begin": "/\\*", "end": "\\*/", "name": "comment.block.sushi" }
     ] },

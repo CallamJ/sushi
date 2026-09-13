@@ -9,6 +9,79 @@ using Xunit;
 public sealed class LanguageServerTests
 {
     [Fact]
+    public async Task Server_ShowsDocumentationForConstructors()
+    {
+        const string source = "class Person {\n    /// Creates a person.\n    /// @param name Initial name.\n    new(string name) {}\n}";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/constructor-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":28,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/constructor-docs.sushi\"},\"position\":{\"line\":3,\"character\":5}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("Creates a person.", wire);
+        Assert.Contains("new(string name)", wire);
+    }
+
+    [Fact]
+    public async Task Server_ShowsBuiltInDocumentationForPrintln()
+    {
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/println-docs.sushi\",\"version\":1,\"text\":\"println(\\\"hello\\\")\"}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":29,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/println-docs.sushi\"},\"position\":{\"line\":0,\"character\":3}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("Writes a value followed by a newline.", Encoding.UTF8.GetString(output.ToArray()));
+    }
+
+    [Fact]
+    public async Task Server_ShowsFieldDocumentationForObjectMemberAccess()
+    {
+        const string source = "class Person {\n    /// The person's display name.\n    string name\n}\nvar person = new Person()\nprintln(person.name)";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/field-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/field-docs.sushi\"},\"position\":{\"line\":5,\"character\":15}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("The person\\u0027s display name.", wire);
+    }
+
+    [Fact]
+    public async Task Server_ProvidesDocumentationInHoverCompletionSignatureAndLinks()
+    {
+        const string source = "/// Greets a person.\n/// {@link Person}\n/// @param name Person name.\n/// @returns Greeting text.\nstring greet(string name) { return name }\nclass Person {}\ngreet(\"Ada\")";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"initialize\",\"params\":{}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/docs.sushi\"},\"position\":{\"line\":4,\"character\":8}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/docs.sushi\"},\"position\":{\"line\":6,\"character\":0}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/docs.sushi\"},\"position\":{\"line\":6,\"character\":7}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"textDocument/documentLink\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/docs.sushi\"}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/docs.sushi\"},\"range\":{\"start\":{\"line\":5,\"character\":7},\"end\":{\"line\":5,\"character\":7}},\"context\":{\"diagnostics\":[]}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("documentLinkProvider", wire);
+        Assert.Contains("Greets a person.", wire);
+        Assert.Contains("\"id\":36", wire);
+        Assert.Contains("Person name.", wire);
+        Assert.Contains("file:///tmp/docs.sushi#L6", wire);
+        Assert.Contains("Generate documentation for \\u0027Person\\u0027", wire);
+    }
+
+    [Fact]
     public async Task Server_AdvertisesCoreCapabilitiesAndPublishesDiagnostics()
     {
         var input = new MemoryStream(Encoding.UTF8.GetBytes(
@@ -107,7 +180,7 @@ public sealed class LanguageServerTests
         await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
 
         var wire = Encoding.UTF8.GetString(output.ToArray());
-        Assert.Contains("\"id\":6,\"result\":{\"contents\":{\"kind\":\"markdown\",\"value\":\"\\u0060variable value\\u0060", wire);
+        Assert.Contains("\"id\":6,\"result\":{\"contents\":{\"kind\":\"markdown\",\"value\":\"\\u0060\\u0060\\u0060sushi", wire);
         Assert.Contains("\"id\":7,\"result\":[{\"uri\":\"file:///tmp/navigation.sushi\"", wire);
         Assert.Contains("\"id\":8,\"result\":[", wire);
         Assert.Contains("\"id\":9,\"result\":[{\"name\":\"value\"", wire);
@@ -173,7 +246,7 @@ public sealed class LanguageServerTests
         Assert.Contains("\"id\":16,\"result\":[", wire);
         Assert.Contains("\"id\":17,\"result\":{\"signatures\":[{\"label\":\"greet(string name)\"", wire);
         Assert.Contains("\"parameters\":[{\"label\":\"string name\"}]", wire);
-        Assert.Contains("\"id\":24,\"result\":{\"signatures\":[{\"label\":\"println(object value", wire);
+        Assert.Contains("\"id\":24,\"result\":{\"signatures\":[{\"label\":\"println(object value = \\u0022\\u0022)\"", wire);
         Assert.Contains("\"id\":25,\"result\":{\"signatures\":[{\"label\":\"std.fs.readText(string path)\"", wire);
         Assert.Contains("\"id\":18,\"result\":[{\"startLine\":0", wire);
         Assert.Contains("\"id\":19,\"result\":[{\"position\":{\"line\":3,\"character\":9},\"label\":\": int\"", wire);

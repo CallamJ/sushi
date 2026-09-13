@@ -1,6 +1,7 @@
 namespace Sushi.Transpilation;
 
 using Sushi.Application;
+using Sushi.Build;
 using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Lowering;
@@ -25,6 +26,9 @@ public sealed class Transpiler
         var ir = new IrProgram();
         foreach (var module in moduleLoader.OrderedModules)
         {
+            diagnostics.AddRange(DocumentationParser.ValidateSource(module.SourceText).Select(issue =>
+                Diagnostic.Warning(issue.Code, issue.Message,
+                    new SourceSpan(module.SourcePath, issue.Line, issue.Column, issue.Start, issue.Start + 1))));
             var prefix = modulePrefixes[module];
             var externalSymbols = new Dictionary<string, string>(StringComparer.Ordinal);
             var externalFunctions = new Dictionary<string, Sushi.Build.SyntaxTree.FunctionDeclarationNode>(StringComparer.Ordinal);

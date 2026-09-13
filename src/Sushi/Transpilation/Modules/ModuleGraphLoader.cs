@@ -5,6 +5,7 @@ using Sushi.Build.SyntaxTree;
 
 internal sealed record LoadedModule(
     string SourcePath,
+    string SourceText,
     ProgramNode Program,
     string? BoxName,
     IReadOnlyDictionary<string, LoadedModule> Imports,
@@ -111,7 +112,7 @@ internal sealed class ModuleGraphLoader
             if (imported != null) imports[alias] = imported;
         }
 
-        var module = new LoadedModule(sourcePath, program, boxName, imports, exports);
+        var module = new LoadedModule(sourcePath, source, program, boxName, imports, exports);
         _loaded[sourcePath] = module;
         _loading.Remove(sourcePath);
         ordered.Add(module);
