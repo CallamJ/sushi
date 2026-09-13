@@ -524,7 +524,18 @@ public class EmitterTests
                 {
                     new IrReturnStatement(new IrIdentifierExpression("count"))
                 }),
-                IrTypeRef.Primitive("int"))
+                IrTypeRef.Primitive("int")),
+            new IrVariableDeclarationStatement(
+                "result",
+                new IrCallExpression("checkUser", new IrExpression[]
+                {
+                    new IrObjectLiteralExpression(new[]
+                    {
+                        new IrObjectProperty("name", new IrLiteralExpression("worker")),
+                        new IrObjectProperty("age", new IrLiteralExpression(30))
+                    }),
+                    new IrLiteralExpression(1)
+                }))
         });
 
         var diagnostics = new List<Diagnostic>();
@@ -535,7 +546,9 @@ public class EmitterTests
         Assert.Contains("local user_name=\"$2\"", script);
         Assert.Contains("local -i user_age=\"$3\"", script);
         Assert.Contains("local -i count=\"$4\"", script);
+        Assert.Contains("checkUser 'result' 'worker' 30 1", script);
         Assert.Contains("out=", script);
+        Assert.DoesNotContain("__sushi_native_obj_new", script);
         Assert.DoesNotContain("__sushi_type_check", script);
         Assert.Empty(diagnostics);
     }

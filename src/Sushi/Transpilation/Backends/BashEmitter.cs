@@ -3530,7 +3530,27 @@ __sushi_native_obj_to_json() {
         {
             var argument = call.Arguments[index].Value;
             var parameter = index < function.Parameters.Count ? function.Parameters[index] : null;
-            if (argument is IrIdentifierExpression identifier && parameter != null && IsNativeObjectType(parameter.DeclaredType))
+            if (argument is IrObjectLiteralExpression objectLiteral &&
+                parameter?.DeclaredType.Kind == IrTypeKind.Structural)
+            {
+                foreach (var field in parameter.DeclaredType.StructuralFields)
+                {
+                    var property = objectLiteral.Properties.FirstOrDefault(item => item.Name == field.Name);
+                    arguments.Add(property == null ? "''" : PrepareValue(property.Value, inFunction));
+                }
+            }
+            else if (argument is IrIdentifierExpression structuralIdentifier &&
+                     parameter?.DeclaredType.Kind == IrTypeKind.Structural)
+            {
+                var aggregateName = SanitizeVariableName(structuralIdentifier.Name);
+                foreach (var field in parameter.DeclaredType.StructuralFields)
+                {
+                    arguments.Add(_nativeObjectVariables.Contains(aggregateName)
+                        ? $"\"${{{aggregateName}[{EmitObjectSubscript(field.Name)}]-}}\""
+                        : $"\"${{{aggregateName}_{SanitizeVariableName(field.Name)}-}}\"");
+                }
+            }
+            else if (argument is IrIdentifierExpression identifier && parameter != null && IsNativeObjectType(parameter.DeclaredType))
                 arguments.Add(Escape.BashSingleQuoted(ResolveNativeObjectName(SanitizeVariableName(identifier.Name))));
             else if (argument is IrConstructionExpression construction && parameter != null && IsNativeObjectType(parameter.DeclaredType))
                 arguments.Add(Escape.BashSingleQuoted(PrepareConstructionReference(construction, inFunction)));
