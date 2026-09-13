@@ -377,6 +377,23 @@ public sealed class LanguageServerTests
     }
 
     [Fact]
+    public async Task Server_ShowsSharedTypeAndInitializerForCommaDeclaredField()
+    {
+        const string source = "class Settings { string dee = \"hello\", d2 = \"hi\" }";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/comma-field-hover.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":54,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/comma-field-hover.sushi\"},\"position\":{\"line\":0,\"character\":39}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("\"id\":54", wire);
+        Assert.Contains("string d2 = \\u0022hi\\u0022", wire);
+    }
+
+    [Fact]
     public async Task Server_BindsUntypedConstructorParametersAndPublishesFieldDiagnostics()
     {
         const string source = "class Clazz {\n    string dee = 9 d2\n    new(str, str2) {\n        println(str2)\n    }\n}";
@@ -409,6 +426,23 @@ public sealed class LanguageServerTests
         var wire = Encoding.UTF8.GetString(output.ToArray());
         Assert.Contains("SUSHI1048", wire);
         Assert.Contains("initializer for field \\u0027dee\\u0027 expects type \\u0027string\\u0027 but value has type \\u0027int\\u0027", wire);
+    }
+
+    [Fact]
+    public async Task Server_RejectsUntypedClassFieldAssignments()
+    {
+        const string source = "class Clazz {\n    string dee = \"hello\"\n    d2 = \"hi\"\n}";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/untyped-class-field.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("SUSHI1000", wire);
+        Assert.Contains("requires a type annotation", wire);
+        Assert.Contains("\"start\":{\"line\":2,\"character\":4}", wire);
     }
 
     [Fact]

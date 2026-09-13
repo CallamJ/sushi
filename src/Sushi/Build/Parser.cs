@@ -389,6 +389,11 @@ public class Parser
             // It's a method - don't consume the (, let ParseMethodDeclaration do it
             return new AstNode[] { ParseMethodDeclaration(type, name, start.Line, start.Column) };
         }
+
+        if (type == null)
+        {
+            throw new Exception($"Class field '{name}' requires a type annotation. Use 'any {name}' for an intentionally dynamic field. @ {start.Line}:{start.Column}");
+        }
         
         // Otherwise it is one or more fields with a shared type. Commas are
         // deliberately handled here rather than as general expressions so a

@@ -407,12 +407,50 @@ internal sealed class SushiLanguageServer
         if (declaration < 0 || declaration + 1 >= model.Tokens.Count || !model.Tokens[declaration + 1].IsOperator("=")) return null;
 
         var start = symbol.Token.Start;
+        var hasSourceTypePrefix = false;
         if (declaration > 0 && (model.Tokens[declaration - 1].IsKeyword("var") ||
                                 model.Tokens[declaration - 1].Kind == ClassifiedTokenKind.Identifier && SushiSemanticModel.IsTypeName(model.Tokens[declaration - 1].Text)))
+        {
             start = model.Tokens[declaration - 1].Start;
-        var end = model.Tokens.Skip(declaration + 2)
-            .FirstOrDefault(token => token.Kind is ClassifiedTokenKind.Semicolon or ClassifiedTokenKind.RightBrace)?.Start ?? model.Text.Length;
-        return model.Text[start..end].Trim();
+            hasSourceTypePrefix = true;
+        }
+
+        var end = DeclarationSegmentEnd(model.Tokens, declaration + 2, model.Text.Length);
+        var declarationText = model.Text[start..end].Trim();
+        return hasSourceTypePrefix || string.IsNullOrWhiteSpace(symbol.DeclaredType)
+            ? declarationText
+            : $"{symbol.DeclaredType} {declarationText}";
+    }
+
+    private static int DeclarationSegmentEnd(IReadOnlyList<ClassifiedToken> tokens, int start, int fallback)
+    {
+        var parentheses = 0;
+        var brackets = 0;
+        var braces = 0;
+        for (var index = start; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            switch (token.Kind)
+            {
+                case ClassifiedTokenKind.LeftParen: parentheses++; break;
+                case ClassifiedTokenKind.RightParen:
+                    if (parentheses > 0) parentheses--;
+                    break;
+                case ClassifiedTokenKind.LeftBracket: brackets++; break;
+                case ClassifiedTokenKind.RightBracket:
+                    if (brackets > 0) brackets--;
+                    break;
+                case ClassifiedTokenKind.LeftBrace: braces++; break;
+                case ClassifiedTokenKind.RightBrace:
+                    if (braces == 0 && parentheses == 0 && brackets == 0) return token.Start;
+                    if (braces > 0) braces--;
+                    break;
+                case ClassifiedTokenKind.Comma when parentheses == 0 && brackets == 0 && braces == 0:
+                case ClassifiedTokenKind.Semicolon when parentheses == 0 && brackets == 0 && braces == 0:
+                    return token.Start;
+            }
+        }
+        return fallback;
     }
 
     private static string SushiCode(string text) => $"```sushi\n{text}\n```";

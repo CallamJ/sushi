@@ -177,12 +177,63 @@ internal sealed class SushiSemanticModel
             if (index + 1 < tokens.Length && tokens[index + 1].Kind == ClassifiedTokenKind.Identifier &&
                 IsTypeName(tokens[index].Text) && IsDeclarationTerminator(tokens, index + 2))
             {
-                Add(index + 1, IsInClassBody(tokens, index) ? SushiSymbolKind.Field : SushiSymbolKind.Variable, declaredType: tokens[index].Text);
+                var kind = IsInClassBody(tokens, index) ? SushiSymbolKind.Field : SushiSymbolKind.Variable;
+                Add(index + 1, kind, declaredType: tokens[index].Text);
+                CollectSharedTypedDeclarations(tokens, index + 2, scopes, kind, tokens[index].Text, Add);
             }
         }
 
         CollectEnumValues(tokens, scopes, Add);
         return symbols;
+    }
+
+    /// <summary>
+    /// A typed declaration may introduce several names, for example
+    /// <c>string first = "a", second = "b"</c>. The parser expands this for
+    /// compilation, but the editor model is token-based and must do the same
+    /// work so every name can retain the shared type in hover and navigation.
+    /// </summary>
+    private static void CollectSharedTypedDeclarations(
+        ClassifiedToken[] tokens,
+        int start,
+        Scope[] scopes,
+        SushiSymbolKind kind,
+        string declaredType,
+        Action<int, SushiSymbolKind, Scope?, string?, bool> add)
+    {
+        var parentheses = 0;
+        var brackets = 0;
+        var braces = 0;
+        var expectName = false;
+
+        for (var index = start; index < tokens.Length; index++)
+        {
+            var token = tokens[index];
+            if (token.Kind == ClassifiedTokenKind.LeftParen) { parentheses++; continue; }
+            if (token.Kind == ClassifiedTokenKind.RightParen) { if (parentheses > 0) parentheses--; continue; }
+            if (token.Kind == ClassifiedTokenKind.LeftBracket) { brackets++; continue; }
+            if (token.Kind == ClassifiedTokenKind.RightBracket) { if (brackets > 0) brackets--; continue; }
+            if (token.Kind == ClassifiedTokenKind.LeftBrace) { braces++; continue; }
+            if (token.Kind == ClassifiedTokenKind.RightBrace)
+            {
+                if (braces > 0) { braces--; continue; }
+                return;
+            }
+            if (parentheses != 0 || brackets != 0 || braces != 0) continue;
+            if (token.Kind == ClassifiedTokenKind.Semicolon) return;
+
+            if (token.Kind == ClassifiedTokenKind.Comma)
+            {
+                expectName = true;
+                continue;
+            }
+
+            if (expectName && token.Kind == ClassifiedTokenKind.Identifier)
+            {
+                add(index, kind, scopes[index], declaredType, false);
+                expectName = false;
+            }
+        }
     }
 
     private static void CollectParameters(ClassifiedToken[] tokens, int start, int end, Scope scope, Action<int, SushiSymbolKind, Scope?, string?, bool> add)
