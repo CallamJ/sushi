@@ -554,6 +554,27 @@ internal static class BenchmarkCommand
         }
 
         sb.AppendLine();
+        sb.AppendLine("## Overhead by target");
+        sb.AppendLine();
+        sb.AppendLine("The median ratio is the typical result; P95 shows the high-end result across scenarios.");
+        sb.AppendLine();
+        sb.AppendLine("| Target | Median ratio | P95 ratio |");
+        sb.AppendLine("| --- | ---: | ---: |");
+        foreach (var group in result.Rows.Where(r => r.Status == "ok").GroupBy(r => r.Target).OrderBy(g => g.Key))
+        {
+            var median = group.Select(r => r.RuntimeRatioMedian).OrderBy(r => r).ToArray();
+            var medianRatio = median.Length % 2 == 1
+                ? median[median.Length / 2]
+                : (median[(median.Length / 2) - 1] + median[median.Length / 2]) / 2.0;
+            var p95Position = (median.Length - 1) * 0.95;
+            var p95Lower = (int)Math.Floor(p95Position);
+            var p95Upper = Math.Min(p95Lower + 1, median.Length - 1);
+            var p95Fraction = p95Position - p95Lower;
+            var p95Ratio = median[p95Lower] + ((median[p95Upper] - median[p95Lower]) * p95Fraction);
+            sb.AppendLine($"| {group.Key} | {medianRatio.ToString("0.000", CultureInfo.InvariantCulture)}× | {p95Ratio.ToString("0.000", CultureInfo.InvariantCulture)}× |");
+        }
+
+        sb.AppendLine();
         sb.AppendLine("## Warnings");
         var warnings = result.Rows.Where(r => r.Status != "ok" || (r.BaselineDeltaPercent.HasValue && r.BaselineDeltaPercent.Value > 20.0)).ToList();
         if (warnings.Count == 0)

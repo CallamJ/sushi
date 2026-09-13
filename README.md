@@ -37,16 +37,17 @@ and [IDE support guide](docs/ide-support.md) for details.
 
 The benchmark suite compares native shell examples with equivalent transpiled
 scripts. Ratios below are transpiled median time divided by native median time;
-lower is better. Run `just bench` to reproduce the full suite.
+lower is better. P95 shows the high-end result across scenarios. Run
+`just bench` to reproduce the full suite.
 
 <!-- benchmark:start -->
 Run: 2026-09-13 · 10 scenarios passed for every target.
 
-| Target | Scenarios | Median transpiled/native ratio |
-| --- | ---: | ---: |
-| bash | 10 | 1.044× |
-| powershell | 10 | 1.046× |
-| zsh | 10 | 1.004× |
+| Target | Scenarios | Median ratio | P95 ratio |
+| --- | ---: | ---: | ---: |
+| bash | 10 | 1.044× | 1.531× |
+| powershell | 10 | 1.046× | 3.463× |
+| zsh | 10 | 1.004× | 2.227× |
 <!-- benchmark:end -->
 
 ## Development
