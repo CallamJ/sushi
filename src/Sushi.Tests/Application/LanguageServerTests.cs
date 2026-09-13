@@ -302,6 +302,46 @@ public sealed class LanguageServerTests
     }
 
     [Fact]
+    public async Task Server_CompletesCallablesWithCallsAndPlacesParameterizedCallsInsideParentheses()
+    {
+        const string source = "void ready() {}\nint add(int left, int right) { return left + right }\n";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/call-completion.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/call-completion.sushi\"},\"position\":{\"line\":2,\"character\":0}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("\"label\":\"ready\"", wire);
+        Assert.Contains("\"insertText\":\"ready()\"", wire);
+        Assert.Contains("\"label\":\"add\"", wire);
+        Assert.Contains("\"insertText\":\"add($0)\"", wire);
+        Assert.Contains("\"insertTextFormat\":2", wire);
+        Assert.Contains("\"label\":\"println\"", wire);
+        Assert.Contains("\"insertText\":\"println($0)\"", wire);
+    }
+
+    [Fact]
+    public async Task Server_ShowsFullInitializersInVariableAndFieldHovers()
+    {
+        const string source = "class Config {\n    string label = \"first\" +\n        \" second\"\n}\nvar answer = 40 + 2\nprintln(answer)";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/initializer-hover.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/initializer-hover.sushi\"},\"position\":{\"line\":5,\"character\":9}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":46,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/initializer-hover.sushi\"},\"position\":{\"line\":1,\"character\":12}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("var answer = 40 \\u002B 2", wire);
+        Assert.Contains("string label = \\u0022first\\u0022 \\u002B\\n        \\u0022 second\\u0022", wire);
+    }
+
+    [Fact]
     public async Task Server_ExecutesCodeLensCommands()
     {
         const string uri = "file:///tmp/code-lens-command.sushi";

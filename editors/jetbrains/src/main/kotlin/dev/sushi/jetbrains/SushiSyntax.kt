@@ -29,6 +29,12 @@ internal object SushiTokenTypes {
     val COMMENT = IElementType("SUSHI_COMMENT", SushiLanguage)
     val DOC_COMMENT = IElementType("SUSHI_DOC_COMMENT", SushiLanguage)
     val OPERATOR = IElementType("SUSHI_OPERATOR", SushiLanguage)
+    val LEFT_PAREN = IElementType("SUSHI_LEFT_PAREN", SushiLanguage)
+    val RIGHT_PAREN = IElementType("SUSHI_RIGHT_PAREN", SushiLanguage)
+    val LEFT_BRACKET = IElementType("SUSHI_LEFT_BRACKET", SushiLanguage)
+    val RIGHT_BRACKET = IElementType("SUSHI_RIGHT_BRACKET", SushiLanguage)
+    val LEFT_BRACE = IElementType("SUSHI_LEFT_BRACE", SushiLanguage)
+    val RIGHT_BRACE = IElementType("SUSHI_RIGHT_BRACE", SushiLanguage)
 }
 
 private class SushiSyntaxHighlighter : SyntaxHighlighterBase() {
@@ -41,7 +47,10 @@ private class SushiSyntaxHighlighter : SyntaxHighlighterBase() {
         SushiTokenTypes.NUMBER -> pack(DefaultLanguageHighlighterColors.NUMBER)
         SushiTokenTypes.COMMENT -> pack(DefaultLanguageHighlighterColors.LINE_COMMENT)
         SushiTokenTypes.DOC_COMMENT -> pack(DefaultLanguageHighlighterColors.DOC_COMMENT)
-        SushiTokenTypes.OPERATOR -> pack(DefaultLanguageHighlighterColors.OPERATION_SIGN)
+        SushiTokenTypes.OPERATOR,
+        SushiTokenTypes.LEFT_PAREN, SushiTokenTypes.RIGHT_PAREN,
+        SushiTokenTypes.LEFT_BRACKET, SushiTokenTypes.RIGHT_BRACKET,
+        SushiTokenTypes.LEFT_BRACE, SushiTokenTypes.RIGHT_BRACE -> pack(DefaultLanguageHighlighterColors.OPERATION_SIGN)
         else -> TextAttributesKey.EMPTY_ARRAY
     }
 }
@@ -125,7 +134,15 @@ internal class SushiLexer : LexerBase() {
             }
             else -> {
                 position++
-                SushiTokenTypes.OPERATOR
+                when (current) {
+                    '(' -> SushiTokenTypes.LEFT_PAREN
+                    ')' -> SushiTokenTypes.RIGHT_PAREN
+                    '[' -> SushiTokenTypes.LEFT_BRACKET
+                    ']' -> SushiTokenTypes.RIGHT_BRACKET
+                    '{' -> SushiTokenTypes.LEFT_BRACE
+                    '}' -> SushiTokenTypes.RIGHT_BRACE
+                    else -> SushiTokenTypes.OPERATOR
+                }
             }
         }
         tokenEnd = position

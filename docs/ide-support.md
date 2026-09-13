@@ -47,7 +47,9 @@ The command palette and code lenses provide **Sushi: Run Current Buffer**,
 Run and preview use the current unsaved document text. Run emits a private
 temporary script and removes it after the process exits; preview opens a
 read-only-style virtual `sushi-generated:` document. Completion includes common
-control-flow, declaration, and module-import snippets.
+control-flow, declaration, and module-import snippets. Sushi source files use
+editor-native delimiter pairing, selection surrounding, brace indentation, and
+`///` documentation-comment continuation.
 
 ## JetBrains IDEs
 
@@ -56,4 +58,6 @@ JetBrains IDEs based on 2026.2 or newer. Build it with `gradle buildPlugin`.
 The server executable and target profile are configured in **Settings | Tools |
 Sushi**. Its **Tools | Sushi** menu provides matching Check, Run, and Preview
 Generated Output actions. They use the current unsaved editor buffer through a
-private temporary source file, never by overwriting the project source.
+private temporary source file, never by overwriting the project source. The
+plugin provides native pairing for brackets, braces, parentheses, and quotes,
+selection surrounding, brace-aware Enter indentation, and `///` continuation.

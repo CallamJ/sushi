@@ -267,13 +267,26 @@ internal sealed class SushiLanguageServer
         var localModel = SushiSemanticModel.Create(document.Text);
         var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
         foreach (var symbol in localModel.Symbols.Where(symbol => !memberContext || symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method or SushiSymbolKind.EnumMember))
-            items[symbol.Name] = new CompletionItem(symbol.Name, CompletionKind(symbol.Kind.ToString().ToLowerInvariant()), symbol.Kind.ToString().ToLowerInvariant(), DocumentationMarkdown(symbol.Documentation), symbol.Documentation?.DeprecationMessage);
-        foreach (var symbol in AnalyzeAll().Where(symbol => !memberContext && symbol.Uri != document.Uri && symbol.Exported))
-            items.TryAdd(symbol.Name, new CompletionItem(symbol.Name, CompletionKind(symbol.Kind), symbol.Kind, null, null));
+            items[symbol.Name] = CompletionForSymbol(localModel, symbol);
+        foreach (var occurrence in AnalyzeAll().Where(symbol => !memberContext && symbol.Uri != document.Uri && symbol.Exported))
+        {
+            var model = SushiSemanticModel.Create(DocumentFor(occurrence.Uri).Text);
+            var symbol = model.Symbols.FirstOrDefault(candidate => candidate.Token.Start == occurrence.Token.Start);
+            items.TryAdd(occurrence.Name, symbol is null
+                ? new CompletionItem(occurrence.Name, CompletionKind(occurrence.Kind), occurrence.Kind, null, null)
+                : CompletionForSymbol(model, symbol));
+        }
         foreach (var keyword in Keywords.Where(_ => !memberContext))
             items.TryAdd(keyword, new CompletionItem(keyword, 14, "keyword", null, null));
         foreach (var builtIn in StandardLibrary.Functions.Where(_ => !memberContext))
-            items.TryAdd(builtIn.Name, new CompletionItem(builtIn.Name, 3, $"function → {builtIn.ReturnType}", builtIn.Documentation, null));
+            items.TryAdd(builtIn.Name, new CompletionItem(
+                builtIn.Name,
+                3,
+                $"function → {builtIn.ReturnType}",
+                builtIn.Documentation,
+                null,
+                CallableInsertText(builtIn.Name, builtIn.Parameters.Count),
+                builtIn.Parameters.Count == 0 ? null : 2));
         if (!memberContext)
             foreach (var snippet in Snippets)
                 items[snippet.Label] = new CompletionItem(snippet.Label, 15, snippet.Detail, snippet.Documentation, null, snippet.InsertText, 2);
@@ -288,6 +301,23 @@ internal sealed class SushiLanguageServer
 
     private static bool IsMemberCompletionContext(IReadOnlyList<ClassifiedToken> tokens, int offset) =>
         tokens.LastOrDefault(token => token.End <= offset)?.Kind == ClassifiedTokenKind.Dot;
+
+    private static CompletionItem CompletionForSymbol(SushiSemanticModel model, SushiSymbol symbol)
+    {
+        var callable = symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method;
+        var parameterCount = callable ? ParametersFor(model, symbol).Count() : 0;
+        return new CompletionItem(
+            symbol.Name,
+            CompletionKind(symbol.Kind.ToString().ToLowerInvariant()),
+            symbol.Kind.ToString().ToLowerInvariant(),
+            DocumentationMarkdown(symbol.Documentation),
+            symbol.Documentation?.DeprecationMessage,
+            callable ? CallableInsertText(symbol.Name, parameterCount) : null,
+            callable && parameterCount > 0 ? 2 : null);
+    }
+
+    private static string CallableInsertText(string name, int parameterCount) =>
+        parameterCount == 0 ? name + "()" : name + "($0)";
 
     private static int CompletionKind(string kind) => kind switch
     {
@@ -327,7 +357,23 @@ internal sealed class SushiLanguageServer
             SushiSymbolKind.Enum => $"enum {symbol.Name}",
             _ => $"{symbol.Kind.ToString().ToLowerInvariant()} {symbol.Name}"
         };
+        signature = DeclarationWithInitializer(model, symbol) ?? signature;
         return SushiCode(signature) + DocumentationMarkdown(symbol.Documentation);
+    }
+
+    private static string? DeclarationWithInitializer(SushiSemanticModel model, SushiSymbol symbol)
+    {
+        if (symbol.Kind is not (SushiSymbolKind.Variable or SushiSymbolKind.Field)) return null;
+        var declaration = symbol.DeclarationIndex;
+        if (declaration < 0 || declaration + 1 >= model.Tokens.Count || !model.Tokens[declaration + 1].IsOperator("=")) return null;
+
+        var start = symbol.Token.Start;
+        if (declaration > 0 && (model.Tokens[declaration - 1].IsKeyword("var") ||
+                                model.Tokens[declaration - 1].Kind == ClassifiedTokenKind.Identifier && SushiSemanticModel.IsTypeName(model.Tokens[declaration - 1].Text)))
+            start = model.Tokens[declaration - 1].Start;
+        var end = model.Tokens.Skip(declaration + 2)
+            .FirstOrDefault(token => token.Kind is ClassifiedTokenKind.Semicolon or ClassifiedTokenKind.RightBrace)?.Start ?? model.Text.Length;
+        return model.Text[start..end].Trim();
     }
 
     private static string SushiCode(string text) => $"```sushi\n{text}\n```";
