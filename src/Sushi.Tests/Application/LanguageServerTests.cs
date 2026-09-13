@@ -274,6 +274,52 @@ public sealed class LanguageServerTests
         Assert.Contains("\"id\":23,\"result\":[{\"title\":\"Extract variable \\u0027extractedValue\\u0027\"", wire);
     }
 
+    [Fact]
+    public async Task Server_ProvidesSnippetsCodeLensesAndInMemoryGeneratedOutput()
+    {
+        const string source = "println(\"hello\")";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"initialize\",\"params\":{\"initializationOptions\":{\"targetProfile\":\"bash-linux\"}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/workflow.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/workflow.sushi\"},\"position\":{\"line\":0,\"character\":0}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/codeLens\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/workflow.sushi\"}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"sushi/transpileDocument\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/workflow.sushi\"}},\"text\":{JsonString("println(\\\"unsaved\\\")")}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("codeLensProvider", wire);
+        Assert.Contains("Run Sushi", wire);
+        Assert.Contains("Check Sushi", wire);
+        Assert.Contains("\"label\":\"if\"", wire);
+        Assert.Contains("\"insertTextFormat\":2", wire);
+        Assert.Contains("sushi.openGenerated", wire);
+        Assert.Contains("\"id\":43", wire);
+        Assert.Contains("unsaved", wire);
+        Assert.Contains("\"targetProfile\":\"bash-linux\"", wire);
+    }
+
+    [Fact]
+    public async Task Server_ExecutesCodeLensCommands()
+    {
+        const string uri = "file:///tmp/code-lens-command.sushi";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"initialize\",\"params\":{\"initializationOptions\":{\"targetProfile\":\"bash-linux\"}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"version\":1,\"text\":{JsonString("println(\"hello\")")}}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"workspace/executeCommand\",\"params\":{{\"command\":\"sushi.check\",\"arguments\":[{{\"uri\":\"{uri}\"}}]}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("executeCommandProvider", wire);
+        Assert.Contains("\"id\":51,\"result\":{\"success\":true", wire);
+        Assert.Contains("Sushi check passed", wire);
+    }
+
     private static string Frame(string json) => $"Content-Length: {Encoding.UTF8.GetByteCount(json)}\r\n\r\n{json}";
     private static string JsonString(string value) => System.Text.Json.JsonSerializer.Serialize(value);
 }

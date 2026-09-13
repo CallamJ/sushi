@@ -2,6 +2,7 @@ namespace Sushi.Application.LanguageServer;
 
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
 using Sushi.Application;
 using Sushi.Build;
 using Sushi.Build.SyntaxTree;
@@ -87,7 +88,10 @@ internal sealed class SushiLanguageServer
                         documentFormattingProvider = true,
                         documentRangeFormattingProvider = true,
                         codeActionProvider = new { codeActionKinds = new[] { "quickfix", "refactor.extract", "refactor.inline" } },
+                        codeLensProvider = new { resolveProvider = false },
+                        executeCommandProvider = new { commands = new[] { "sushi.run", "sushi.check", "sushi.openGenerated" } },
                         documentLinkProvider = new { resolveProvider = false },
+                        callHierarchyProvider = true,
                         semanticTokensProvider = new
                         {
                             legend = new { tokenTypes = SemanticTokenTypes, tokenModifiers = SemanticTokenModifiers },
@@ -168,6 +172,25 @@ internal sealed class SushiLanguageServer
             case "textDocument/codeAction":
                 await ReplyAsync(id, CodeActions(parameters), null, cancellationToken);
                 break;
+            case "textDocument/codeLens":
+                await ReplyAsync(id, CodeLenses(parameters), null, cancellationToken);
+                break;
+            case "textDocument/prepareCallHierarchy":
+                await ReplyAsync(id, PrepareCallHierarchy(parameters), null, cancellationToken);
+                break;
+            case "callHierarchy/incomingCalls":
+                await ReplyAsync(id, IncomingCalls(parameters), null, cancellationToken);
+                break;
+            case "callHierarchy/outgoingCalls":
+                await ReplyAsync(id, OutgoingCalls(parameters), null, cancellationToken);
+                break;
+            // Compiles the current editor buffer without creating an artifact in the workspace.
+            case "sushi/transpileDocument":
+                await ReplyAsync(id, TranspileDocument(parameters), null, cancellationToken);
+                break;
+            case "workspace/executeCommand":
+                await ReplyAsync(id, await ExecuteCommandAsync(parameters, cancellationToken), null, cancellationToken);
+                break;
             case "textDocument/semanticTokens/full":
                 await ReplyAsync(id, SemanticTokens(parameters), null, cancellationToken);
                 break;
@@ -242,22 +265,29 @@ internal sealed class SushiLanguageServer
             return new { isIncomplete = false, items = new[] { "param", "returns", "throws", "deprecated", "example" }.Select(tag => new { label = "@" + tag, kind = 14, detail = "documentation tag" }).ToArray() };
         var items = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
         var localModel = SushiSemanticModel.Create(document.Text);
-        foreach (var symbol in localModel.Symbols)
+        var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
+        foreach (var symbol in localModel.Symbols.Where(symbol => !memberContext || symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method or SushiSymbolKind.EnumMember))
             items[symbol.Name] = new CompletionItem(symbol.Name, CompletionKind(symbol.Kind.ToString().ToLowerInvariant()), symbol.Kind.ToString().ToLowerInvariant(), DocumentationMarkdown(symbol.Documentation), symbol.Documentation?.DeprecationMessage);
-        foreach (var symbol in AnalyzeAll().Where(symbol => symbol.Uri != document.Uri && symbol.Exported))
+        foreach (var symbol in AnalyzeAll().Where(symbol => !memberContext && symbol.Uri != document.Uri && symbol.Exported))
             items.TryAdd(symbol.Name, new CompletionItem(symbol.Name, CompletionKind(symbol.Kind), symbol.Kind, null, null));
-        foreach (var keyword in Keywords)
+        foreach (var keyword in Keywords.Where(_ => !memberContext))
             items.TryAdd(keyword, new CompletionItem(keyword, 14, "keyword", null, null));
-        foreach (var builtIn in StandardLibrary.Functions)
+        foreach (var builtIn in StandardLibrary.Functions.Where(_ => !memberContext))
             items.TryAdd(builtIn.Name, new CompletionItem(builtIn.Name, 3, $"function → {builtIn.ReturnType}", builtIn.Documentation, null));
+        if (!memberContext)
+            foreach (var snippet in Snippets)
+                items[snippet.Label] = new CompletionItem(snippet.Label, 15, snippet.Detail, snippet.Documentation, null, snippet.InsertText, 2);
 
         return new
         {
             isIncomplete = false,
             items = items.Values.OrderBy(item => item.Label, StringComparer.Ordinal)
-                .Select(item => new { label = item.Label, kind = item.Kind, detail = item.Detail, documentation = item.Documentation is null ? null : new { kind = "markdown", value = item.Documentation }, tags = item.Deprecated is null ? null : new[] { 1 } }).ToArray()
+                .Select(item => new { label = item.Label, kind = item.Kind, detail = item.Detail, documentation = item.Documentation is null ? null : new { kind = "markdown", value = item.Documentation }, tags = item.Deprecated is null ? null : new[] { 1 }, insertText = item.InsertText, insertTextFormat = item.InsertTextFormat }).ToArray()
         };
     }
+
+    private static bool IsMemberCompletionContext(IReadOnlyList<ClassifiedToken> tokens, int offset) =>
+        tokens.LastOrDefault(token => token.End <= offset)?.Kind == ClassifiedTokenKind.Dot;
 
     private static int CompletionKind(string kind) => kind switch
     {
@@ -546,8 +576,242 @@ internal sealed class SushiLanguageServer
             actions.Add(new { title = $"Generate documentation for '{documentationName}'", kind = "quickfix", edit = documentationEdit });
         if (TryAddMissingParameterDocumentation(document, model, start, out var parametersEdit, out var parameterName))
             actions.Add(new { title = $"Document parameter '{parameterName}'", kind = "quickfix", edit = parametersEdit });
+        if (TryAddImport(document, model, start, out var importEdit, out var importName))
+            actions.Add(new { title = $"Import '{importName}'", kind = "quickfix", edit = importEdit, isPreferred = true });
         return actions;
     }
+
+    private bool TryAddImport(OpenDocument document, SushiSemanticModel model, int offset, out object edit, out string name)
+    {
+        edit = null!;
+        name = "";
+        var token = model.TokenAt(offset);
+        if (token is null || model.SymbolFor(token) is not null || !IsIdentifier(token.Text)) return false;
+        var candidate = AnalyzeAll().FirstOrDefault(symbol => symbol.Exported && symbol.Name == token.Text && symbol.Uri != document.Uri);
+        if (candidate is null) return false;
+        var sourcePath = PathForUri(document.Uri);
+        var importedPath = PathForUri(candidate.Uri);
+        var basePath = Path.GetDirectoryName(sourcePath);
+        if (basePath is null) return false;
+        var relative = Path.GetRelativePath(basePath, importedPath).Replace(Path.DirectorySeparatorChar, '/');
+        if (!relative.StartsWith(".", StringComparison.Ordinal)) relative = "./" + relative;
+        var insertion = 0;
+        while (insertion < document.Text.Length && (document.Text[insertion] == '\n' || document.Text[insertion] == '\r')) insertion++;
+        edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = $"use \"{relative}\"\n" } } } };
+        name = token.Text;
+        return true;
+    }
+
+    private object CodeLenses(JsonElement parameters)
+    {
+        var document = Document(parameters);
+        // These commands operate on the entire source buffer. Keep their lens at
+        // the file header rather than attaching it to the first declaration.
+        var range = Range(document.Text, 0, 0, 0, 0);
+        object Lens(string title, string command) => new
+        {
+            range,
+            command = new { title, command, arguments = new[] { document.Uri } }
+        };
+        return new[]
+        {
+            Lens("Run Sushi", "sushi.run"),
+            Lens("Check Sushi", "sushi.check"),
+            Lens("Preview generated output", "sushi.openGenerated")
+        };
+    }
+
+    private object TranspileDocument(JsonElement parameters)
+    {
+        var uri = parameters.GetProperty("textDocument").GetProperty("uri").GetString()!;
+        var document = DocumentFor(uri);
+        var text = parameters.TryGetProperty("text", out var suppliedText) && suppliedText.ValueKind == JsonValueKind.String
+            ? suppliedText.GetString() ?? document.Text
+            : document.Text;
+        var target = _targetProfile;
+        if (parameters.TryGetProperty("targetProfile", out var targetProperty) && TargetProfile.TryParse(targetProperty.GetString(), out var suppliedTarget))
+            target = suppliedTarget;
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourcePath = PathForUri(uri),
+            SourceText = text,
+            TargetLanguage = target.Shell,
+            TargetProfile = target
+        });
+        return new
+        {
+            success = result.Success,
+            targetProfile = target.Id,
+            languageId = target.Shell == TargetLanguage.Powershell51 ? "powershell" : "shellscript",
+            fileExtension = target.FileExtension,
+            code = result.EmittedCode,
+            diagnostics = result.Diagnostics.Select(diagnostic => new
+            {
+                code = diagnostic.Code,
+                message = diagnostic.Message,
+                severity = diagnostic.Severity.ToString(),
+                range = Range(text, diagnostic.Span.StartOffset, diagnostic.Span.EndOffset, diagnostic.Span.Line, diagnostic.Span.Column)
+            }).ToArray()
+        };
+    }
+
+    private async Task<object> ExecuteCommandAsync(JsonElement parameters, CancellationToken cancellationToken)
+    {
+        var command = parameters.TryGetProperty("command", out var commandProperty) ? commandProperty.GetString() ?? "" : "";
+        var uri = parameters.TryGetProperty("arguments", out var arguments) && arguments.ValueKind == JsonValueKind.Array && arguments.GetArrayLength() > 0
+            ? CommandUri(arguments[0]) : null;
+        await _log.WriteLineAsync($"sushi-lsp: executeCommand '{command}' for '{uri ?? "<missing-uri>"}'.");
+        if (uri is null || !_documents.TryGetValue(uri, out var document))
+        {
+            await NotifyAsync("window/showMessage", new { type = 1, message = "Sushi: the source document is no longer open." }, cancellationToken);
+            return new { success = false, message = "Document is not open." };
+        }
+
+        var target = _targetProfile;
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourcePath = PathForUri(uri), SourceText = document.Text, TargetLanguage = target.Shell, TargetProfile = target
+        });
+        if (!result.Success || result.EmittedCode is null)
+        {
+            var message = string.Join("\n", result.Diagnostics.Select(diagnostic => $"{diagnostic.Code}: {diagnostic.Message}"));
+            await NotifyAsync("window/showMessage", new { type = 1, message = "Sushi: " + (message.Length == 0 ? "transpilation failed." : message) }, cancellationToken);
+            return new { success = false, diagnostics = result.Diagnostics.Select(diagnostic => diagnostic.Message).ToArray() };
+        }
+
+        if (command == "sushi.check")
+        {
+            await NotifyAsync("window/showMessage", new { type = 3, message = $"Sushi check passed ({target.Id})." }, cancellationToken);
+            return new { success = true, targetProfile = target.Id };
+        }
+        if (command == "sushi.openGenerated")
+        {
+            var outputPath = Path.Combine(Path.GetTempPath(), $"sushi-generated-{Guid.NewGuid():N}{target.FileExtension}");
+            await File.WriteAllTextAsync(outputPath, result.EmittedCode, cancellationToken);
+            await NotifyAsync("window/showMessage", new { type = 3, message = $"Sushi generated {target.Id} output at {outputPath}." }, cancellationToken);
+            return new { success = true, targetProfile = target.Id, path = outputPath, code = result.EmittedCode };
+        }
+        if (command == "sushi.run")
+        {
+            var scriptPath = Path.Combine(Path.GetTempPath(), $"sushi-run-{Guid.NewGuid():N}{target.FileExtension}");
+            await File.WriteAllTextAsync(scriptPath, result.EmittedCode, cancellationToken);
+            try
+            {
+                var runner = target.Shell switch
+                {
+                    TargetLanguage.Zsh => "zsh",
+                    TargetLanguage.Powershell51 => OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh",
+                    _ => "bash"
+                };
+                var process = new Process { StartInfo = new ProcessStartInfo(runner) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false } };
+                process.StartInfo.ArgumentList.Add(target.Shell == TargetLanguage.Powershell51 ? "-File" : scriptPath);
+                if (target.Shell == TargetLanguage.Powershell51) process.StartInfo.ArgumentList.Add(scriptPath);
+                process.Start();
+                var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+                var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
+                await process.WaitForExitAsync(cancellationToken);
+                var output = (stdout + stderr).Trim();
+                await NotifyAsync("window/showMessage", new { type = process.ExitCode == 0 ? 3 : 1, message = $"Sushi run ({target.Id}) exited {process.ExitCode}." + (output.Length == 0 ? "" : $"\n{output}") }, cancellationToken);
+                return new { success = process.ExitCode == 0, exitCode = process.ExitCode, output };
+            }
+            finally { try { File.Delete(scriptPath); } catch { } }
+        }
+
+        await NotifyAsync("window/showMessage", new { type = 2, message = $"Sushi: unsupported command '{command}'." }, cancellationToken);
+        return new { success = false, message = "Unsupported command." };
+    }
+
+    private static string? CommandUri(JsonElement argument)
+    {
+        if (argument.ValueKind == JsonValueKind.String) return argument.GetString();
+        if (argument.ValueKind == JsonValueKind.Object && argument.TryGetProperty("uri", out var uri) && uri.ValueKind == JsonValueKind.String)
+            return uri.GetString();
+        return null;
+    }
+
+    private object PrepareCallHierarchy(JsonElement parameters)
+    {
+        var document = Document(parameters);
+        var model = SushiSemanticModel.Create(document.Text);
+        var symbol = model.SymbolAt(Offset(document.Text, parameters.GetProperty("position")));
+        return symbol is null || symbol.Kind is not (SushiSymbolKind.Function or SushiSymbolKind.Method or SushiSymbolKind.Constructor)
+            ? Array.Empty<object>()
+            : new[] { CallHierarchyItem(document, model, symbol) };
+    }
+
+    private object IncomingCalls(JsonElement parameters)
+    {
+        if (!TryHierarchyItem(parameters, out var targetDocument, out var targetModel, out var target)) return Array.Empty<object>();
+        var calls = new List<object>();
+        foreach (var document in WorkspaceDocuments())
+        {
+            var model = SushiSemanticModel.Create(document.Text);
+            foreach (var token in model.Tokens.Where(token => token.Kind == ClassifiedTokenKind.Identifier && token.Text == target.Name))
+            {
+                var index = model.Tokens.ToList().FindIndex(candidate => candidate.Start == token.Start);
+                if (index < 0 || index + 1 >= model.Tokens.Count || model.Tokens[index + 1].Kind != ClassifiedTokenKind.LeftParen || model.SymbolFor(token)?.Id == target.Id && document.Uri == targetDocument.Uri) continue;
+                var caller = EnclosingCallable(model, index);
+                if (caller is null) continue;
+                calls.Add(new { from = CallHierarchyItem(document, model, caller), fromRanges = new[] { TokenRange(document.Text, token) } });
+            }
+        }
+        return calls;
+    }
+
+    private object OutgoingCalls(JsonElement parameters)
+    {
+        if (!TryHierarchyItem(parameters, out var document, out var model, out var source)) return Array.Empty<object>();
+        var sourceIndex = model.Tokens.ToList().FindIndex(token => token.Start == source.Token.Start);
+        var openBrace = sourceIndex < 0 ? -1 : model.Tokens.Skip(sourceIndex).ToList().FindIndex(token => token.Kind == ClassifiedTokenKind.LeftBrace);
+        if (openBrace < 0) return Array.Empty<object>();
+        openBrace += sourceIndex;
+        var closeBrace = FindMatching(model.Tokens, openBrace, ClassifiedTokenKind.LeftBrace, ClassifiedTokenKind.RightBrace);
+        if (closeBrace < 0) return Array.Empty<object>();
+        var calls = new List<object>();
+        for (var index = openBrace + 1; index + 1 < closeBrace; index++)
+        {
+            var token = model.Tokens[index];
+            if (token.Kind != ClassifiedTokenKind.Identifier || model.Tokens[index + 1].Kind != ClassifiedTokenKind.LeftParen) continue;
+            var target = model.SymbolFor(token) ?? model.Symbols.FirstOrDefault(symbol => symbol.Name == token.Text && symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method);
+            if (target is null || target.Id == source.Id) continue;
+            calls.Add(new { to = CallHierarchyItem(document, model, target), fromRanges = new[] { TokenRange(document.Text, token) } });
+        }
+        return calls;
+    }
+
+    private bool TryHierarchyItem(JsonElement parameters, out OpenDocument document, out SushiSemanticModel model, out SushiSymbol symbol)
+    {
+        document = null!; model = null!; symbol = null!;
+        if (!parameters.TryGetProperty("item", out var item) || !item.TryGetProperty("data", out var data) ||
+            !data.TryGetProperty("uri", out var uriProperty) || !data.TryGetProperty("start", out var startProperty)) return false;
+        document = DocumentFor(uriProperty.GetString()!);
+        model = SushiSemanticModel.Create(document.Text);
+        symbol = model.Symbols.FirstOrDefault(candidate => candidate.Token.Start == startProperty.GetInt32())!;
+        return symbol is not null;
+    }
+
+    private static SushiSymbol? EnclosingCallable(SushiSemanticModel model, int index) => model.Symbols
+        .Where(symbol => symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method or SushiSymbolKind.Constructor)
+        .Select(symbol => (Symbol: symbol, Start: model.Tokens.ToList().FindIndex(token => token.Start == symbol.Token.Start)))
+        .Where(item => item.Start >= 0)
+        .Select(item => (item.Symbol, Open: item.Start + model.Tokens.Skip(item.Start).ToList().FindIndex(token => token.Kind == ClassifiedTokenKind.LeftBrace)))
+        .Where(item => item.Open >= item.Symbol.DeclarationIndex)
+        .Select(item => (item.Symbol, Close: FindMatching(model.Tokens, item.Open, ClassifiedTokenKind.LeftBrace, ClassifiedTokenKind.RightBrace), item.Open))
+        .Where(item => item.Close >= index && item.Open < index)
+        .OrderBy(item => item.Close - item.Open)
+        .Select(item => item.Symbol)
+        .FirstOrDefault();
+
+    private object CallHierarchyItem(OpenDocument document, SushiSemanticModel model, SushiSymbol symbol) => new
+    {
+        name = symbol.Name,
+        kind = SymbolKind(symbol.Kind),
+        detail = symbol.DeclaredType ?? symbol.Kind.ToString().ToLowerInvariant(),
+        uri = document.Uri,
+        range = TokenRange(document.Text, symbol.Token),
+        selectionRange = TokenRange(document.Text, symbol.Token),
+        data = new { uri = document.Uri, start = symbol.Token.Start }
+    };
 
     private static bool TryGenerateDocumentation(OpenDocument document, SushiSemanticModel model, int offset, out object edit, out string name)
     {
@@ -827,7 +1091,7 @@ internal sealed class SushiLanguageServer
             {
                 declaration = true;
             }
-            yield return new SymbolOccurrence(document.Uri, token, token.Text, kind, declaration, declaration && IsTopLevel(tokens, index));
+            yield return new SymbolOccurrence(document.Uri, token, token.Text, kind, declaration, declaration && IsTopLevel(tokens, index) && IsExportedDeclaration(tokens, index));
         }
     }
 
@@ -857,6 +1121,12 @@ internal sealed class SushiLanguageServer
     }
 
     private static bool IsTopLevel(ClassifiedToken[] tokens, int position) => tokens.Take(position).Count(token => token.Kind == ClassifiedTokenKind.LeftBrace) == tokens.Take(position).Count(token => token.Kind == ClassifiedTokenKind.RightBrace);
+    private static bool IsExportedDeclaration(ClassifiedToken[] tokens, int position)
+    {
+        for (var index = position - 1; index >= 0 && tokens[index].Kind is not (ClassifiedTokenKind.Semicolon or ClassifiedTokenKind.LeftBrace or ClassifiedTokenKind.RightBrace); index--)
+            if (tokens[index].IsKeyword("export")) return true;
+        return false;
+    }
     private static IReadOnlyList<ClassifiedToken> Classify(string text) => new Lexer(new Tokenizer(text).Tokenize()).Lex().ToArray();
     private OpenDocument Document(JsonElement parameters) => DocumentFor(parameters.GetProperty("textDocument").GetProperty("uri").GetString()!);
     private OpenDocument DocumentFor(string uri)
@@ -976,11 +1246,23 @@ internal sealed class SushiLanguageServer
     private sealed record OpenDocument(string Uri, string Text, int Version);
     private sealed record SignatureInformation(string Label, SignatureParameter[] Parameters, string Documentation);
     private sealed record SignatureParameter(string Label, string? Documentation);
-    private sealed record CompletionItem(string Label, int Kind, string Detail, string? Documentation, string? Deprecated);
+    private sealed record CompletionItem(string Label, int Kind, string Detail, string? Documentation, string? Deprecated, string? InsertText = null, int? InsertTextFormat = null);
+    private sealed record Snippet(string Label, string Detail, string InsertText, string Documentation);
     private sealed record SymbolOccurrence(string Uri, ClassifiedToken Token, string Name, string Kind, bool Declaration, bool Exported);
     private static readonly string[] Keywords = ["box", "use", "class", "new", "return", "this", "if", "else", "while", "for", "break", "continue", "true", "false", "null", "var", "switch", "case", "default", "also", "do", "step", "enum", "in", "export", "as"];
     private static readonly StandardLibraryCatalog StandardLibrary = StandardLibraryCatalog.CreateDefault();
     private static readonly HashSet<string> StandardLibraryNames = StandardLibrary.Functions.Select(function => function.Name).ToHashSet(StringComparer.Ordinal);
+    private static readonly Snippet[] Snippets =
+    [
+        new("if", "conditional block", "if (${1:condition}) {\n    ${0}\n}", "Creates an `if` block."),
+        new("if / else", "conditional branches", "if (${1:condition}) {\n    ${2}\n} else {\n    ${0}\n}", "Creates an `if` / `else` block."),
+        new("while", "loop", "while (${1:condition}) {\n    ${0}\n}", "Creates a `while` loop."),
+        new("for", "collection loop", "for (${1:item} in ${2:items}) {\n    ${0}\n}", "Creates a collection loop."),
+        new("function", "function declaration", "${1:void} ${2:name}(${3}) {\n    ${0}\n}", "Creates a typed function."),
+        new("class", "class declaration", "class ${1:Name} {\n    new(${2}) {\n        ${0}\n    }\n}", "Creates a class and constructor."),
+        new("enum", "enum declaration", "enum ${1:Name} {\n    ${2:Value}\n}", "Creates an enum."),
+        new("use", "module import", "use \"${1:module.sushi}\"${0}", "Imports a Sushi module.")
+    ];
     // Keep this legend stable: clients cache token indexes for the lifetime of an LSP session.
     private const int SemanticNamespace = 0;
     private const int SemanticClass = 1;

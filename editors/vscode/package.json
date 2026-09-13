@@ -7,11 +7,17 @@
   "repository": { "type": "git", "url": "https://github.com/CallamJ/sushi.git" },
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Programming Languages"],
-  "activationEvents": ["onLanguage:sushi"],
+  "activationEvents": ["onLanguage:sushi", "onCommand:sushi.run", "onCommand:sushi.check", "onCommand:sushi.openGenerated", "onCommand:sushi.restartLanguageServer"],
   "main": "./out/extension.js",
   "contributes": {
     "languages": [{ "id": "sushi", "aliases": ["Sushi", "sushi"], "extensions": [".sushi"], "configuration": "./language-configuration.json" }],
     "grammars": [{ "language": "sushi", "scopeName": "source.sushi", "path": "./syntaxes/sushi.tmLanguage.json" }],
+    "commands": [
+      { "command": "sushi.run", "title": "Sushi: Run Current Buffer", "icon": "$(play)" },
+      { "command": "sushi.check", "title": "Sushi: Check Current Buffer", "icon": "$(check)" },
+      { "command": "sushi.openGenerated", "title": "Sushi: Preview Generated Output", "icon": "$(file-code)" },
+      { "command": "sushi.restartLanguageServer", "title": "Sushi: Restart Language Server" }
+    ],
     "configuration": {
       "title": "Sushi",
       "properties": {

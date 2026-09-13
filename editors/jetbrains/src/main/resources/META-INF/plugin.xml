@@ -13,5 +13,26 @@
     <platform.lsp.integrationProvider implementation="dev.sushi.jetbrains.SushiLspIntegrationProvider" />
     <applicationService serviceImplementation="dev.sushi.jetbrains.SushiSettings" />
     <applicationConfigurable parentId="tools" instance="dev.sushi.jetbrains.SushiConfigurable" id="dev.sushi.settings" displayName="Sushi" />
+    <notificationGroup id="Sushi" displayType="BALLOON" isLogByDefault="true" />
+    <toolWindow id="Sushi" anchor="bottom" factoryClass="dev.sushi.jetbrains.SushiToolWindowFactory" />
   </extensions>
+  <actions>
+    <action id="Sushi.Check" class="dev.sushi.jetbrains.SushiCheckAction" text="Sushi: Check Current Buffer" description="Check the current unsaved Sushi editor buffer">
+      <add-to-group group-id="EditorToolbar" anchor="last" />
+    </action>
+    <action id="Sushi.Run" class="dev.sushi.jetbrains.SushiRunAction" text="Sushi: Run Current Buffer" description="Run the current unsaved Sushi editor buffer">
+      <add-to-group group-id="EditorToolbar" anchor="last" />
+    </action>
+    <action id="Sushi.PreviewGenerated" class="dev.sushi.jetbrains.SushiPreviewGeneratedAction" text="Sushi: Preview Generated Output" description="Preview generated code for the current Sushi editor buffer">
+      <add-to-group group-id="EditorToolbar" anchor="last" />
+    </action>
+    <action id="Sushi.RestartLsp" class="dev.sushi.jetbrains.SushiRestartLspAction" text="Sushi: Restart Language Server" description="Restart the Sushi language server" />
+    <group id="Sushi.Workflow" text="Sushi">
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+      <reference ref="Sushi.Check" />
+      <reference ref="Sushi.Run" />
+      <reference ref="Sushi.PreviewGenerated" />
+      <reference ref="Sushi.RestartLsp" />
+    </group>
+  </actions>
 </idea-plugin>
