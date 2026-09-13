@@ -3,6 +3,7 @@ package dev.sushi.jetbrains
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.fileTypes.LanguageFileType
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspIntegrationProvider
@@ -17,7 +18,7 @@ object SushiFileType : LanguageFileType(SushiLanguage) {
     override fun getName() = "Sushi"
     override fun getDescription() = "Sushi shell script"
     override fun getDefaultExtension() = "sushi"
-    override fun getIcon(): Icon? = null
+    override fun getIcon(): Icon = IconLoader.getIcon("/icons/sushi.png", SushiFileType::class.java)
 }
 
 class SushiLspIntegrationProvider : LspIntegrationProvider {
