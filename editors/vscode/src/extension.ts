@@ -5,6 +5,7 @@ import * as path from "path";
 import { LanguageClient, LanguageClientOptions, ServerOptions, Trace } from "vscode-languageclient/node";
 
 let client: LanguageClient | undefined;
+const documentContinuationInProgress = new Set<string>();
 
 interface TranspileResult {
     success: boolean;
@@ -24,6 +25,10 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push({ dispose: () => { void client?.stop(); } });
     const checkOutput = vscode.window.createOutputChannel("Sushi Check");
     context.subscriptions.push(checkOutput);
+    context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
+        void continueDocumentationComment(event);
+        void triggerDocumentationTemplateSuggestion(event);
+    }));
 
     const generated = new Map<string, { code: string; languageId: string }>();
     const provider = vscode.workspace.registerTextDocumentContentProvider("sushi-generated", {
@@ -63,6 +68,56 @@ export function activate(context: vscode.ExtensionContext): void {
         await restartLanguageClient();
         void vscode.window.showInformationMessage("Sushi language server restarted.");
     }));
+}
+
+async function continueDocumentationComment(event: vscode.TextDocumentChangeEvent): Promise<void> {
+    const document = event.document;
+    if (document.languageId !== "sushi" || documentContinuationInProgress.has(document.uri.toString())) return;
+    const enter = event.contentChanges.find(change => change.text.includes("\n"));
+    if (!enter) return;
+
+    const editor = vscode.window.visibleTextEditors.find(candidate => candidate.document === document);
+    if (!editor) return;
+    // `onDidChangeTextDocument` fires before some VSCodium builds update the
+    // active editor selection. The edit range is authoritative: the line after
+    // the final inserted newline is the freshly created comment line.
+    const line = enter.range.start.line + (enter.text.match(/\n/g)?.length ?? 0);
+    if (line === 0 || line >= document.lineCount) return;
+
+    const previous = document.lineAt(line - 1).text;
+    const current = document.lineAt(line).text;
+    const documentation = previous.match(/^(\s*)\/\/\/.*/);
+    if (!documentation || current.trimStart().startsWith("///")) return;
+
+    const currentIndentation = current.match(/^\s*/)?.[0] ?? "";
+    const prefix = `${documentation[1]}/// `;
+    documentContinuationInProgress.add(document.uri.toString());
+    try {
+        const applied = await editor.edit(edit => edit.replace(
+            new vscode.Range(line, 0, line, currentIndentation.length), prefix));
+        if (applied) {
+            const position = new vscode.Position(line, prefix.length);
+            editor.selection = new vscode.Selection(position, position);
+        }
+    } finally {
+        documentContinuationInProgress.delete(document.uri.toString());
+    }
+}
+
+async function triggerDocumentationTemplateSuggestion(event: vscode.TextDocumentChangeEvent): Promise<void> {
+    if (event.document.languageId !== "sushi" || !event.contentChanges.some(change => change.text === "/")) return;
+    // Comment completions are disabled by default in VSCodium's quick-suggest
+    // settings. Once the third slash has made a valid doc-comment marker, ask
+    // the editor to show suggestions explicitly; accepting remains the user's
+    // choice.
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document !== event.document) return;
+    const position = editor.selection.active;
+    const line = event.document.lineAt(position.line).text;
+    if (!/^\s*\/\/\/\s*$/.test(line) || position.character !== line.length) return;
+    if (position.line + 1 >= event.document.lineCount || event.document.lineAt(position.line + 1).text.trim().length === 0) return;
+    await vscode.commands.executeCommand("editor.action.triggerSuggest");
 }
 
 export async function deactivate(): Promise<void> { await client?.stop(); }

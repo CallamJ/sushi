@@ -47,6 +47,21 @@ public sealed class LanguageServerTests
     }
 
     [Fact]
+    public async Task Server_IndentsGeneratedParameterDocumentation()
+    {
+        const string source = "class Person {\n    /// Greets a person.\n    string greet(string name) { return name }\n}";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/indented-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":58,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/indented-docs.sushi\"},\"range\":{\"start\":{\"line\":1,\"character\":4},\"end\":{\"line\":1,\"character\":4}},\"context\":{\"diagnostics\":[]}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("\\n    /// @param name", Encoding.UTF8.GetString(output.ToArray()));
+    }
+
+    [Fact]
     public async Task Server_OffersDocumentationTemplateOnlyForAnAdjacentBareComment()
     {
         const string adjacentSource = "///\nstring greet(string name) { return name }";
@@ -64,6 +79,7 @@ public sealed class LanguageServerTests
 
         var wire = Encoding.UTF8.GetString(output.ToArray());
         Assert.Contains("Generate documentation template", wire);
+        Assert.Contains("\"filterText\":\"///\"", wire);
         Assert.Contains("/// @param name", wire);
         Assert.DoesNotContain("TODO", wire);
         Assert.Equal(1, wire.Split("Generate documentation template").Length - 1);

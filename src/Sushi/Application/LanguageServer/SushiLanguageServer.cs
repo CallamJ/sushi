@@ -64,9 +64,12 @@ internal sealed class SushiLanguageServer
         {
             case "initialize":
                 if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty("initializationOptions", out var initialization) &&
-                    initialization.ValueKind == JsonValueKind.Object && initialization.TryGetProperty("targetProfile", out var targetProfile) &&
-                    TargetProfile.TryParse(targetProfile.GetString(), out var selectedProfile))
-                    _targetProfile = selectedProfile;
+                    initialization.ValueKind == JsonValueKind.Object)
+                {
+                    if (initialization.TryGetProperty("targetProfile", out var targetProfile) &&
+                        TargetProfile.TryParse(targetProfile.GetString(), out var selectedProfile))
+                        _targetProfile = selectedProfile;
+                }
                 await ReplyAsync(id, new
                 {
                     capabilities = new
@@ -318,6 +321,12 @@ internal sealed class SushiLanguageServer
             kind = 15,
             detail = "documentation template",
             documentation = new { kind = "markdown", value = "Generate a summary and documentation tags for the declaration below." },
+            // The visible label is descriptive, but the text being completed is
+            // `///`. Without this, VS Code filters the item out immediately
+            // after the third slash is typed.
+            filterText = "///",
+            sortText = "000",
+            preselect = true,
             textEdit = new { range = Range(document.Text, lineStart, lineStart + line.Length, 1, 1), newText = template },
             insertTextFormat = 1
         };
@@ -1030,10 +1039,11 @@ internal sealed class SushiLanguageServer
                       !String.Equals(symbol.DeclaredType, "void", StringComparison.OrdinalIgnoreCase);
         if (!callable || (parameters.Length == 0 && !returns)) return false;
 
-        var text = new StringBuilder("///\n");
-        foreach (var parameter in parameters) text.Append("/// @param ").Append(parameter.Name).Append('\n');
-        if (returns) text.Append("/// @returns\n");
         var insertion = LineStart(document.Text, symbol.Token.Start);
+        var indentation = IndentationAt(document.Text, insertion);
+        var text = new StringBuilder(indentation).Append("///\n");
+        foreach (var parameter in parameters) text.Append(indentation).Append("/// @param ").Append(parameter.Name).Append('\n');
+        if (returns) text.Append(indentation).Append("/// @returns\n");
         edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = text.ToString() } } } };
         name = symbol.Name;
         return true;
@@ -1048,7 +1058,8 @@ internal sealed class SushiLanguageServer
         var missing = ParametersFor(model, symbol).FirstOrDefault(parameter => symbol.Documentation.ParameterDocumentation(parameter.Name) is null);
         if (missing is null) return false;
         var insertion = symbol.Documentation.End;
-        edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = $"\n/// @param {missing.Name}" } } } };
+        var indentation = IndentationAt(document.Text, LineStart(document.Text, symbol.Documentation.Start));
+        edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = $"\n{indentation}/// @param {missing.Name}" } } } };
         parameterName = missing.Name;
         return true;
     }
@@ -1154,6 +1165,13 @@ internal sealed class SushiLanguageServer
         var start = Math.Clamp(offset, 0, text.Length);
         while (start > 0 && text[start - 1] != '\n') start--;
         return start;
+    }
+
+    private static string IndentationAt(string text, int lineStart)
+    {
+        var end = lineStart;
+        while (end < text.Length && (text[end] == ' ' || text[end] == '\t')) end++;
+        return text[lineStart..end];
     }
 
     private object SemanticTokens(JsonElement parameters)

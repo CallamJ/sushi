@@ -50,6 +50,19 @@ public sealed class ObjectOrientedTranspilationTests
     }
 
     [Fact]
+    public void InferredClassField_IsLoweredWithItsInitializerType()
+    {
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourcePath = "inferred-class-field.sushi",
+            SourceText = "class Settings { var label = \"ready\" }\nvar settings = new Settings()\nprintln(settings.label)",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+    }
+
+    [Fact]
     public void CommaSeparatedAndChainedClassFields_AreLoweredAsIndependentFields()
     {
         var result = new Transpiler().Transpile(new TranspileRequest

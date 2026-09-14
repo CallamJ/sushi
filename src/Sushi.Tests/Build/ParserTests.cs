@@ -46,6 +46,18 @@ namespace Sushi.Tests
             Assert.Equal("x", varDecl.Name);
             Assert.Null(varDecl.Type);
         }
+
+        [Fact]
+        public void TestClassFieldWithVarUsesItsInitializerForInference()
+        {
+            var program = Parse("class Settings { var label = \"ready\" }");
+
+            var declaration = Assert.IsType<ClassDeclarationNode>(Assert.Single(program.Declarations));
+            var field = Assert.Single(declaration.Fields);
+            Assert.Null(field.Type);
+            Assert.Equal("label", field.Name);
+            Assert.NotNull(field.Initializer);
+        }
         
         [Fact]
         public void TestVariableWithType()

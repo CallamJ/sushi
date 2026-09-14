@@ -2142,7 +2142,9 @@ public sealed class AstToIrLowerer
         {
             var matchingCtorParameter = ctorSignature.Parameters.FirstOrDefault(p => p.Name == field.Name);
             var fieldInitializer = field.Initializer != null ? LowerExpression(field.Initializer) : null;
-            var fieldType = LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'");
+            var fieldType = field.Type == null && fieldInitializer != null && TryInferStaticType(fieldInitializer, out var inferredFieldType)
+                ? inferredFieldType
+                : LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'");
             if (fieldInitializer != null)
             {
                 ValidateExpressionAgainstType(

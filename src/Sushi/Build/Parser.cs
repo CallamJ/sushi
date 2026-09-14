@@ -352,8 +352,18 @@ public class Parser
         
         string? type = null;
         string name;
-        
-        if (Check(ClassifiedTokenKind.Identifier))
+        var inferredField = false;
+
+        // `var` has the same inference contract inside a class as it does at
+        // top level: an initializer supplies the field's stable type. It is a
+        // keyword, so it must be handled before the identifier-based forms.
+        if (Check(ClassifiedTokenKind.Keyword, "var"))
+        {
+            Advance();
+            name = Expect(ClassifiedTokenKind.Identifier).Text;
+            inferredField = true;
+        }
+        else if (Check(ClassifiedTokenKind.Identifier))
         {
             var firstToken = Advance();
             
@@ -390,7 +400,7 @@ public class Parser
             return new AstNode[] { ParseMethodDeclaration(type, name, start.Line, start.Column) };
         }
 
-        if (type == null)
+        if (type == null && !inferredField)
         {
             throw new Exception($"Class field '{name}' requires a type annotation. Use 'any {name}' for an intentionally dynamic field. @ {start.Line}:{start.Column}");
         }
@@ -400,6 +410,8 @@ public class Parser
         // trailing identifier (for example `string name = value extra`) is a
         // syntax error instead of being silently accepted.
         var fields = ParseFieldDeclarators(type, name, start.Line, start.Column);
+        if (inferredField && fields.Any(field => field.Initializer == null))
+            throw new Exception($"Inferred class field '{name}' requires an initializer. Use 'any {name}' for an intentionally dynamic field. @ {start.Line}:{start.Column}");
         ExpectClassFieldTerminator();
         return fields.Cast<AstNode>().ToArray();
     }

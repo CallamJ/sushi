@@ -137,7 +137,7 @@ internal sealed class SushiSemanticModel
             else if (token.IsKeyword("var"))
             {
                 var name = NextIdentifier(tokens, index + 1);
-                if (name >= 0) Add(name, SushiSymbolKind.Variable);
+                if (name >= 0) Add(name, IsInClassBody(tokens, index) ? SushiSymbolKind.Field : SushiSymbolKind.Variable);
             }
         }
 
