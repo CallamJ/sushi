@@ -1,189 +1,394 @@
-#!/bin/bash
-set -euo pipefail # Exit on error
+#!/usr/bin/env bash
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${REPO_ROOT}"
+set -euo pipefail
+
+# ============================================================================
+# .NET cross-platform build / publish script
+#
+# Project-specific configuration
+# ============================================================================
 
 PROJECT_NAME="Sushi"
-OUTPUT_DIR="${REPO_ROOT}/publish"
+
+# ============================================================================
+# Generic configuration
+# ============================================================================
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+PROJECT="$REPO_ROOT/src/$PROJECT_NAME/$PROJECT_NAME.csproj"
+DIST_ROOT="$REPO_ROOT/dist/$PROJECT_NAME"
+
 CONFIGURATION="Release"
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-show_help() {
-    echo "Usage: $0 <platform1> [platform2] ..."
-    echo ""
-    echo "Arguments:"
-    echo "  <platforms>  Space-separated list of platforms to build"
-    echo ""
-    echo "Available platforms:"
-    echo "  win-x64, win-x86, win-arm64"
-    echo "  linux-x64, linux-arm64, linux-arm"
-    echo "  osx-x64, osx-arm64"
-    echo ""
-    echo "Examples:"
-    echo "  $0 win-x64                  # Build only Windows 64-bit"
-    echo "  $0 win-x64 linux-x64        # Build Windows and Linux 64-bit"
-    echo "  $0 osx-x64 osx-arm64        # Build both macOS versions"
-    echo "  $0 win-x64 linux-x64 osx-arm64  # Build multiple platforms"
-    exit "${1-0}"
+
+SELF_CONTAINED=false
+SINGLE_FILE=false
+READY_TO_RUN=false
+TRIM=false
+
+RUNTIME="all"
+CLEAN=true
+
+# Major .NET desktop/server targets.
+RUNTIMES=(
+    "linux-x64"
+    "linux-arm64"
+    "win-x64"
+    "win-arm64"
+    "osx-x64"
+    "osx-arm64"
+)
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+usage() {
+    cat <<EOF
+Usage:
+  $(basename "$0") [OPTIONS]
+
+Build and publish $PROJECT_NAME for one or more platforms.
+
+Options:
+
+  -c, --configuration NAME
+      Build configuration.
+
+      Default: Release
+
+  -r, --runtime RUNTIME
+      Runtime to publish for.
+
+      Available:
+        linux-x64
+        linux-arm64
+        win-x64
+        win-arm64
+        osx-x64
+        osx-arm64
+        all
+
+      Default: all
+
+  -s, --self-contained
+      Produce self-contained applications.
+
+      The target machine does not need the .NET runtime installed.
+
+  -f, --framework-dependent
+      Produce framework-dependent applications.
+
+      The target machine must have the appropriate .NET runtime installed.
+
+      This is the default.
+
+  --single-file
+      Bundle the application into a single executable.
+
+      This does not imply self-contained publishing.
+
+  --ready-to-run
+      Precompile eligible .NET assemblies using ReadyToRun.
+
+      This can improve startup time at the cost of larger artifacts and
+      longer publish times.
+
+  -t, --trim
+      Enable .NET assembly trimming.
+
+      This can significantly reduce application size but may break
+      applications that depend on reflection or dynamic assembly loading.
+
+  --no-clean
+      Don't remove existing distribution output before building.
+
+  -h, --help
+      Show this help.
+
+Examples:
+
+  # Build all platforms, framework-dependent
+  $(basename "$0")
+
+  # Build all platforms, self-contained
+  $(basename "$0") --self-contained
+
+  # Build all platforms as single-file self-contained executables
+  $(basename "$0") --self-contained --single-file
+
+  # Build all platforms as self-contained ReadyToRun executables
+  $(basename "$0") --self-contained --ready-to-run
+
+  # Recommended portable distribution build
+  $(basename "$0") --self-contained --single-file --ready-to-run
+
+  # Build everything with trimming
+  $(basename "$0") --self-contained --single-file --ready-to-run --trim
+
+  # Build only Linux x64
+  $(basename "$0") --runtime linux-x64
+
+  # Build Linux ARM64
+  $(basename "$0") --runtime linux-arm64 --self-contained
+
+  # Build macOS Apple Silicon
+  $(basename "$0") --runtime osx-arm64 --self-contained
+
+  # Build Debug
+  $(basename "$0") --configuration Debug
+
+Output:
+
+  dist/$PROJECT_NAME/<configuration>/<runtime>/
+
+For example:
+
+  dist/$PROJECT_NAME/Release/linux-x64/
+  dist/$PROJECT_NAME/Release/linux-arm64/
+  dist/$PROJECT_NAME/Release/win-x64/
+  dist/$PROJECT_NAME/Release/win-arm64/
+  dist/$PROJECT_NAME/Release/osx-x64/
+  dist/$PROJECT_NAME/Release/osx-arm64/
+EOF
 }
-# Check for help flag or no arguments
-if [[ $# -eq 0 ]]; then
-    echo -e "${RED}Error: No platforms specified${NC}"
-    echo ""
-    show_help 2
-fi
-if [[ "${1-}" == "-h" ]] || [[ "${1-}" == "--help" ]]; then
-    show_help
-fi
-BUILD_PLATFORMS=("$@")
-echo -e "${GREEN}  Building ${PROJECT_NAME}${NC}"
-# Clean only artifacts owned by this binary build.  Keep editor packages and
-# NuGet artifacts that may already exist under publish/.
-if [ -d "$OUTPUT_DIR" ]; then
-    echo -e "${YELLOW}Cleaning previous binary artifacts...${NC}"
-    find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Sushi-*' -delete
-    find "$OUTPUT_DIR" -maxdepth 1 -type d -name 'temp_*' -prune -exec rm -rf {} +
-fi
-mkdir -p "$OUTPUT_DIR"
 
-get_output_filename() {
-    local rid=$1
-    local platform=""
-    local arch=""
-    local bits=""
-    local extension=""
+error() {
+    echo "error: $*" >&2
+    exit 1
+}
 
-    case "$rid" in
-    win-x64)
-        platform="win"
-        arch="x64"
-        bits="64"
-        extension=".exe"
-        ;;
-    win-x86)
-        platform="win"
-        arch="x86"
-        bits="32"
-        extension=".exe"
-        ;;
-    win-arm64)
-        platform="win"
-        arch="arm"
-        bits="64"
-        extension=".exe"
-        ;;
-    linux-x64)
-        platform="linux"
-        arch="x64"
-        bits="64"
-        ;;
-    linux-arm64)
-        platform="linux"
-        arch="arm"
-        bits="64"
-        ;;
-    linux-arm)
-        platform="linux"
-        arch="arm"
-        bits="32"
-        ;;
-    osx-x64)
-        platform="osx"
-        arch="x64"
-        bits="64"
-        ;;
-    osx-arm64)
-        platform="osx"
-        arch="arm"
-        bits="64"
-        ;;
-    *)
-        echo "Unsupported runtime identifier: $rid" >&2
-        return 1
-        ;;
+# ============================================================================
+# Parse arguments
+# ============================================================================
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -c|--configuration)
+            [[ $# -ge 2 ]] || error "$1 requires a value"
+            CONFIGURATION="$2"
+            shift 2
+            ;;
+
+        -r|--runtime)
+            [[ $# -ge 2 ]] || error "$1 requires a value"
+            RUNTIME="$2"
+            shift 2
+            ;;
+
+        -s|--self-contained)
+            SELF_CONTAINED=true
+            shift
+            ;;
+
+        -f|--framework-dependent)
+            SELF_CONTAINED=false
+            shift
+            ;;
+
+        --single-file)
+            SINGLE_FILE=true
+            shift
+            ;;
+
+        --ready-to-run)
+            READY_TO_RUN=true
+            shift
+            ;;
+
+        -t|--trim)
+            TRIM=true
+            shift
+            ;;
+
+        --no-clean)
+            CLEAN=false
+            shift
+            ;;
+
+        -h|--help)
+            usage
+            exit 0
+            ;;
+
+        *)
+            error "unknown option '$1'"
+            ;;
     esac
-
-    echo "${PROJECT_NAME}-${platform}_${arch}-${bits}${extension}"
-}
-
-build_platform() {
-    local rid=$1
-    local description=$2
-    local temp_dir="$OUTPUT_DIR/temp_$rid"
-
-    echo ""
-    echo -e "${YELLOW}Building for $description ($rid)...${NC}"
-
-    if ! dotnet publish "./src/${PROJECT_NAME}/${PROJECT_NAME}.csproj" \
-        -c "$CONFIGURATION" \
-        -r "$rid" \
-        --self-contained \
-        -o "$temp_dir" \
-        -p:UseAppHost=true \
-        -p:PublishSingleFile=true \
-        -p:PublishReadyToRun=true; then
-        echo -e "${RED}✗ Build failed${NC}"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-
-    # Get source and destination filenames
-    if [[ "$rid" == win-* ]]; then
-        src_file="$temp_dir/${PROJECT_NAME}.exe"
-    else
-        src_file="$temp_dir/${PROJECT_NAME}"
-    fi
-
-    dest_file="$OUTPUT_DIR/$(get_output_filename "$rid")"
-
-    if [[ ! -f "$src_file" ]]; then
-        echo -e "${RED}✗ Build completed but executable not found: $src_file${NC}"
-        rm -rf "$temp_dir"
-        return 1
-    fi
-
-    mv "$src_file" "$dest_file"
-    rm -rf "$temp_dir"
-
-    size=$(du -h "$dest_file" | cut -f1)
-    echo -e "${GREEN}✓ Built successfully ($size) -> $(basename "$dest_file")${NC}"
-}
-
-get_platform_description() {
-    local rid=$1
-    case "$rid" in
-    win-x64) echo "Windows (64-bit)" ;;
-    win-x86) echo "Windows (32-bit)" ;;
-    win-arm64) echo "Windows ARM64" ;;
-    linux-x64) echo "Linux (64-bit)" ;;
-    linux-arm64) echo "Linux ARM64" ;;
-    linux-arm) echo "Linux ARM" ;;
-    osx-x64) echo "macOS Intel" ;;
-    osx-arm64) echo "macOS Apple Silicon" ;;
-    *)
-        echo "Unsupported runtime identifier: $rid" >&2
-        return 1
-        ;;
-    esac
-}
-# Build selected platforms
-echo -e "${BLUE}Building platforms: ${BUILD_PLATFORMS[*]}${NC}"
-for rid in "${BUILD_PLATFORMS[@]}"; do
-    description=$(get_platform_description "$rid")
-    build_platform "$rid" "$description"
 done
-echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  Build Complete!${NC}"
-echo -e "${GREEN}========================================${NC}"
-echo ""
-echo "Executables are located in:"
-echo ""
-# Show output files
-ls -lh "$OUTPUT_DIR"/${PROJECT_NAME}-* 2>/dev/null || echo "No executables found"
+
+# ============================================================================
+# Validate environment
+# ============================================================================
+
+command -v dotnet >/dev/null 2>&1 || \
+    error "dotnet was not found in PATH"
+
+[[ -f "$PROJECT" ]] || \
+    error "project not found: $PROJECT"
+
+# ============================================================================
+# Resolve runtimes
+# ============================================================================
+
+if [[ "$RUNTIME" == "all" ]]; then
+    SELECTED_RUNTIMES=("${RUNTIMES[@]}")
+else
+    SELECTED_RUNTIMES=()
+
+    for candidate in "${RUNTIMES[@]}"; do
+        if [[ "$candidate" == "$RUNTIME" ]]; then
+            SELECTED_RUNTIMES+=("$candidate")
+            break
+        fi
+    done
+
+    if [[ "${#SELECTED_RUNTIMES[@]}" -eq 0 ]]; then
+        error "unsupported runtime '$RUNTIME'
+
+Supported runtimes:
+$(printf '  %s\n' "${RUNTIMES[@]}")"
+    fi
+fi
+
+# ============================================================================
+# Get .NET version
+# ============================================================================
+
+DOTNET_VERSION="$(dotnet --version)"
+
+# ============================================================================
+# Display configuration
+# ============================================================================
+
+echo
+echo "========================================"
+echo ".NET Build"
+echo "========================================"
+echo
+echo "Project:        $PROJECT_NAME"
+echo "Project file:   $PROJECT"
+echo "Configuration:  $CONFIGURATION"
+echo "Self-contained: $SELF_CONTAINED"
+echo "Single-file:    $SINGLE_FILE"
+echo "ReadyToRun:     $READY_TO_RUN"
+echo "Trimmed:        $TRIM"
+echo "Runtimes:       ${SELECTED_RUNTIMES[*]}"
+echo ".NET SDK:       $DOTNET_VERSION"
+echo
+
+# ============================================================================
+# Clean
+# ============================================================================
+
+OUTPUT_ROOT="$DIST_ROOT/$CONFIGURATION"
+
+if [[ "$CLEAN" == true ]]; then
+    echo "==> Cleaning $OUTPUT_ROOT"
+    rm -rf "$OUTPUT_ROOT"
+fi
+
+mkdir -p "$OUTPUT_ROOT"
+
+# ============================================================================
+# Publish
+# ============================================================================
+
+FAILED=()
+SUCCEEDED=()
+
+for runtime in "${SELECTED_RUNTIMES[@]}"; do
+    OUTPUT="$OUTPUT_ROOT/$runtime"
+
+    echo
+    echo "========================================"
+    echo "Publishing: $runtime"
+    echo "========================================"
+
+    mkdir -p "$OUTPUT"
+
+    PUBLISH_ARGS=(
+        publish
+        "$PROJECT"
+        --configuration "$CONFIGURATION"
+        --runtime "$runtime"
+        --self-contained "$SELF_CONTAINED"
+        --output "$OUTPUT"
+        --property:PublishSingleFile="$SINGLE_FILE"
+        --property:PublishReadyToRun="$READY_TO_RUN"
+        --property:PublishTrimmed="$TRIM"
+    )
+
+    if dotnet "${PUBLISH_ARGS[@]}"; then
+        SUCCEEDED+=("$runtime")
+        echo
+        echo "==> $runtime succeeded"
+    else
+        FAILED+=("$runtime")
+        echo
+        echo "==> $runtime FAILED" >&2
+    fi
+done
+
+# ============================================================================
+# Build metadata
+# ============================================================================
+
+METADATA="$OUTPUT_ROOT/build-info.txt"
+
+{
+    echo "Project: $PROJECT_NAME"
+    echo "Project file: $PROJECT"
+    echo "Configuration: $CONFIGURATION"
+    echo "Self-contained: $SELF_CONTAINED"
+    echo "Single-file: $SINGLE_FILE"
+    echo "ReadyToRun: $READY_TO_RUN"
+    echo "Trimmed: $TRIM"
+    echo ".NET SDK: $DOTNET_VERSION"
+    echo "Built: $(date --iso-8601=seconds 2>/dev/null || date)"
+    echo
+    echo "Successful runtimes:"
+    printf '  %s\n' "${SUCCEEDED[@]}"
+
+    if [[ "${#FAILED[@]}" -gt 0 ]]; then
+        echo
+        echo "Failed runtimes:"
+        printf '  %s\n' "${FAILED[@]}"
+    fi
+} > "$METADATA"
+
+# ============================================================================
+# Summary
+# ============================================================================
+
+echo
+echo "========================================"
+echo "Build Summary"
+echo "========================================"
+echo
+
+if [[ "${#SUCCEEDED[@]}" -gt 0 ]]; then
+    echo "Succeeded:"
+    printf '  ✓ %s\n' "${SUCCEEDED[@]}"
+fi
+
+if [[ "${#FAILED[@]}" -gt 0 ]]; then
+    echo
+    echo "Failed:"
+    printf '  ✗ %s\n' "${FAILED[@]}"
+fi
+
+echo
+echo "Output:"
+echo "  $OUTPUT_ROOT"
+echo
+echo "Metadata:"
+echo "  $METADATA"
+echo
+
+if [[ "${#FAILED[@]}" -gt 0 ]]; then
+    exit 1
+fi
+
+

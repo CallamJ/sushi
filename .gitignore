@@ -4,6 +4,7 @@ src/*/obj
 **/.idea/
 publish/
 tmp/
+dist/
 
 # Editor-client build outputs
 editors/vscode/node_modules/

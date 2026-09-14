@@ -21,6 +21,12 @@ restore:
 build: restore
     dotnet build {{sln}} -c {{config}} --no-restore
 
+package runtime:
+    scripts/build.sh -c Release --self-contained --single-file --ready-to-run --runtime {{runtime}}
+
+package-all:
+    scripts/build.sh -c Release --self-contained --single-file --ready-to-run --runtime all
+
 # Run the test suite (a console app, not `dotnet test`)
 test: restore
     dotnet run --project {{tests}} --framework {{tfm}} --no-restore
@@ -45,10 +51,6 @@ run file *args:
 bench *args:
     dotnet run --project {{cli}} -c {{config}} --no-restore -- benchmark {{args}}
 
-# Build self-contained single-file executables (e.g. `just package linux-x64 osx-arm64`)
-package *platforms:
-    bash scripts/build.sh {{platforms}}
-
 # Pack the dotnet tool nupkg
 pack: restore
     dotnet pack {{cli}} -c {{config}} --no-restore -o publish/nupkg
@@ -72,10 +74,6 @@ package-editors version="0.0.0":
     (cd editors/jetbrains && ./gradlew -PsushiVersion={{version}} buildPlugin)
     cp editors/jetbrains/build/distributions/sushi-jetbrains-{{version}}.zip publish/editors/
     @echo "JetBrains plugin: publish/editors/sushi-jetbrains-{{version}}.zip"
-
-# Build every supported standalone runtime
-package-all:
-    bash scripts/build.sh win-x64 win-x86 win-arm64 linux-x64 linux-arm64 linux-arm osx-x64 osx-arm64
 
 # Format check / apply
 fmt:
