@@ -378,9 +378,11 @@ internal sealed class SushiLanguageServer
 
     private static bool HasIdentifierPrefix(string text, int offset)
     {
-        var cursor = Math.Clamp(offset, 0, text.Length) - 1;
+        var end = Math.Clamp(offset, 0, text.Length);
+        var cursor = end - 1;
         while (cursor >= 0 && (char.IsLetterOrDigit(text[cursor]) || text[cursor] == '_')) cursor--;
-        return cursor + 1 < Math.Clamp(offset, 0, text.Length);
+        var start = cursor + 1;
+        return start < end && (char.IsLetter(text[start]) || text[start] == '_');
     }
 
     private static bool ReceiverMayExposeSymbol(SushiSemanticModel model, int offset, SushiSymbol symbol)
