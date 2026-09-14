@@ -286,6 +286,7 @@ internal sealed class SushiLanguageServer
         var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
         if (!memberContext && !HasIdentifierPrefix(document.Text, offset))
             return new { isIncomplete = false, items = Array.Empty<object>() };
+        var prefix = memberContext ? "" : IdentifierPrefix(document.Text, offset);
         if (memberContext)
         {
             foreach (var member in MemberCompletionItems(localModel, offset))
@@ -293,7 +294,7 @@ internal sealed class SushiLanguageServer
         }
         foreach (var symbol in localModel.Symbols.Where(symbol => !memberContext || symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method or SushiSymbolKind.EnumMember))
             if (!memberContext || ReceiverMayExposeSymbol(localModel, offset, symbol))
-                items[symbol.Name] = CompletionForSymbol(localModel, symbol);
+                items[symbol.Name] = CompletionForSymbol(localModel, symbol, memberContext);
         foreach (var occurrence in AnalyzeAll().Where(symbol => !memberContext && symbol.Uri != document.Uri && symbol.Exported))
         {
             var model = SushiSemanticModel.Create(DocumentFor(occurrence.Uri).Text);
@@ -320,7 +321,9 @@ internal sealed class SushiLanguageServer
         return new
         {
             isIncomplete = false,
-            items = items.Values.OrderBy(item => item.Label, StringComparer.Ordinal)
+            items = items.Values
+                .Where(item => memberContext || item.Label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(item => item.Label, StringComparer.Ordinal)
                 .Select(item => new { label = item.Label, kind = item.Kind, detail = item.Detail, documentation = item.Documentation is null ? null : new { kind = "markdown", value = item.Documentation }, tags = item.Deprecated is null ? null : new[] { 1 }, insertText = item.InsertText, insertTextFormat = item.InsertTextFormat }).ToArray()
         };
     }
@@ -378,11 +381,16 @@ internal sealed class SushiLanguageServer
 
     private static bool HasIdentifierPrefix(string text, int offset)
     {
+        var prefix = IdentifierPrefix(text, offset);
+        return prefix.Length > 0 && (char.IsLetter(prefix[0]) || prefix[0] == '_');
+    }
+
+    private static string IdentifierPrefix(string text, int offset)
+    {
         var end = Math.Clamp(offset, 0, text.Length);
         var cursor = end - 1;
         while (cursor >= 0 && (char.IsLetterOrDigit(text[cursor]) || text[cursor] == '_')) cursor--;
-        var start = cursor + 1;
-        return start < end && (char.IsLetter(text[start]) || text[start] == '_');
+        return text[(cursor + 1)..end];
     }
 
     private static bool ReceiverMayExposeSymbol(SushiSemanticModel model, int offset, SushiSymbol symbol)
@@ -400,8 +408,20 @@ internal sealed class SushiLanguageServer
         var dot = model.Tokens.LastOrDefault(token => token.End <= offset && token.Kind == ClassifiedTokenKind.Dot);
         var receiver = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start && token.Kind == ClassifiedTokenKind.Identifier);
         var type = receiver is null ? null : model.SymbolFor(receiver)?.DeclaredType;
-        var isString = type is null || type.Equals("string", StringComparison.OrdinalIgnoreCase) || type.Equals("str", StringComparison.OrdinalIgnoreCase);
-        var isArray = type is null || type.EndsWith("[]", StringComparison.Ordinal) || type.Equals("array", StringComparison.OrdinalIgnoreCase);
+        var modulePath = receiver is null ? null : ImportedModulePath(model, receiver.Text);
+        if (modulePath is not null)
+        {
+            foreach (var function in StandardLibrary.Functions.Where(function => function.Name.StartsWith(modulePath + ".", StringComparison.Ordinal)))
+            {
+                var shortName = function.Name[(modulePath.Length + 1)..];
+                var parameters = string.Join(", ", function.Parameters.Select(parameter => parameter.DisplayName));
+                yield return new CompletionItem($"{shortName}({parameters})", 3, function.ReturnType, function.Documentation, null,
+                    CallableInsertText(shortName, function.Parameters.Count), function.Parameters.Count > 0 ? 2 : null);
+            }
+            yield break;
+        }
+        var isString = type is not null && (type.Equals("string", StringComparison.OrdinalIgnoreCase) || type.Equals("str", StringComparison.OrdinalIgnoreCase));
+        var isArray = type is not null && (type.EndsWith("[]", StringComparison.Ordinal) || type.Equals("array", StringComparison.OrdinalIgnoreCase));
         if (isString)
         {
             foreach (var name in new[] { "trim", "lower", "upper", "length", "split", "contains", "startsWith", "endsWith", "replace", "isMatch", "match" })
@@ -444,14 +464,45 @@ internal sealed class SushiLanguageServer
         }
     }
 
-    private static CompletionItem CompletionForSymbol(SushiSemanticModel model, SushiSymbol symbol)
+    private static string? ImportedModulePath(SushiSemanticModel model, string alias)
+    {
+        for (var index = 0; index + 1 < model.Tokens.Count; index++)
+        {
+            if (!model.Tokens[index].IsKeyword("use")) continue;
+            var path = new List<string>();
+            var cursor = index + 1;
+            while (cursor < model.Tokens.Count && model.Tokens[cursor].Kind == ClassifiedTokenKind.Identifier)
+            {
+                path.Add(model.Tokens[cursor].Text);
+                cursor++;
+                if (cursor >= model.Tokens.Count || model.Tokens[cursor].Kind != ClassifiedTokenKind.Dot) break;
+                cursor++;
+            }
+            if (path.Count == 0) continue;
+            var resolvedAlias = path[^1];
+            if (cursor + 1 < model.Tokens.Count && model.Tokens[cursor].IsKeyword("as"))
+                resolvedAlias = model.Tokens[cursor + 1].Text;
+            if (resolvedAlias == alias) return string.Join('.', path);
+        }
+        return null;
+    }
+
+    private static CompletionItem CompletionForSymbol(SushiSemanticModel model, SushiSymbol symbol, bool includeSignatureLabel = false)
     {
         var callable = symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method;
         var parameterCount = callable ? ParametersFor(model, symbol).Count() : 0;
+        var detail = callable
+            ? includeSignatureLabel
+                ? symbol.DeclaredType ?? "void"
+                : $"{symbol.DeclaredType ?? "void"} {symbol.Name}({string.Join(", ", ParametersFor(model, symbol).Select(parameter => ParameterSignature(model, parameter)))})"
+            : symbol.Kind.ToString().ToLowerInvariant();
+        var label = includeSignatureLabel && callable
+            ? $"{symbol.Name}({string.Join(", ", ParametersFor(model, symbol).Select(parameter => ParameterSignature(model, parameter)))})"
+            : symbol.Name;
         return new CompletionItem(
-            symbol.Name,
+            label,
             CompletionKind(symbol.Kind.ToString().ToLowerInvariant()),
-            symbol.Kind.ToString().ToLowerInvariant(),
+            detail,
             DocumentationMarkdown(symbol.Documentation),
             symbol.Documentation?.DeprecationMessage,
             callable ? CallableInsertText(symbol.Name, parameterCount) : null,

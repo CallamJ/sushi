@@ -410,11 +410,11 @@ public sealed class LanguageServerTests
     [Fact]
     public async Task Server_ProvidesSnippetsCodeLensesAndInMemoryGeneratedOutput()
     {
-        const string source = "println(\"hello\")";
+        const string source = "println(\"hello\")\ni";
         var input = new MemoryStream(Encoding.UTF8.GetBytes(
             Frame("{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"initialize\",\"params\":{\"initializationOptions\":{\"targetProfile\":\"bash-linux\"}}}") +
             Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/workflow.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
-            Frame("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/workflow.sushi\"},\"position\":{\"line\":0,\"character\":0}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/workflow.sushi\"},\"position\":{\"line\":1,\"character\":1}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/codeLens\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/workflow.sushi\"}}}") +
             Frame($"{{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"sushi/transpileDocument\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/workflow.sushi\"}},\"text\":{JsonString("println(\\\"unsaved\\\")")}}}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
@@ -440,7 +440,7 @@ public sealed class LanguageServerTests
         const string source = "void ready() {}\nint add(int left, int right) { return left + right }\n";
         var input = new MemoryStream(Encoding.UTF8.GetBytes(
             Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/call-completion.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
-            Frame("{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/call-completion.sushi\"},\"position\":{\"line\":2,\"character\":0}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/call-completion.sushi\"},\"position\":{\"line\":2,\"character\":1}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
         var output = new MemoryStream();
 
