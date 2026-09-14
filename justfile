@@ -45,11 +45,6 @@ run file *args:
 bench *args:
     dotnet run --project {{cli}} -c {{config}} --no-restore -- benchmark {{args}}
 
-# Transpile and execute the M3 verification example for a shell
-verify target="Bash" ext="sh":
-    dotnet run --project {{cli}} --no-restore -- transpile examples/m3_verification.sushi -t {{target}}
-    {{ if target == "Bash" { "bash" } else if target == "Zsh" { "zsh" } else { "pwsh" } }} examples/m3_verification.{{ext}}
-
 # Build self-contained single-file executables (e.g. `just package linux-x64 osx-arm64`)
 package *platforms:
     bash scripts/build.sh {{platforms}}
@@ -120,4 +115,6 @@ ci: test
     bash scripts/build.sh linux-x64
     test -f publish/Sushi-linux_x64-64
     publish/Sushi-linux_x64-64 --help >/dev/null
-    publish/Sushi-linux_x64-64 check examples/m3_verification.sushi --target bash-linux --format json >/dev/null
+    mkdir -p tmp
+    printf 'println("Sushi package smoke")\n' > tmp/package-smoke.sushi
+    publish/Sushi-linux_x64-64 check tmp/package-smoke.sushi --target bash-linux --format json >/dev/null

@@ -1,7 +1,0 @@
-process(object { string name, int age } user) {
-    return user.name
-}
-
-var input = { name: "alice", age: 42 }
-var output = process(input)
-println(output)

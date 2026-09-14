@@ -28,20 +28,20 @@ usage() {
     cat <<'EOF'
 Usage: scripts/benchmark-examples.sh [options]
 
-Benchmarks transpile+run for Sushi examples across Bash, Zsh, and PowerShell.
+Benchmarks transpile+run for supplied Sushi scripts across Bash, Zsh, and PowerShell.
 
 Options:
   --iterations N            Number of benchmark iterations per example/target (default: 1)
   --targets LIST            Comma-separated targets: bash,zsh,powershell (default: all)
-  --examples LIST           Comma-separated .sushi paths (default: all examples/*.sushi except known invalid static sample)
+  --examples LIST           Comma-separated .sushi paths to benchmark (required)
   --include-http            Do not set SUSHI_SKIP_HTTP=1 when running examples
   --no-build                Skip initial dotnet build
   -h, --help                Show this help
 
 Examples:
-  scripts/benchmark-examples.sh
-  scripts/benchmark-examples.sh --iterations 3
-  scripts/benchmark-examples.sh --targets bash,zsh --examples examples/m3_verification.sushi,examples/m3_process_pipeline.sushi
+  scripts/benchmark-examples.sh --examples ./hello.sushi
+  scripts/benchmark-examples.sh --iterations 3 --examples ./hello.sushi
+  scripts/benchmark-examples.sh --targets bash,zsh --examples ./hello.sushi,./deploy.sushi
 EOF
 }
 
@@ -177,15 +177,9 @@ if ! [[ "$ITERATIONS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 if [[ "$CUSTOM_EXAMPLES" == "false" ]]; then
-    while IFS= read -r example_path; do
-        base_name="$(basename "$example_path")"
-        case "$base_name" in
-            imports.sushi|m4_structural_invalid_static.sushi)
-                continue
-                ;;
-        esac
-        EXAMPLES+=("$example_path")
-    done < <(find examples -maxdepth 1 -type f -name '*.sushi' | sort)
+    echo "--examples is required; Sushi does not ship benchmark scripts." >&2
+    usage >&2
+    exit 2
 fi
 
 if [[ "${#EXAMPLES[@]}" -eq 0 ]]; then

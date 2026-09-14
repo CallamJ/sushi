@@ -1,6 +1,0 @@
-var sourceDir = "dist"
-var archivePath = "dist.zip"
-
-// Lowers to zip on Bash/Zsh and Compress-Archive on PowerShell.
-std.archive.zip(sourceDir, archivePath)
-println("Created: " + archivePath)

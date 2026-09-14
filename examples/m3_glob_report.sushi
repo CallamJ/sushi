@@ -1,8 +1,0 @@
-var files = std.fs.glob("src/**/*.cs")
-println("matched files:")
-println(files[0])
-
-var outPath = std.path.join("tmp", "glob-report.txt")
-std.io.writeText(outPath, files[0])
-println("wrote report:")
-println(outPath)

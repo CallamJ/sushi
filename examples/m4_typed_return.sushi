@@ -1,6 +1,0 @@
-int increment(int value) {
-    return value + 1
-}
-
-var result = increment(41)
-println(result)

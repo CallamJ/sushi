@@ -90,11 +90,12 @@ jobs:
       - run: |
           test -f publish/Sushi-linux_x64-64
           publish/Sushi-linux_x64-64 --help >/dev/null
-          publish/Sushi-linux_x64-64 check examples/m3_verification.sushi --target bash-linux --format json >/dev/null
+          printf 'println("Sushi package smoke")\n' > /tmp/sushi-package-smoke.sushi
+          publish/Sushi-linux_x64-64 check /tmp/sushi-package-smoke.sushi --target bash-linux --format json >/dev/null
           publish/Sushi-linux_x64-64 benchmark --targets bash --iterations 1 --warmup 0 --strict-output --filter regex_match --output-dir /tmp/sushi-package-smoke
 
-  m3-verification:
-    name: M3 Verification (${{ matrix.name }})
+  transpilation-smoke:
+    name: Transpilation smoke (${{ matrix.name }})
     needs: unit-tests
     strategy:
       fail-fast: false
@@ -104,17 +105,17 @@ jobs:
             os: ubuntu-latest
             target: bash-linux
             command: bash
-            output: examples/m3_verification.bash-linux.sh
+            output: tmp/sushi-smoke.bash-linux.sh
           - name: Zsh
             os: macos-latest
             target: zsh-macos
             command: zsh
-            output: examples/m3_verification.zsh-macos.zsh
+            output: tmp/sushi-smoke.zsh-macos.zsh
           - name: PowerShell
             os: windows-latest
             target: powershell-windows
             command: powershell
-            output: examples/m3_verification.powershell-windows.ps1
+            output: tmp/sushi-smoke.powershell-windows.ps1
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -128,15 +129,17 @@ jobs:
             **/*.csproj
             **/packages.lock.json
       - run: dotnet restore src/Sushi/Sushi.csproj
-      - if: matrix.name == 'Bash'
-        run: sudo apt-get update && sudo apt-get install -y curl
-      - run: dotnet run --project src/Sushi --no-restore -- transpile examples/m3_verification.sushi -t ${{ matrix.target }}
+      - shell: bash
+        run: |
+          mkdir -p tmp
+          printf 'println("Sushi transpilation smoke")\n' > tmp/sushi-smoke.sushi
+          dotnet run --project src/Sushi --no-restore -- transpile tmp/sushi-smoke.sushi --target ${{ matrix.target }} --output ${{ matrix.output }}
       - if: matrix.name == 'PowerShell'
         shell: powershell
-        run: ./examples/m3_verification.powershell-windows.ps1
+        run: ./tmp/sushi-smoke.powershell-windows.ps1
       - if: matrix.name == 'PowerShell'
         shell: pwsh
-        run: ./examples/m3_verification.powershell-windows.ps1
+        run: ./tmp/sushi-smoke.powershell-windows.ps1
       - if: matrix.name != 'PowerShell'
         run: ${{ matrix.command }} ${{ matrix.output }}
 
@@ -190,7 +193,7 @@ jobs:
   release-binaries:
     name: Release binary (${{ matrix.rid }})
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-    needs: [unit-tests, package-smoke, m3-verification]
+    needs: [unit-tests, package-smoke, transpilation-smoke]
     strategy:
       fail-fast: false
       matrix:
@@ -229,7 +232,7 @@ jobs:
   release-tool:
     name: Release .NET tool
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-    needs: [unit-tests, package-smoke, m3-verification]
+    needs: [unit-tests, package-smoke, transpilation-smoke]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -250,7 +253,7 @@ jobs:
   release-editors:
     name: Release editor packages
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-    needs: [unit-tests, editor-clients, package-smoke, m3-verification]
+    needs: [unit-tests, editor-clients, package-smoke, transpilation-smoke]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

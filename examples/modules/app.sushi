@@ -1,8 +1,0 @@
-use "./helpers.sushi" as helpers
-use "./models.sushi" as models
-
-println(helpers.greet("Sushi"))
-var task = models.createTask(title: "Finish the script")
-task.complete()
-println(string(task))
-println(models.Level.High.rank)

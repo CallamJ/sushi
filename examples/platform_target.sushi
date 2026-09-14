@@ -1,6 +1,0 @@
-// Compile-time target selection: only the selected branch is emitted.
-if (std.target.platform() == "windows") {
-    println("Windows archive command: Compress-Archive")
-} else {
-    println("Unix archive command: zip")
-}

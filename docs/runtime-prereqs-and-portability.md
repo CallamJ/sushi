@@ -159,9 +159,8 @@ Regex contract:
 - PowerShell target uses .NET regex directly.
 - Bash/Zsh targets approximate .NET regex behavior using shell tooling.
 
-## 3. Known M3 limitations
+## 3. Known limitations
 
-- HTTP behavior can vary by host networking/TLS policy.
 - Glob output format is not fully normalized cross-target yet.
 - structural field typing currently targets flat field contracts (no deep nested structural field contracts).
 - inheritance, reflection, dynamic member names, and mutation of enum singletons
@@ -169,27 +168,30 @@ Regex contract:
 
 ## 4. Verification commands
 
+Create a small script first:
+
+```sushi
+// hello.sushi
+println("Sushi is working")
+```
+
 ### 4.1 PowerShell target
 
 ```powershell
-dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t powershell-windows
-powershell -NoProfile -ExecutionPolicy Bypass -File examples/m3_verification.powershell-windows.ps1
+dotnet run --project src/Sushi -- transpile hello.sushi --target powershell-windows
+powershell -NoProfile -ExecutionPolicy Bypass -File hello.powershell-windows.ps1
 ```
 
 ### 4.2 Bash target
 
 ```bash
-dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Bash
-bash examples/m3_verification.sh
+dotnet run --project src/Sushi -- transpile hello.sushi --target bash-linux
+bash hello.bash-linux.sh
 ```
 
 ### 4.3 Zsh target
 
 ```zsh
-dotnet run --project src/Sushi -- transpile examples/m3_verification.sushi -t Zsh
-zsh examples/m3_verification.zsh
+dotnet run --project src/Sushi -- transpile hello.sushi --target zsh-macos
+zsh hello.zsh-macos.zsh
 ```
-
-### 4.4 No-network environments
-
-Set `SUSHI_SKIP_HTTP=1` to skip HTTP assertions in verification scripts.

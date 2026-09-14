@@ -1,9 +1,0 @@
-box Examples.Helpers
-
-export greet(name) {
-    return "Hello, $(name)!"
-}
-
-privateGreeting() {
-    return "This stays inside the helpers module."
-}

@@ -1,8 +1,0 @@
-var response = std.http.get("https://api.github.com")
-println("status:")
-println(response.status)
-
-if (response.ok) {
-    println("body preview:")
-    println(response.body)
-}
