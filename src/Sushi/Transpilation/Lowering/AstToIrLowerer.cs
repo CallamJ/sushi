@@ -2754,6 +2754,13 @@ public sealed class AstToIrLowerer
             normalized = normalized[..^1];
         }
 
+        // Preserve C-style array annotations in the AST while lowering them
+        // to Sushi's single native array representation in the IR.
+        if (normalized.EndsWith("[]", StringComparison.Ordinal))
+        {
+            return IrTypeRef.Primitive("array");
+        }
+
         var primitive = normalized.ToLowerInvariant() switch
         {
             "string" or "str" or "char" => IrTypeRef.Primitive("string"),

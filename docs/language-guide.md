@@ -111,8 +111,10 @@ string greet(string name, string punctuation = "!") {
 println(greet(name: "Ada"))
 ```
 
-Common parameter types are `string`, `int`, `float`, `bool`, `array`, and
-`object`. Structural object contracts describe required fields:
+Common parameter types are `string`, `int`, `float`, `bool`, and `object`.
+Use a `[]` suffix to form an array of any type, such as `string[]` or
+`int[]`; `any[]` permits mixed elements. Structural object contracts describe
+required fields:
 
 ```sushi
 string label(object { string name, int age } person) {
@@ -141,11 +143,16 @@ package. Frequently used modules include:
 Example:
 
 ```sushi
-var files = std.fs.glob("src/**/*.cs")
+use std.fs.{glob}
+use std.path.basename
+
+var files = glob("src/**/*.cs")
 for (var file : files) {
-    println(std.path.basename(file))
+    println(basename(file))
 }
 ```
+
+`std.fs.size(path)` returns a regular file's size in bytes as an `int`.
 
 `std.archive.zip(source, destination)` lowers to `zip` on Bash/Zsh and
 `Compress-Archive` on PowerShell. Target tools such as `curl`, `zip`, `find`,

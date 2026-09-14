@@ -254,6 +254,10 @@ public sealed class IntrinsicRegistry
                     new IntrinsicParameter("cwd", hasDefaultValue: true, defaultValue: null)
                 }),
             new IntrinsicSignature(
+                "std.fs.size",
+                IntrinsicId.FsSize,
+                new[] { new IntrinsicParameter("path", typeName: "string") }),
+            new IntrinsicSignature(
                 "std.fs.isFile",
                 IntrinsicId.FsIsFile,
                 new[] { new IntrinsicParameter("path") }),

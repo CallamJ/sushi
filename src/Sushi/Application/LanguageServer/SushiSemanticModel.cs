@@ -347,7 +347,8 @@ internal sealed class SushiSemanticModel
 
     private static bool IsDeclarationTerminator(ClassifiedToken[] tokens, int index) => index >= tokens.Length ||
         tokens[index].Kind is ClassifiedTokenKind.Semicolon or ClassifiedTokenKind.RightBrace or ClassifiedTokenKind.Operator or ClassifiedTokenKind.Comma;
-    internal static bool IsTypeName(string name) => name is "string" or "int" or "float" or "bool" or "array" or "object" or "any" or "void" ||
+    internal static bool IsTypeName(string name) => name.EndsWith("[]", StringComparison.Ordinal) ||
+        name is "string" or "int" or "float" or "bool" or "object" or "any" or "void" ||
         (name.Length > 0 && char.IsUpper(name[0]));
     private static bool IsInClassBody(ClassifiedToken[] tokens, int index)
     {

@@ -2059,6 +2059,7 @@ function __sushi_call_method {
             IntrinsicId.IoExists => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)})",
             IntrinsicId.FsIsFile => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)} -PathType Leaf)",
             IntrinsicId.FsIsDirectory => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)} -PathType Container)",
+            IntrinsicId.FsSize => $"([int64](Get-Item -LiteralPath {Arg(call.Arguments, 0)}).Length)",
             IntrinsicId.PathJoin => EmitPathJoin(call.Arguments),
             IntrinsicId.PathDirname => $"(Split-Path -Path {Arg(call.Arguments, 0)} -Parent)",
             IntrinsicId.PathBasename => $"(Split-Path -Path {Arg(call.Arguments, 0)} -Leaf)",
@@ -2233,6 +2234,9 @@ function __sushi_call_method {
     {
         return $"(__sushi_fs_glob -pattern ([string]({Arg(arguments, 0)})) -cwd {Arg(arguments, 1)})";
     }
+
+    private string EmitFsSize(IReadOnlyList<IrExpression> arguments) =>
+        $"([int64]$(if ((Get-Item -LiteralPath {Arg(arguments, 0)}).PSIsContainer) {{ throw 'std.fs.size: regular file required' }} else {{ (Get-Item -LiteralPath {Arg(arguments, 0)}).Length }}))";
 
     private string EmitFsCreateDirectory(IReadOnlyList<IrExpression> arguments) =>
         $"(New-Item -ItemType Directory -Force -Path {Arg(arguments, 0)})";

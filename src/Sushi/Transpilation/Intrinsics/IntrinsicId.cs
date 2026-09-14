@@ -31,6 +31,7 @@ public enum IntrinsicId
     OsCwd,
     OsChdir,
     FsGlob,
+    FsSize,
     HttpGet,
     HttpPost,
     TargetShell,

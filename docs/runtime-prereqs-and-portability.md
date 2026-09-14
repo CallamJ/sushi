@@ -79,7 +79,14 @@ runtime is required.
 - A missing or non-directory `cwd` is a runtime error.
 - Does not traverse directory symlinks and does not support brace expansion.
 
-### 2.5 `std.http.get/post`
+### 2.5 `std.fs.size(path)`
+
+Returns the file size in bytes as an integer. The path must identify a regular
+file; missing paths, inaccessible paths, and directories are runtime errors.
+The operation lowers directly to `stat` on Bash/Zsh and `Get-Item`.Length on
+PowerShell, so it does not add a Sushi runtime helper.
+
+### 2.6 `std.http.get/post`
 
 Returns object fields:
 
@@ -99,7 +106,8 @@ Network/runtime failure contract:
 Sushi statically checks typed user functions and lowers parameter types to each
 target's native facilities:
 
-- primitive parameter types: `string`, `int`, `float`, `bool`, `array`, `object`
+- primitive parameter types: `string`, `int`, `float`, `bool`, `object`; use
+  `T[]` (for example `string[]`) for arrays of any element type
 - structural parameter types: `object { ... }`
 - function return type contracts
 

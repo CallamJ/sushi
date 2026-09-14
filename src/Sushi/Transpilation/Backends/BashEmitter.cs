@@ -2796,6 +2796,17 @@ __sushi_native_obj_to_json() {
                     _nativeObjectVariables.Add(name);
                     break;
                 }
+                if (initializer is IrIdentifierExpression arrayAlias &&
+                    _nativeArrayVariables.ContainsKey(SanitizeVariableName(arrayAlias.Name)))
+                {
+                    var source = SanitizeVariableName(arrayAlias.Name);
+                    WriteLine($"{(inFunction ? "local " : "declare ")}-a {name}=(\"${{{source}[@]}}\")");
+                    _nativeArrayVariables[name] = name;
+                    _arrayInitializers.Remove(name);
+                    _nativeObjectVariables.Remove(name);
+                    _recordVariables.Remove(name);
+                    break;
+                }
                 if (initializer is IrArrayLiteralExpression array)
                 {
                     var values = array.Elements.Any(element => element is IrObjectLiteralExpression)
@@ -4177,6 +4188,16 @@ __sushi_native_obj_to_json() {
                 return $"$(( {unary.Operator}{operandTemp} ))";
             }
 
+            // Foreach lowering uses this internal length operation.  When the
+            // value is a known native shell array, lower it directly instead
+            // of attempting to call the JSON runtime helper.
+            case IrCallExpression { Callee: "__sushi_json_length", Arguments: [{ Value: IrIdentifierExpression identifier }] }
+                when _nativeArrayVariables.ContainsKey(SanitizeVariableName(identifier.Name)):
+            {
+                var arrayName = SanitizeVariableName(identifier.Name);
+                return $"\"${{#{arrayName}[@]}}\"";
+            }
+
             case IrCallExpression call when
                 !call.Callee.StartsWith("__sushi_new_", StringComparison.Ordinal) &&
                 (_functions.ContainsKey(call.Callee) ||
@@ -4769,6 +4790,8 @@ __sushi_native_obj_to_json() {
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
                 IsDefinitelyInteger(binary.Left) && IsDefinitelyInteger(binary.Right),
+            IrCallExpression { Callee: "__sushi_json_length", Arguments: [{ Value: IrIdentifierExpression identifier }] }
+                when _nativeArrayVariables.ContainsKey(SanitizeVariableName(identifier.Name)) => true,
             IrCallExpression call => _integerReturningFunctions.Contains(call.Callee),
             IrResolvedMethodCallExpression method => _integerReturningFunctions.Contains(method.Callee),
             IrAdapterCallExpression adapter => _integerReturningFunctions.Contains(adapter.Callee),
@@ -5274,6 +5297,7 @@ __sushi_native_obj_to_json() {
             IntrinsicId.IoExists => $"$([[ -e {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
             IntrinsicId.FsIsFile => $"$([[ -f {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
             IntrinsicId.FsIsDirectory => $"$([[ -d {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
+            IntrinsicId.FsSize => EmitFsSize(call.Arguments),
             IntrinsicId.PathJoin => EmitPathJoin(call.Arguments),
             IntrinsicId.PathDirname => $"$(dirname -- {Arg(call.Arguments, 0)})",
             IntrinsicId.PathBasename => $"$(basename -- {Arg(call.Arguments, 0)})",
@@ -5386,6 +5410,11 @@ __sushi_native_obj_to_json() {
 
     private string EmitFsCreateDirectory(IReadOnlyList<IrExpression> arguments) =>
         $"mkdir -p -- {Arg(arguments, 0)}";
+
+    private string EmitFsSize(IReadOnlyList<IrExpression> arguments) =>
+        _context.TargetProfile.Platform == TargetPlatform.Macos
+            ? $"$(if [[ -f {Arg(arguments, 0)} ]]; then stat -f '%z' -- {Arg(arguments, 0)}; else printf 'std.fs.size: regular file required\\n' >&2; exit 1; fi)"
+            : $"$(if [[ -f {Arg(arguments, 0)} ]]; then stat -c '%s' -- {Arg(arguments, 0)}; else printf 'std.fs.size: regular file required\\n' >&2; exit 1; fi)";
 
     private string EmitFsRemove(IReadOnlyList<IrExpression> arguments) =>
         $"if [[ {Arg(arguments, 1)} == 'true' ]]; then rm -rf -- {Arg(arguments, 0)}; else rm -f -- {Arg(arguments, 0)}; fi";

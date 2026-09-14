@@ -1954,6 +1954,25 @@ namespace Sushi.Tests
             var forEach = (ForEachStatementNode)block.Statements[0];
             Assert.IsType<CallExpressionNode>(forEach.Collection);
         }
+
+        [Fact]
+        public void TestTypedArrayDeclarationAndTypedForEach()
+        {
+            var ast = Parse(@"
+                string[] files = glob(""*"")
+                test() {
+                    for (string file : files) {
+                        print(file)
+                    }
+                }
+            ");
+
+            var declaration = Assert.IsType<VariableDeclarationStatementNode>(ast.Declarations[0]);
+            Assert.Equal("string[]", declaration.Type);
+            var function = Assert.IsType<FunctionDeclarationNode>(ast.Declarations[1]);
+            var loop = Assert.IsType<ForEachStatementNode>(Assert.IsType<BlockStatementNode>(function.Body).Statements[0]);
+            Assert.Equal("file", loop.ItemVariable);
+        }
         
         // ═══════════════════════════════════════════════════════════════════
         // RANGE EXPRESSIONS

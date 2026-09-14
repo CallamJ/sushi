@@ -413,6 +413,15 @@ public class Parser
                 type = firstToken.Text;
                 name = Advance().Text;
             }
+            else if (Check(ClassifiedTokenKind.LeftBracket)
+                     && Peek(1)?.Kind == ClassifiedTokenKind.RightBracket
+                     && Peek(2)?.Kind == ClassifiedTokenKind.Identifier)
+            {
+                Advance();
+                Advance();
+                type = firstToken.Text + "[]";
+                name = Advance().Text;
+            }
             else
             {
                 // Pattern: name; or name = ... → field without type (shouldn't happen in class)
@@ -609,6 +618,19 @@ public class Parser
             {
                 // Pattern: Type name → could be function or variable
                 type = firstToken.Text;
+                name = Advance().Text;
+            }
+            else if (Check(ClassifiedTokenKind.LeftBracket)
+                     && Peek(1)?.Kind == ClassifiedTokenKind.RightBracket
+                     && Peek(2)?.Kind == ClassifiedTokenKind.Identifier)
+            {
+                // C-style array type syntax (for example: string[] files).
+                // The IR currently models arrays uniformly, so retain the
+                // array-ness while allowing the element type to be checked
+                // by the normal declaration/type rules.
+                Advance();
+                Advance();
+                type = firstToken.Text + "[]";
                 name = Advance().Text;
             }
             else
@@ -937,6 +959,14 @@ public class Parser
                 _position = checkpoint;
                 return ParseVariableDeclarationStatement();
             }
+            if (Check(ClassifiedTokenKind.LeftBracket)
+                && Peek(1)?.Kind == ClassifiedTokenKind.RightBracket
+                && Peek(2)?.Kind == ClassifiedTokenKind.Identifier)
+            {
+                // C-style array type followed by a variable name.
+                _position = checkpoint;
+                return ParseVariableDeclarationStatement();
+            }
             _position = checkpoint;
         }
         
@@ -963,6 +993,14 @@ public class Parser
             if (Check(ClassifiedTokenKind.Identifier))
             {
                 type = first.Text;
+            }
+            else if (Check(ClassifiedTokenKind.LeftBracket)
+                     && Peek(1)?.Kind == ClassifiedTokenKind.RightBracket
+                     && Peek(2)?.Kind == ClassifiedTokenKind.Identifier)
+            {
+                Advance();
+                Advance();
+                type = first.Text + "[]";
             }
             else
             {
@@ -1319,7 +1357,8 @@ public class Parser
                     // Index: arr[index]
                     if (first == null)
                     {
-                        throw new Exception("Expected index expression");
+                        var bracket = Previous();
+                        throw new Exception($"Expected index expression at {bracket.Line}:{bracket.Column}");
                     }
                     
                     Expect(ClassifiedTokenKind.RightBracket);
