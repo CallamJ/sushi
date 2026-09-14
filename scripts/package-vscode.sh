@@ -32,3 +32,4 @@ cp -R node_modules/vscode-languageclient node_modules/vscode-jsonrpc \
 (cd "$tmp_dir" && zip -q -r "$extension_dir/$vsix" extension/node_modules)
 rm -rf "$tmp_dir"
 cp "$extension_dir/$vsix" "$root_dir/$output_dir/$vsix"
+echo "VS Code extension: $root_dir/$output_dir/$vsix"

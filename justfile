@@ -66,13 +66,17 @@ vscode version="0.0.0":
 # Build the IntelliJ-based plugin ZIP
 jetbrains version="0.0.0":
     (cd editors/jetbrains && ./gradlew -PsushiVersion={{version}} buildPlugin)
+    mkdir -p publish/editors
+    cp editors/jetbrains/build/distributions/sushi-jetbrains-{{version}}.zip publish/editors/
+    @echo "JetBrains plugin: publish/editors/sushi-jetbrains-{{version}}.zip"
 
 # Build both editor packages with a shared version
 package-editors version="0.0.0":
     (cd editors/vscode && npm ci)
     bash scripts/package-vscode.sh {{version}} publish/editors
     (cd editors/jetbrains && ./gradlew -PsushiVersion={{version}} buildPlugin)
-    cp editors/jetbrains/build/distributions/*.zip publish/editors/
+    cp editors/jetbrains/build/distributions/sushi-jetbrains-{{version}}.zip publish/editors/
+    @echo "JetBrains plugin: publish/editors/sushi-jetbrains-{{version}}.zip"
 
 # Build every supported standalone runtime
 package-all:
