@@ -43,11 +43,11 @@ lower is better. P95 shows the high-end result across scenarios. Run
 <!-- benchmark:start -->
 Run: 2026-09-13 · 10 scenarios passed for every target.
 
-| Target | Scenarios | Median ratio | P95 ratio |
-| --- | ---: | ---: | ---: |
-| bash | 10 | 1.044× | 1.531× |
-| powershell | 10 | 1.046× | 3.463× |
-| zsh | 10 | 1.004× | 2.227× |
+| Target     | Scenarios | Median ratio | P95 ratio |
+|------------|----------:|-------------:|----------:|
+| bash       |        10 |       1.044x |    1.531x |
+| powershell |        10 |       1.046x |    3.463x |
+| zsh        |        10 |       1.004x |    2.227x |
 <!-- benchmark:end -->
 
 ## Development
