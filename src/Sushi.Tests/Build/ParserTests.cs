@@ -940,6 +940,16 @@ namespace Sushi.Tests
         }
 
         [Fact]
+        public void TestStandardLibraryGroupedUseDeclaration()
+        {
+            var ast = Parse("use std.fs.{glob, readText}");
+            var useDecl = Assert.IsType<UseDeclarationNode>(Assert.Single(ast.Declarations));
+            Assert.Equal("std.fs", useDecl.ImportPath);
+            Assert.Equal(new[] { "glob", "readText" }, useDecl.Members);
+            Assert.True(useDecl.IsStandardLibrary);
+        }
+
+        [Fact]
         public void TestExportDeclaration()
         {
             var ast = Parse("export greet(name) { return name }");

@@ -95,6 +95,7 @@ internal sealed class ModuleGraphLoader
             .ToHashSet(StringComparer.Ordinal);
         foreach (var use in program.Declarations.OfType<UseDeclarationNode>())
         {
+            if (use.IsStandardLibrary) continue;
             if (Path.IsPathRooted(use.ImportPath) || !use.ImportPath.EndsWith(".sushi", StringComparison.OrdinalIgnoreCase))
             {
                 Error("SUSHI1040", $"Import '{use.ImportPath}' must be a relative .sushi path.", sourcePath, use.Line, use.Column);

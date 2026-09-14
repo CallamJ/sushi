@@ -41,6 +41,7 @@ public sealed class BashEmitter : IBackendEmitter
     private HashSet<string> _enumTypeNames = new(StringComparer.Ordinal);
     private bool _emittedTopLevelSection;
     private Dictionary<string, int> _positionalParameterReferences = new(StringComparer.Ordinal);
+    private HashSet<string>? _runtimeFunctionFilter;
 
     public BashEmitter()
     {
@@ -80,6 +81,7 @@ public sealed class BashEmitter : IBackendEmitter
         _enumTypeNames = CollectEnumTypeNames(program.Statements);
         _emittedTopLevelSection = false;
         _positionalParameterReferences.Clear();
+        _runtimeFunctionFilter = null;
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -101,10 +103,32 @@ public sealed class BashEmitter : IBackendEmitter
         {
             WriteLine("set -euo pipefail");
         }
-        if (EmissionCapabilityAnalyzer.UsesFsGlob(program))
+        foreach (var import in program.Statements.OfType<IrStandardLibraryImportStatement>())
         {
+            var importText = import.Members.Count == 0
+                ? import.Module
+                : $"{import.Module}.{{{string.Join(", ", import.Members)}}}";
+            if (!string.IsNullOrWhiteSpace(import.Alias)) importText += $" as {import.Alias}";
+            WriteLine($"# use {importText}");
+        }
+        if (EmissionCapabilityAnalyzer.UsesFsGlob(program) && HasFsGlobImport(program))
+        {
+            if (program.Statements.OfType<IrStandardLibraryImportStatement>().Any())
+            {
+                EmitNativeGlobHelper();
+            }
+            else
+            {
+            _runtimeFunctionFilter = program.Statements.OfType<IrStandardLibraryImportStatement>().Any()
+                ? new HashSet<string>(StringComparer.Ordinal)
+            {
+                "__sushi_glob_regex_into", "__sushi_fs_glob_into"
+            }
+                : null;
             EmitCoreRuntimeHelpers();
             EmitRuntimeHelpers();
+            _runtimeFunctionFilter = null;
+            }
         }
         foreach (var statement in program.Statements)
         {
@@ -112,6 +136,52 @@ public sealed class BashEmitter : IBackendEmitter
         }
 
         return PrettyPrintBash(_builder.ToString());
+    }
+
+    private static bool HasFsGlobImport(IrProgram program)
+    {
+        var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
+        return imports.Count == 0 || imports.Any(import => import.Module.Equals("std.fs", StringComparison.Ordinal) &&
+            (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
+    }
+
+    private void EmitNativeGlobHelper()
+    {
+        if (_zshMode)
+        {
+            AppendRuntimeBlock("""
+__sushi_fs_glob_into() {
+  local out_name="${1-}" pattern="${2-}" cwd="${3-}" base="${PWD}" candidate
+  typeset -n output="$out_name"
+  output=()
+  [[ -n "$cwd" && "$cwd" != 'null' ]] && base="$(cd -- "$cwd" && pwd -P)" || true
+  [[ -d "$base" ]] || { print -u2 "std.fs.glob: directory not found: $cwd"; return 1; }
+  local -a matches
+  matches=( ${(N)~base/$pattern} )
+  local item
+  local -a ordered
+  ordered=( "${matches[@]#$base/}" )
+  output=( ${(on)ordered} )
+}
+""");
+            return;
+        }
+        AppendRuntimeBlock("""
+__sushi_fs_glob_into() {
+  local out_name="${1-}" pattern="${2-}" cwd="${3-}" base="${PWD}" candidate
+  local -n output="$out_name"
+  output=()
+  [[ -n "$cwd" && "$cwd" != 'null' ]] && base="$(cd -- "$cwd" && pwd -P)" || true
+  [[ -d "$base" ]] || { printf 'std.fs.glob: directory not found: %s\n' "$cwd" >&2; return 1; }
+  shopt -s globstar nullglob
+  local -a matches=( "$base"/$pattern )
+  for candidate in "${matches[@]}"; do
+    [[ -e "$candidate" ]] || continue
+    output+=("${candidate#$base/}")
+  done
+  IFS=$'\n' output=( $(printf '%s\n' "${output[@]}" | LC_ALL=C sort) )
+}
+""");
     }
 
     private void EmitCoreRuntimeHelpers()
@@ -1667,12 +1737,7 @@ __sushi_fs_glob_into() {
     results[$((previous + 1))]="$item"
   done
 
-  __sushi_array_new "${results[@]}"
-  local result_handle="${__sushi_result-}" kind_index
-  for (( kind_index=0; kind_index<${#results[@]}; kind_index++ )); do
-    __sushi_array_set_kind "$result_handle" "$kind_index" string
-  done
-  __sushi_result="$result_handle"
+  printf '%s\n' "${results[@]}"
 }
 
 __sushi_fs_glob() {
@@ -2590,6 +2655,8 @@ __sushi_native_obj_to_json() {
 
     private void AppendRuntimeBlock(string text)
     {
+        if (_runtimeFunctionFilter != null)
+            text = FilterRuntimeBlock(text, _runtimeFunctionFilter);
         _builder.Append(text.Replace("\r\n", "\n"));
         if (!text.EndsWith("\n", StringComparison.Ordinal))
         {
@@ -2597,10 +2664,50 @@ __sushi_native_obj_to_json() {
         }
     }
 
+    private static string FilterRuntimeBlock(string text, HashSet<string> allowed)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        var output = new List<string>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var match = Regex.Match(lines[i], @"^(__sushi_[A-Za-z0-9_]+)\(\)\s*\{");
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var name = match.Groups[1].Value;
+            var start = i;
+            var depth = 0;
+            for (; i < lines.Length; i++)
+            {
+                var line = Regex.Replace(lines[i], @"\$\{[^}]*\}", "");
+                depth += line.Count(c => c == '{') - line.Count(c => c == '}');
+                if (depth == 0) break;
+            }
+            if (allowed.Contains(name)) output.AddRange(lines[start..(i + 1)]);
+        }
+        var result = string.Join('\n', output);
+        foreach (var name in allowed)
+        {
+            if (result.Contains(name + "()", StringComparison.Ordinal)) continue;
+            var match = Regex.Match(text, $"(?ms)^{Regex.Escape(name)}\\(\\)\\s*\\{{.*?(?=^__sushi_[A-Za-z0-9_]+\\(\\)\\s*\\{{|\\z)");
+            if (match.Success) result += (result.Length == 0 ? "" : "\n") + match.Value.TrimEnd();
+        }
+        // Glob results are known to contain strings, so avoid pulling in the
+        // numeric/type inference machinery solely to populate array metadata.
+        result = result.Replace("__sushi_infer_kind_into \"$item\"; kinds+=(\"$__sushi_kind\")", "kinds+=(\"string\")", StringComparison.Ordinal);
+        result = result.Replace("    __sushi_array_set_kind \"$result_handle\" \"$kind_index\" string\n", "", StringComparison.Ordinal);
+        return result;
+    }
+
     private void EmitStatement(IrStatement statement, bool inFunction)
     {
         switch (statement)
         {
+            case IrStandardLibraryImportStatement import:
+                break;
+
             case IrBlockStatement block:
                 foreach (var child in block.Statements)
                 {
@@ -3690,9 +3797,8 @@ __sushi_native_obj_to_json() {
                 var pattern = PrepareValue(intrinsic.Arguments[0], inFunction);
                 var cwd = intrinsic.Arguments.Count > 1 ? intrinsic.Arguments[1] : new IrLiteralExpression(null);
                 var root = PrepareValue(cwd, inFunction);
-                WriteLine($"__sushi_fs_glob_into {pattern} {root}");
                 WriteLine($"{arrayDeclaration}-a {name}=()");
-                WriteLine($"while IFS= read -r __sushi_path; do {name}+=(\"$__sushi_path\"); done < <(__sushi_array_each_raw \"${{__sushi_result-}}\")");
+                WriteLine($"__sushi_fs_glob_into {name} {pattern} {root}");
                 _nativeArrayVariables[name] = name;
                 _arrayInitializers.Remove(name);
                 return true;

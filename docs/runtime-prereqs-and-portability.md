@@ -64,6 +64,10 @@ planned as an optional program dependency.
 
 ### 2.4 `std.fs.glob(pattern, cwd?)`
 
+Import the API explicitly with `use std.fs.{glob}`. The Bash and Zsh emitters
+lower the result directly into a native shell array; no array runtime or JSON
+runtime is required.
+
 - Supports recursive `**` patterns.
 - Supports `*`, `?`, character classes such as `[abc]`, and `**`; `**/`
   matches zero or more directory segments.

@@ -210,9 +210,39 @@ public class Parser
     private UseDeclarationNode ParseUseDeclaration()
     {
         var token = Expect(ClassifiedTokenKind.Keyword, "use");
-        
-        var pathToken = Expect(ClassifiedTokenKind.StringLiteral);
-        var path = (string?)pathToken.Value ?? pathToken.Text.Trim('"');
+
+        string path;
+        if (Check(ClassifiedTokenKind.StringLiteral))
+        {
+            var pathToken = Advance();
+            path = (string?)pathToken.Value ?? pathToken.Text.Trim('"');
+        }
+        else
+        {
+            var first = Expect(ClassifiedTokenKind.Identifier);
+            var parts = new List<string> { first.Text };
+            while (Match(ClassifiedTokenKind.Dot))
+            {
+                if (Check(ClassifiedTokenKind.LeftBrace)) break;
+                parts.Add(Expect(ClassifiedTokenKind.Identifier).Text);
+            }
+            path = string.Join('.', parts);
+        }
+
+        var members = new List<string>();
+        // Accept the Java-style `std.fs.{glob, readText}` spelling as well as
+        // `std.fs{glob, readText}` for a compact grouped import.
+        if (Check(ClassifiedTokenKind.Dot) && Peek(1)?.Is(ClassifiedTokenKind.LeftBrace) == true)
+            Advance();
+        if (Match(ClassifiedTokenKind.LeftBrace))
+        {
+            if (!Check(ClassifiedTokenKind.RightBrace))
+            {
+                do { members.Add(Expect(ClassifiedTokenKind.Identifier).Text); }
+                while (Match(ClassifiedTokenKind.Comma));
+            }
+            Expect(ClassifiedTokenKind.RightBrace);
+        }
 
         string? alias = null;
         if (Check(ClassifiedTokenKind.Keyword) && Current().IsKeyword("as"))
@@ -223,7 +253,9 @@ public class Parser
         
         ExpectSemicolon();
         
-        return new UseDeclarationNode(path, alias, token.Line, token.Column);
+        if (members.Count > 0 && !path.StartsWith("std.", StringComparison.Ordinal))
+            throw new Exception("Named imports are only supported for standard-library modules.");
+        return new UseDeclarationNode(path, alias, token.Line, token.Column, members);
     }
 
     private ClassDeclarationNode ParseClassDeclaration()

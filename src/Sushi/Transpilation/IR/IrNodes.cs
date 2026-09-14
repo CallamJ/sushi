@@ -14,6 +14,21 @@ public sealed class IrProgram : IrNode
 
 public abstract class IrStatement : IrNode;
 
+/// <summary>Source-visible standard-library import retained for target emission.</summary>
+public sealed class IrStandardLibraryImportStatement : IrStatement
+{
+    public string Module { get; }
+    public string? Alias { get; }
+    public IReadOnlyList<string> Members { get; }
+
+    public IrStandardLibraryImportStatement(string module, string? alias, IReadOnlyList<string> members)
+    {
+        Module = module;
+        Alias = alias;
+        Members = members;
+    }
+}
+
 public sealed class IrBlockStatement : IrStatement
 {
     public List<IrStatement> Statements { get; }

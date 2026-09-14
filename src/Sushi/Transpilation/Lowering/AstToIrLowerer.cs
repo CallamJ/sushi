@@ -67,6 +67,8 @@ public sealed class AstToIrLowerer
     private readonly Dictionary<string, string> _knownObjectTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _functionObjectReturnTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IrTypeRef> _knownVariableTypes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _standardImportAliases = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _standardImportNames = new(StringComparer.Ordinal);
 
     private string _sourcePath = "";
     private string? _currentFunctionName;
@@ -112,11 +114,14 @@ public sealed class AstToIrLowerer
         _knownObjectTypes.Clear();
         _functionObjectReturnTypes.Clear();
         _knownVariableTypes.Clear();
+        _standardImportAliases.Clear();
+        _standardImportNames.Clear();
         _tempId = 0;
         _lambdaId = 0;
         _loopDepth = 0;
         _functionDepth = 0;
         _allowEnumMutation = false;
+        CollectStandardImports(program);
         CollectTopLevelSymbols(program);
         CollectTypes(program);
         ValidateTypeDeclarations(program);
@@ -149,11 +154,46 @@ public sealed class AstToIrLowerer
         return output;
     }
 
+    private void CollectStandardImports(ProgramNode program)
+    {
+        foreach (var use in program.Declarations.OfType<UseDeclarationNode>().Where(item => item.IsStandardLibrary))
+        {
+            var alias = use.Alias ?? use.ImportPath[(use.ImportPath.LastIndexOf('.') + 1)..];
+            if (use.Members.Count == 0)
+            {
+                if (!_standardImportAliases.TryAdd(alias, use.ImportPath))
+                    AddDiagnostic("SUSHI1055", $"Duplicate standard-library alias '{alias}'.", use.Line, use.Column);
+                continue;
+            }
+
+            foreach (var member in use.Members)
+            {
+                if (!_intrinsicRegistry.TryResolve($"{use.ImportPath}.{member}", out _))
+                {
+                    AddDiagnostic("SUSHI1056", $"Unknown standard-library member '{use.ImportPath}.{member}'.", use.Line, use.Column);
+                    continue;
+                }
+                if (!_standardImportNames.TryAdd(member, $"{use.ImportPath}.{member}"))
+                    AddDiagnostic("SUSHI1055", $"Duplicate standard-library import '{member}'.", use.Line, use.Column);
+            }
+        }
+    }
+
+    private string ResolveStandardImport(string path)
+    {
+        var dot = path.IndexOf('.');
+        if (dot > 0 && _standardImportAliases.TryGetValue(path[..dot], out var module))
+            return module + path[dot..];
+        return _standardImportNames.TryGetValue(path, out var imported) ? imported : path;
+    }
+
     private IrStatement? LowerTopLevel(AstNode node)
     {
         return node switch
         {
             BoxDeclarationNode => null,
+            UseDeclarationNode use when use.IsStandardLibrary =>
+                new IrStandardLibraryImportStatement(use.ImportPath, use.Alias, use.Members),
             UseDeclarationNode => null,
             ExportDeclarationNode export => LowerTopLevel(export.Declaration),
             FunctionDeclarationNode function => LowerFunction(function),
@@ -939,6 +979,7 @@ public sealed class AstToIrLowerer
 
         if (TryGetCalleePath(node.Callee, out var calleePath))
         {
+            calleePath = ResolveStandardImport(calleePath);
             if (node.Callee is IdentifierExpressionNode &&
                 loweredArguments.Count == 1 &&
                 TryResolveExpressionObjectType(node.Arguments[0].Value, out var adaptedType))

@@ -41,12 +41,15 @@ public class UseDeclarationNode : AstNode
 {
     public string ImportPath { get; }      // e.g., "./person.sushi"
     public string? Alias { get; }          // e.g., "person" (optional)
+    public IReadOnlyList<string> Members { get; } // named standard-library members
+    public bool IsStandardLibrary => ImportPath.StartsWith("std.", StringComparison.Ordinal);
     
-    public UseDeclarationNode(string importPath, string? alias, int line, int column) 
+    public UseDeclarationNode(string importPath, string? alias, int line, int column, IReadOnlyList<string>? members = null)
         : base(line, column)
     {
         ImportPath = importPath;
         Alias = alias;
+        Members = members ?? Array.Empty<string>();
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);

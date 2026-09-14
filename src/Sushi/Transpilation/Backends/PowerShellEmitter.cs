@@ -3,6 +3,7 @@ namespace Sushi.Transpilation.Backends;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Sushi.Application;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
@@ -34,6 +35,7 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private Dictionary<string, string> _richEnumVariableTypes = new(StringComparer.Ordinal);
     private string? _currentRichEnumReceiver;
     private string? _fallbackReceiverName;
+    private HashSet<string>? _runtimeFunctionFilter;
 
     public string Emit(IrProgram program, EmitContext context)
     {
@@ -52,6 +54,7 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _richEnumVariableTypes.Clear();
         _currentRichEnumReceiver = null;
         _fallbackReceiverName = null;
+        _runtimeFunctionFilter = null;
         _context = context;
         _indent = 0;
         _currentFunctionName = null;
@@ -68,9 +71,21 @@ public sealed class PowerShellEmitter : IBackendEmitter
         WriteLine("Set-StrictMode -Version Latest");
         WriteLine("$ErrorActionPreference = 'Stop'");
         WriteLine("");
-        if (EmissionCapabilityAnalyzer.UsesFsGlob(program))
+        foreach (var import in program.Statements.OfType<IrStandardLibraryImportStatement>())
         {
+            var importText = import.Members.Count == 0
+                ? import.Module
+                : $"{import.Module}.{{{string.Join(", ", import.Members)}}}";
+            if (!string.IsNullOrWhiteSpace(import.Alias)) importText += $" as {import.Alias}";
+            WriteLine($"# use {importText}");
+        }
+        if (EmissionCapabilityAnalyzer.UsesFsGlob(program) && HasFsGlobImport(program))
+        {
+            _runtimeFunctionFilter = program.Statements.OfType<IrStandardLibraryImportStatement>().Any()
+                ? new HashSet<string>(new[] { "__sushi_glob_regex", "__sushi_fs_glob" }, StringComparer.Ordinal)
+                : null;
             EmitRuntimeHelpers();
+            _runtimeFunctionFilter = null;
         }
         var classes = CollectClasses(program.Statements).ToList();
         foreach (var declaration in classes)
@@ -126,6 +141,13 @@ public sealed class PowerShellEmitter : IBackendEmitter
         }
 
         return _builder.ToString();
+    }
+
+    private static bool HasFsGlobImport(IrProgram program)
+    {
+        var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
+        return imports.Count == 0 || imports.Any(import => import.Module.Equals("std.fs", StringComparison.Ordinal) &&
+            (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
     }
 
     private static IEnumerable<IrClassDeclarationStatement> CollectClasses(IEnumerable<IrStatement> statements)
@@ -1077,10 +1099,24 @@ function __sushi_call_method {
 """);
     }
 
+    private static string FilterRuntimeBlock(string text, HashSet<string> allowed)
+    {
+        var output = new StringBuilder();
+        foreach (Match match in Regex.Matches(text, @"(?ms)^function\s+(__sushi_[A-Za-z0-9_]+)\s*\{.*?(?=^function\s+__sushi_|\z)"))
+        {
+            if (!allowed.Contains(match.Groups[1].Value)) continue;
+            output.AppendLine(match.Value.TrimEnd());
+        }
+        return output.ToString();
+    }
+
     private void EmitStatement(IrStatement statement)
     {
         switch (statement)
         {
+            case IrStandardLibraryImportStatement import:
+                break;
+
             case IrBlockStatement block:
                 foreach (var child in block.Statements)
                 {
