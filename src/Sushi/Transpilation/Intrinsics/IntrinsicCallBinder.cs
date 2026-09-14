@@ -90,7 +90,7 @@ public static class IntrinsicCallBinder
             diagnostics.Add(Diagnostic.Error(
                 IntrinsicDiagnosticCodes.InvalidArgumentCount,
                 $"Missing required argument '{parameter.Name}' for intrinsic '{signature.CanonicalName}'",
-                new SourceSpan(sourcePath, callLine, callColumn)));
+                new SourceSpan(sourcePath, callLine, arguments.LastOrDefault()?.Column ?? callColumn + 1)));
         }
 
         if (!hasVariadic && positionalIndex < positional.Count)

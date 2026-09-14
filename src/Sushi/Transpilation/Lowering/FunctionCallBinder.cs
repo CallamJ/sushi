@@ -143,7 +143,7 @@ internal static class FunctionCallBinder
             diagnostics.Add(Diagnostic.Error(
                 MissingRequiredArgumentCode,
                 $"Missing required argument '{parameter.Name}' for function '{calleeName}'.",
-                new SourceSpan(sourcePath, callLine, callColumn)));
+                new SourceSpan(sourcePath, callLine, callArguments.LastOrDefault()?.Column ?? callColumn + 1)));
         }
 
         if (diagnostics.Count > 0)
