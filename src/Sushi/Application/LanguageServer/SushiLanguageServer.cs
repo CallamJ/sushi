@@ -801,6 +801,27 @@ internal sealed class SushiLanguageServer
         name = "";
         var token = model.TokenAt(offset);
         if (token is null || model.SymbolFor(token) is not null || !IsIdentifier(token.Text)) return false;
+
+        // Offer a direct stdlib import for unresolved short names such as
+        // `glob`, `readText`, or `run`.
+        var standardMatches = StandardLibrary.Functions
+            .Where(function => function.Name.Contains('.', StringComparison.Ordinal) &&
+                               function.Name[(function.Name.LastIndexOf('.') + 1)..] == token.Text)
+            .ToArray();
+        if (standardMatches.Length == 1)
+        {
+            var canonical = standardMatches[0].Name;
+            if (!document.Text.Contains($"use {canonical}", StringComparison.Ordinal) &&
+                !document.Text.Contains($"use {canonical[..canonical.LastIndexOf('.')]}{{", StringComparison.Ordinal))
+            {
+                var standardInsertion = 0;
+                while (standardInsertion < document.Text.Length && (document.Text[standardInsertion] == '\n' || document.Text[standardInsertion] == '\r')) standardInsertion++;
+                edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, standardInsertion, standardInsertion, 1, 1), newText = $"use {canonical}\n" } } } };
+                name = token.Text;
+                return true;
+            }
+        }
+
         var candidate = AnalyzeAll().FirstOrDefault(symbol => symbol.Exported && symbol.Name == token.Text && symbol.Uri != document.Uri);
         if (candidate is null) return false;
         var sourcePath = PathForUri(document.Uri);
@@ -1179,6 +1200,7 @@ internal sealed class SushiLanguageServer
         var document = Document(parameters);
         var model = SushiSemanticModel.Create(document.Text);
         var classifiedByStart = model.Tokens.ToDictionary(token => token.Start);
+        var unusedImports = FindUnusedImportTokens(model);
         var data = new List<int>();
         var previousLine = 0;
         var previousColumn = 0;
@@ -1195,6 +1217,7 @@ internal sealed class SushiLanguageServer
                 ClassifiedTokenKind.Identifier => SemanticType(model.SymbolFor(token), token.Text),
                 _ => -1
             };
+            if (unusedImports.Contains(raw.Start)) type = SemanticUnusedImport;
             if (type < 0) continue;
             var modifiers = raw.Kind != TokenKind.Comment && classifiedByStart.TryGetValue(raw.Start, out var identifier) &&
                 model.SymbolFor(identifier) is { } symbol && symbol.Token.Start == identifier.Start
@@ -1202,6 +1225,39 @@ internal sealed class SushiLanguageServer
             AddSemanticToken(data, document.Text, raw.Start, raw.Length, type, modifiers, ref previousLine, ref previousColumn);
         }
         return new { data };
+    }
+
+    private static HashSet<int> FindUnusedImportTokens(SushiSemanticModel model)
+    {
+        var unused = new HashSet<int>();
+        var tokens = model.Tokens;
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            if (!tokens[i].IsKeyword("use")) continue;
+            var end = i + 1;
+            while (end < tokens.Count && tokens[end].Kind != ClassifiedTokenKind.Semicolon &&
+                   tokens[end].Line == tokens[i].Line) end++;
+            var candidates = new List<ClassifiedToken>();
+            for (var j = i + 1; j < end; j++)
+            {
+                if (tokens[j].Kind == ClassifiedTokenKind.Identifier) candidates.Add(tokens[j]);
+            }
+            var asIndex = candidates.FindIndex(token => token.IsKeyword("as"));
+            if (asIndex >= 0 && asIndex + 1 < candidates.Count)
+                candidates = new List<ClassifiedToken> { candidates[asIndex + 1] };
+            else if (tokens.Skip(i + 1).Take(end - i - 1).Any(token => token.Kind == ClassifiedTokenKind.LeftBrace))
+                candidates = candidates.SkipWhile(token => token.Start < tokens.First(t => t.Kind == ClassifiedTokenKind.LeftBrace && t.Start > tokens[i].Start).Start).ToList();
+            else if (candidates.Count > 0)
+                candidates = new List<ClassifiedToken> { candidates[^1] };
+
+            foreach (var candidate in candidates)
+            {
+                if (tokens.Any(token => token.Kind == ClassifiedTokenKind.Identifier && token.Text == candidate.Text &&
+                                        token.Start != candidate.Start)) continue;
+                unused.Add(candidate.Start);
+            }
+        }
+        return unused;
     }
 
     private static int SemanticType(SushiSymbol? symbol, string tokenText) => symbol?.Kind switch
@@ -1520,7 +1576,8 @@ internal sealed class SushiLanguageServer
     private const int SemanticString = 11;
     private const int SemanticNumber = 12;
     private const int SemanticComment = 13;
+    private const int SemanticUnusedImport = 14;
     private const int DeclarationModifier = 1;
-    private static readonly string[] SemanticTokenTypes = ["namespace", "class", "enum", "enumMember", "function", "method", "property", "parameter", "variable", "keyword", "operator", "string", "number", "comment"];
+    private static readonly string[] SemanticTokenTypes = ["namespace", "class", "enum", "enumMember", "function", "method", "property", "parameter", "variable", "keyword", "operator", "string", "number", "comment", "unusedImport"];
     private static readonly string[] SemanticTokenModifiers = ["declaration"];
 }

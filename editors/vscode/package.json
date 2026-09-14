@@ -13,6 +13,9 @@
   "contributes": {
     "languages": [{ "id": "sushi", "aliases": ["Sushi", "sushi"], "extensions": [".sushi"], "configuration": "./language-configuration.json", "icon": { "light": "./icons/sushi.png", "dark": "./icons/sushi.png" } }],
     "grammars": [{ "language": "sushi", "scopeName": "source.sushi", "path": "./syntaxes/sushi.tmLanguage.json" }],
+    "semanticTokenScopes": [
+      { "scopes": { "unusedImport": ["comment"] } }
+    ],
     "commands": [
       { "command": "sushi.runCurrentBuffer", "title": "Sushi: Run Current Buffer", "icon": "$(play)" },
       { "command": "sushi.checkCurrentBuffer", "title": "Sushi: Check Current Buffer", "icon": "$(check)" },
