@@ -23,8 +23,15 @@ if [[ -n "$(git status --short)" ]]; then
   exit 1
 fi
 
-latest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
-latest="${latest#v}"
+# Git's glob patterns also match prerelease tags such as v0.1.0-beta.1.
+# Patch/minor/major arithmetic must use the latest stable semantic version.
+latest=""
+while IFS= read -r candidate; do
+  if [[ "$candidate" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    latest="${candidate#v}"
+    break
+  fi
+done < <(git tag --list 'v*' --sort=-version:refname)
 if [[ -z "$latest" ]]; then latest="0.0.0"; fi
 
 if [[ "$kind" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
