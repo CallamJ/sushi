@@ -65,14 +65,15 @@ planned as an optional program dependency.
 ### 2.4 `std.fs.glob(pattern, cwd?)`
 
 - Supports recursive `**` patterns.
-- Returns an array.
-- Returns empty array on no match.
-- Path separators and absolute/relative shape are target-native right now.
-
-Portability guidance:
-
-- treat glob results as opaque paths
-- prefer `std.path.*` operations for composing paths
+- Supports `*`, `?`, character classes such as `[abc]`, and `**`; `**/`
+  matches zero or more directory segments.
+- Returns an array of files and directories, including dotfiles.
+- Results are relative to `cwd`, or to the process working directory when
+  `cwd` is omitted, and always use `/` separators.
+- Results use deterministic ordinal lexical ordering.
+- Returns an empty array on no match.
+- A missing or non-directory `cwd` is a runtime error.
+- Does not traverse directory symlinks and does not support brace expansion.
 
 ### 2.5 `std.http.get/post`
 

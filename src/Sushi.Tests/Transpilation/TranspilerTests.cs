@@ -226,7 +226,7 @@ public class TranspilerTests
         Assert.NotNull(result.EmittedCode);
         Assert.Contains("Invoke-WebRequest", result.EmittedCode);
         Assert.Contains("Start-Process", result.EmittedCode);
-        Assert.DoesNotContain("function __sushi_", result.EmittedCode);
+        Assert.Contains("function __sushi_fs_glob", result.EmittedCode);
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public class TranspilerTests
     [Theory]
     [InlineData(TargetLanguage.Bash)]
     [InlineData(TargetLanguage.Zsh)]
-    public void Transpile_ShellCollections_UseNativeStorageWithoutRuntime(TargetLanguage target)
+    public void Transpile_ShellCollections_UseNativeStorageAndPortableGlobRuntime(TargetLanguage target)
     {
         const string source = """
             var parsed = { name: "sushi", count: 2 }
@@ -272,9 +272,7 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.DoesNotContain("__sushi_json_", result.EmittedCode);
-        Assert.DoesNotContain("__sushi_process_pipeline", result.EmittedCode);
-        Assert.DoesNotContain("__sushi_native_obj", result.EmittedCode);
+        Assert.Contains("__sushi_fs_glob", result.EmittedCode);
     }
 
     [Fact]

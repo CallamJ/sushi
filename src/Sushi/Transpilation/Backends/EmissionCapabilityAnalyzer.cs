@@ -6,6 +6,42 @@ using Sushi.Transpilation.Intrinsics;
 internal static class EmissionCapabilityAnalyzer
 {
     public static bool UsesArrays(IrProgram program) => program.Statements.Any(UsesArrays);
+    public static bool UsesFsGlob(IrProgram program) => program.Statements.Any(UsesFsGlob);
+
+    private static bool UsesFsGlob(IrStatement statement) => statement switch
+    {
+        IrBlockStatement block => block.Statements.Any(UsesFsGlob),
+        IrVariableDeclarationStatement variable => variable.Initializer != null && UsesFsGlob(variable.Initializer),
+        IrExpressionStatement expression => UsesFsGlob(expression.Expression),
+        IrIfStatement conditional => UsesFsGlob(conditional.Condition) || UsesFsGlob(conditional.ThenBlock) || (conditional.ElseBlock != null && UsesFsGlob(conditional.ElseBlock)),
+        IrWhileStatement loop => UsesFsGlob(loop.Condition) || UsesFsGlob(loop.Body),
+        IrForStatement loop => (loop.Initializer != null && UsesFsGlob(loop.Initializer)) || (loop.Condition != null && UsesFsGlob(loop.Condition)) || (loop.Increment != null && UsesFsGlob(loop.Increment)) || UsesFsGlob(loop.Body),
+        IrDoWhileStatement loop => UsesFsGlob(loop.Body) || UsesFsGlob(loop.Condition),
+        IrFunctionDeclarationStatement function => UsesFsGlob(function.Body),
+        IrReturnStatement returned => returned.Expression != null && UsesFsGlob(returned.Expression),
+        _ => false
+    };
+
+    private static bool UsesFsGlob(IrExpression expression) => expression switch
+    {
+        IrIntrinsicCallExpression { Id: IntrinsicId.FsGlob } => true,
+        IrArrayLiteralExpression array => array.Elements.Any(UsesFsGlob),
+        IrIndexExpression index => UsesFsGlob(index.Target) || UsesFsGlob(index.Index),
+        IrMethodCallExpression method => UsesFsGlob(method.Target) || method.Arguments.Any(argument => UsesFsGlob(argument.Value)),
+        IrIntrinsicCallExpression intrinsic => intrinsic.Arguments.Any(UsesFsGlob),
+        IrAssignmentExpression assignment => UsesFsGlob(assignment.Value),
+        IrObjectLiteralExpression obj => obj.Properties.Any(property => UsesFsGlob(property.Value)),
+        IrMemberAccessExpression member => UsesFsGlob(member.Target),
+        IrCallExpression call => call.Arguments.Any(argument => UsesFsGlob(argument.Value)),
+        IrConstructionExpression construction => construction.Arguments.Any(argument => UsesFsGlob(argument.Value)),
+        IrResolvedMethodCallExpression method => UsesFsGlob(method.Target) || method.Arguments.Any(argument => UsesFsGlob(argument.Value)),
+        IrAdapterCallExpression adapter => UsesFsGlob(adapter.Value),
+        IrTruthinessExpression truthiness => UsesFsGlob(truthiness.Operand),
+        IrUnaryExpression unary => UsesFsGlob(unary.Operand),
+        IrBinaryExpression binary => UsesFsGlob(binary.Left) || UsesFsGlob(binary.Right),
+        IrConditionalExpression conditional => UsesFsGlob(conditional.Condition) || UsesFsGlob(conditional.TrueExpression) || UsesFsGlob(conditional.FalseExpression),
+        _ => false
+    };
 
     private static bool UsesArrays(IrStatement statement) => statement switch
     {

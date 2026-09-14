@@ -68,6 +68,10 @@ public sealed class PowerShellEmitter : IBackendEmitter
         WriteLine("Set-StrictMode -Version Latest");
         WriteLine("$ErrorActionPreference = 'Stop'");
         WriteLine("");
+        if (EmissionCapabilityAnalyzer.UsesFsGlob(program))
+        {
+            EmitRuntimeHelpers();
+        }
         var classes = CollectClasses(program.Statements).ToList();
         foreach (var declaration in classes)
         {
@@ -598,22 +602,59 @@ function __sushi_json_stringify {
     return ($normalized | ConvertTo-Json -Compress -Depth 100)
 }
 
+function __sushi_glob_regex {
+    param([string]$pattern)
+    $pattern = $pattern.Replace('\\', '/')
+    $regex = [System.Text.StringBuilder]::new()
+    for ($index = 0; $index -lt $pattern.Length; $index++) {
+        $character = $pattern[$index]
+        switch ($character) {
+            '*' {
+                if ($index + 1 -lt $pattern.Length -and $pattern[$index + 1] -eq '*') {
+                    if ($index + 2 -lt $pattern.Length -and $pattern[$index + 2] -eq '/') {
+                        [void]$regex.Append('([^/]*/)*')
+                        $index += 2
+                    } else {
+                        [void]$regex.Append('.*')
+                        $index++
+                    }
+                } else {
+                    [void]$regex.Append('[^/]*')
+                }
+            }
+            '?' { [void]$regex.Append('[^/]') }
+            '[' {
+                $end = $pattern.IndexOf(']', $index + 1)
+                if ($end -lt 0) { [void]$regex.Append('\\[') }
+                else {
+                    $characterClass = $pattern.Substring($index + 1, $end - $index - 1)
+                    if ($characterClass.StartsWith('!')) { $characterClass = '^' + $characterClass.Substring(1) }
+                    [void]$regex.Append('[').Append($characterClass).Append(']')
+                    $index = $end
+                }
+            }
+            default { [void]$regex.Append([regex]::Escape([string]$character)) }
+        }
+    }
+    return '^' + $regex.ToString() + '$'
+}
+
 function __sushi_fs_glob {
     param([string]$pattern, [string]$cwd = $null)
-    $resolvedPattern = if (-not [string]::IsNullOrWhiteSpace($cwd)) { Join-Path -Path $cwd -ChildPath $pattern } else { $pattern }
-    $items = @()
-    if ($resolvedPattern.Contains('**')) {
-        $parts = $resolvedPattern -split '\*\*', 2
-        $basePath = if ([string]::IsNullOrWhiteSpace($parts[0])) { '.' } else { $parts[0].TrimEnd('/', '\') }
-        $tailPattern = $parts[1].TrimStart('/', '\')
-        if ([string]::IsNullOrWhiteSpace($tailPattern)) { $tailPattern = '*' }
-        $items = @(Get-ChildItem -Path $basePath -Recurse -Filter $tailPattern -ErrorAction SilentlyContinue)
-    } else {
-        $items = @(Get-ChildItem -Path $resolvedPattern -ErrorAction SilentlyContinue)
+    $basePath = if ([string]::IsNullOrWhiteSpace($cwd)) { (Get-Location).Path } else { (Resolve-Path -LiteralPath $cwd -ErrorAction Stop).Path }
+    if (-not (Test-Path -LiteralPath $basePath -PathType Container)) { throw "std.fs.glob: directory not found: $cwd" }
+    $isAbsolutePattern = [System.IO.Path]::IsPathRooted($pattern)
+    $matcher = [regex]::new((__sushi_glob_regex $pattern), [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    $results = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @(Get-ChildItem -LiteralPath $basePath -Force -Recurse -ErrorAction Stop)) {
+        $fullPath = $item.FullName.Replace('\\', '/')
+        $relativePath = $item.FullName.Substring($basePath.Length).TrimStart([char]92, [char]47).Replace('\\', '/')
+        $matchPath = if ($isAbsolutePattern) { $fullPath } else { $relativePath }
+        if ($matcher.IsMatch($matchPath)) { $results.Add($relativePath) }
     }
-    if ([string]::IsNullOrWhiteSpace($cwd)) { return ,@($items | ForEach-Object { $_.FullName }) }
-    $cwdPath = (Resolve-Path -LiteralPath $cwd).Path
-    return ,@($items | ForEach-Object { __sushi_relative_path $cwdPath $_.FullName })
+    $ordered = [string[]]$results.ToArray()
+    [System.Array]::Sort($ordered, [System.StringComparer]::Ordinal)
+    return ,$ordered
 }
 
 function __sushi_relative_path {
@@ -1289,16 +1330,7 @@ function __sushi_call_method {
         {
             case IntrinsicId.FsGlob:
             {
-                var pattern = EmitValueExpression(intrinsic.Arguments[0]);
-                var cwd = intrinsic.Arguments.Count > 1 ? intrinsic.Arguments[1] : new IrLiteralExpression(null);
-                if (cwd is IrLiteralExpression { Value: null })
-                {
-                    WriteLine($"${name} = @(Get-ChildItem -Path {pattern} -File | ForEach-Object FullName)");
-                }
-                else
-                {
-                    WriteLine($"${name} = @(& {{ Push-Location -LiteralPath {EmitValueExpression(cwd)}; try {{ Get-ChildItem -Path {pattern} -File | ForEach-Object FullName }} finally {{ Pop-Location }} }})");
-                }
+                WriteLine($"${name} = @({EmitFsGlob(intrinsic.Arguments)})");
                 return true;
             }
 

@@ -354,8 +354,8 @@ public class EmitterTests
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
         Assert.Contains("curl -sS", script);
-        Assert.Contains("mapfile -t files", script);
-        Assert.DoesNotContain("__sushi_http_", script);
+        Assert.Contains("__sushi_fs_glob_into", script);
+        Assert.Contains("__sushi_glob_regex_into", script);
         Assert.Empty(diagnostics);
     }
 

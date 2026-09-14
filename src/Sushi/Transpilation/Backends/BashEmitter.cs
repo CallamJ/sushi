@@ -101,6 +101,11 @@ public sealed class BashEmitter : IBackendEmitter
         {
             WriteLine("set -euo pipefail");
         }
+        if (EmissionCapabilityAnalyzer.UsesFsGlob(program))
+        {
+            EmitCoreRuntimeHelpers();
+            EmitRuntimeHelpers();
+        }
         foreach (var statement in program.Statements)
         {
             EmitStatement(statement, inFunction: false);
@@ -1597,58 +1602,75 @@ __sushi_process_require_success() {
   printf '%s' "$result"
 }
 
-__sushi_fs_glob_into() {
-  local pattern="${1-}"
-  local cwd="${2-}"
-  local -a results=()
-  local search_root='.' match_pattern="$pattern" zero_pattern="$pattern"
-  local prefix='' remaining="$pattern" segment
-
-  # Restrict find to the literal path prefix. This is the dominant difference
-  # between scanning src/**/*.cs and walking the entire repository from '.'.
-  if [[ "$pattern" != /* ]]; then
-    while [[ "$remaining" == */* ]]; do
-      segment="${remaining%%/*}"
-      case "$segment" in
-        *'*'*|*'?'*|*'['*) break ;;
-      esac
-      prefix="${prefix:+$prefix/}$segment"
-      remaining="${remaining#*/}"
-    done
-    [[ -n "$prefix" ]] && search_root="$prefix"
-  fi
-
-  [[ "$search_root" == "." ]] && match_pattern="./$pattern"
-  while [[ "$zero_pattern" == '**/'* || "$zero_pattern" == *'/**/'* ]]; do
-    if [[ "$zero_pattern" == '**/'* ]]; then
-      zero_pattern="${zero_pattern:3}"
-    else
-      zero_pattern="${zero_pattern/\/\*\*\//\/}"
-    fi
+__sushi_glob_regex_into() {
+  local pattern="${1-}" regex='' character next class_end class_text index=0 length
+  length=${#pattern}
+  while (( index < length )); do
+    character="${pattern:$index:1}"
+    case "$character" in
+      '*')
+        next="${pattern:$((index + 1)):1}"
+        if [[ "$next" == '*' ]]; then
+          next="${pattern:$((index + 2)):1}"
+          if [[ "$next" == '/' ]]; then regex+='([^/]*/)*'; (( index += 3 )); continue; fi
+          regex+='.*'; (( index += 2 )); continue
+        fi
+        regex+='[^/]*'
+        ;;
+      '?') regex+='[^/]' ;;
+      '[')
+        class_end=$((index + 1))
+        while (( class_end < length )) && [[ "${pattern:$class_end:1}" != ']' ]]; do (( class_end += 1 )); done
+        if (( class_end >= length )); then regex+='\\['
+        else
+          class_text="${pattern:$((index + 1)):$((class_end - index - 1))}"
+          [[ "$class_text" == '!'* ]] && class_text="^${class_text:1}"
+          regex+="[$class_text]"
+          index=$class_end
+        fi
+        ;;
+      [\\.^\$+\(\)\{\}\|]) regex+="\\$character" ;;
+      *) regex+="$character" ;;
+    esac
+    (( index += 1 ))
   done
-  [[ "$search_root" == "." ]] && zero_pattern="./$zero_pattern"
+  __sushi_result="^${regex}$"
+}
 
-  local -a find_depth=()
-  if [[ "$pattern" != *'**'* ]]; then
-    find_depth=(-maxdepth 1)
-  fi
-
-  if [[ -n "$cwd" ]] && [[ "$cwd" != "null" ]]; then
-    while IFS= read -r line; do
-      line="${line#./}"
-      [[ -n "$line" ]] && results+=("$line")
-    done < <(cd -- "$cwd" 2>/dev/null && find "$search_root" "${find_depth[@]}" \( -path "$match_pattern" -o -path "$zero_pattern" \) -print 2>/dev/null || true)
+__sushi_fs_glob_into() {
+  local pattern="${1-}" cwd="${2-}" base candidate relative match_path regex index
+  local -a results=()
+  if [[ -n "$cwd" ]] && [[ "$cwd" != 'null' ]]; then
+    base="$(cd -- "$cwd" && pwd -P)" || { printf 'std.fs.glob: directory not found: %s\n' "$cwd" >&2; return 1; }
   else
-    while IFS= read -r line; do
-      line="${line#./}"
-      [[ -n "$line" ]] && results+=("$line")
-    done < <(find "$search_root" "${find_depth[@]}" \( -path "$match_pattern" -o -path "$zero_pattern" \) -print 2>/dev/null || true)
+    base="$(pwd -P)"
   fi
+  __sushi_glob_regex_into "$pattern"
+  regex="$__sushi_result"
+  while IFS= read -r -d '' candidate; do
+    relative="${candidate#"$base"/}"
+    match_path="$relative"
+    [[ "$pattern" == /* ]] && match_path="$candidate"
+    [[ "$match_path" =~ $regex ]] || continue
+    results+=("$relative")
+  done < <(find "$base" -mindepth 1 -print0)
+
+  # Keep output deterministic without depending on GNU sort's non-portable -z.
+  local item previous
+  for (( index=1; index<${#results[@]}; index++ )); do
+    item="${results[$index]}"
+    previous=$((index - 1))
+    while (( previous >= 0 )) && [[ "${results[$previous]}" > "$item" ]]; do
+      results[$((previous + 1))]="${results[$previous]}"
+      previous=$((previous - 1))
+    done
+    results[$((previous + 1))]="$item"
+  done
 
   __sushi_array_new "${results[@]}"
-  local result_handle="${__sushi_result-}" index
-  for (( index=0; index<${#results[@]}; index++ )); do
-    __sushi_array_set_kind "$result_handle" "$index" string
+  local result_handle="${__sushi_result-}" kind_index
+  for (( kind_index=0; kind_index<${#results[@]}; kind_index++ )); do
+    __sushi_array_set_kind "$result_handle" "$kind_index" string
   done
   __sushi_result="$result_handle"
 }
@@ -3667,25 +3689,10 @@ __sushi_native_obj_to_json() {
             {
                 var pattern = PrepareValue(intrinsic.Arguments[0], inFunction);
                 var cwd = intrinsic.Arguments.Count > 1 ? intrinsic.Arguments[1] : new IrLiteralExpression(null);
-                if (cwd is IrLiteralExpression { Value: null })
-                {
-                    if (_zshMode)
-                    {
-                        WriteLine($"{declaration}{name}_pattern={pattern}");
-                        WriteLine($"{arrayDeclaration}-a {name}=(${{~{name}_pattern}}(N))");
-                    }
-                    else
-                    {
-                        WriteLine($"{arrayDeclaration}-a {name}=()");
-                        WriteLine($"mapfile -t {name} < <(compgen -G {pattern} || true)");
-                    }
-                }
-                else
-                {
-                    var root = PrepareValue(cwd, inFunction);
-                    WriteLine($"{arrayDeclaration}-a {name}=()");
-                    WriteLine($"while IFS= read -r __sushi_path; do {name}+=(\"$__sushi_path\"); done < <(cd -- {root} && compgen -G {pattern} || true)");
-                }
+                var root = PrepareValue(cwd, inFunction);
+                WriteLine($"__sushi_fs_glob_into {pattern} {root}");
+                WriteLine($"{arrayDeclaration}-a {name}=()");
+                WriteLine($"while IFS= read -r __sushi_path; do {name}+=(\"$__sushi_path\"); done < <(__sushi_array_each_raw \"${{__sushi_result-}}\")");
                 _nativeArrayVariables[name] = name;
                 _arrayInitializers.Remove(name);
                 return true;
