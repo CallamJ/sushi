@@ -3,6 +3,7 @@
   "displayName": "Sushi",
   "description": "Language support for Sushi shell scripts.",
   "version": "0.0.0",
+  "license": "MIT",
   "publisher": "callamj",
   "repository": { "type": "git", "url": "https://github.com/CallamJ/sushi.git" },
   "engines": { "vscode": "^1.90.0" },
