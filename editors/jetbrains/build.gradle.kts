@@ -34,3 +34,11 @@ kotlin { jvmToolchain(21) }
 tasks.buildSearchableOptions {
     enabled = false
 }
+
+// The platform plugin still wires the jar preparation task even when the
+// searchable-options build is disabled. There are no searchable options in
+// this plugin, so skip both tasks to avoid Gradle validating a nonexistent
+// intermediate directory after a clean build.
+tasks.matching { it.name == "prepareJarSearchableOptions" }.configureEach {
+    enabled = false
+}

@@ -76,7 +76,7 @@ internal sealed class SushiLanguageServer
                     {
                         positionEncoding = "utf-16",
                         textDocumentSync = 1,
-                        completionProvider = new { triggerCharacters = new[] { ".", "@", "{", "/" } },
+                        completionProvider = new { triggerCharacters = new[] { ".", "@", "/" } },
                         hoverProvider = true,
                         definitionProvider = true,
                         typeDefinitionProvider = true,
@@ -272,6 +272,8 @@ internal sealed class SushiLanguageServer
         var items = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
         var localModel = SushiSemanticModel.Create(document.Text);
         var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
+        if (!memberContext && !HasIdentifierPrefix(document.Text, offset))
+            return new { isIncomplete = false, items = Array.Empty<object>() };
         if (memberContext)
         {
             foreach (var member in MemberCompletionItems(localModel, offset))
@@ -341,6 +343,13 @@ internal sealed class SushiLanguageServer
 
     private static bool IsMemberCompletionContext(IReadOnlyList<ClassifiedToken> tokens, int offset) =>
         tokens.LastOrDefault(token => token.End <= offset)?.Kind == ClassifiedTokenKind.Dot;
+
+    private static bool HasIdentifierPrefix(string text, int offset)
+    {
+        var cursor = Math.Clamp(offset, 0, text.Length) - 1;
+        while (cursor >= 0 && (char.IsLetterOrDigit(text[cursor]) || text[cursor] == '_')) cursor--;
+        return cursor + 1 < Math.Clamp(offset, 0, text.Length);
+    }
 
     private static bool ReceiverMayExposeSymbol(SushiSemanticModel model, int offset, SushiSymbol symbol)
     {

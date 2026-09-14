@@ -10,6 +10,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiFile
 import com.intellij.psi.tree.IElementType
 import com.intellij.codeInsight.editorActions.enter.EnterHandlerDelegate
+import com.intellij.codeInsight.editorActions.enter.EnterBetweenBracesDelegate
 import com.intellij.codeInsight.editorActions.TypedHandlerDelegate
 import com.intellij.openapi.util.Ref
 
@@ -68,6 +69,15 @@ class SushiQuoteTypedHandler : TypedHandlerDelegate() {
     private companion object { val QUOTES = setOf('\'', '"') }
 }
 
+/** Uses IntelliJ's native brace-aware Enter pipeline for `{|}` blocks. */
+class SushiEnterBetweenBracesDelegate : EnterBetweenBracesDelegate() {
+    override fun bracesAreInTheSameElement(file: PsiFile, editor: Editor, lBraceOffset: Int, rBraceOffset: Int): Boolean {
+        val text = editor.document.charsSequence
+        return lBraceOffset in text.indices && rBraceOffset in text.indices &&
+            text[lBraceOffset] == '{' && text[rBraceOffset] == '}'
+    }
+}
+
 class SushiEnterHandler : EnterHandlerDelegate {
     override fun preprocessEnter(
         file: PsiFile,
@@ -76,7 +86,22 @@ class SushiEnterHandler : EnterHandlerDelegate {
         caretAdvance: Ref<Int>,
         dataContext: DataContext,
         originalHandler: EditorActionHandler?
-    ) = EnterHandlerDelegate.Result.Continue
+    ): EnterHandlerDelegate.Result {
+        if (file.language != SushiLanguage) return EnterHandlerDelegate.Result.Continue
+        val document = editor.document
+        val offset = editor.caretModel.offset
+        if (offset >= document.textLength || document.charsSequence[offset] != '}')
+            return EnterHandlerDelegate.Result.Continue
+        val line = document.getLineNumber(offset)
+        val lineStart = document.getLineStartOffset(line)
+        val before = document.charsSequence.subSequence(lineStart, offset).toString()
+        if (!before.trimEnd().endsWith('{')) return EnterHandlerDelegate.Result.Continue
+        val baseIndent = before.takeWhile { it == ' ' || it == '\t' }
+        val innerIndent = baseIndent + "    "
+        document.insertString(offset, "\n$innerIndent\n$baseIndent")
+        editor.caretModel.moveToOffset(offset + 1 + innerIndent.length)
+        return EnterHandlerDelegate.Result.Stop
+    }
 
     override fun postProcessEnter(file: PsiFile, editor: Editor, dataContext: DataContext): EnterHandlerDelegate.Result {
         if (file.language != SushiLanguage) return EnterHandlerDelegate.Result.Continue
@@ -115,13 +140,21 @@ class SushiEnterHandler : EnterHandlerDelegate {
             return EnterHandlerDelegate.Result.Stop
         }
 
-        val text = document.charsSequence
-        if (offset < text.length && text[offset] == '}' && previousText.trimEnd().endsWith('{')) {
-            val indentation = previousText.takeWhile { it == ' ' || it == '\t' } + "    "
-            document.insertString(offset, indentation)
-            editor.caretModel.moveToOffset(offset + indentation.length)
+        // Keep block indentation stable even when the braces were already on
+        // separate lines (the native delegate only handles `{|}` on one line).
+        if (previousText.trimEnd().endsWith('{')) {
+            val baseIndent = previousText.takeWhile { it == ' ' || it == '\t' }
+            val currentStart = document.getLineStartOffset(line)
+            var leadingEnd = currentStart
+            while (leadingEnd < offset && (document.charsSequence[leadingEnd] == ' ' || document.charsSequence[leadingEnd] == '\t')) leadingEnd++
+            val currentIndent = document.charsSequence.subSequence(currentStart, leadingEnd).toString()
+            val unit = if (baseIndent.contains('\t') || currentIndent.contains('\t')) "\t" else "    "
+            val desired = baseIndent + unit
+            document.replaceString(currentStart, leadingEnd, desired)
+            editor.caretModel.moveToOffset(currentStart + desired.length)
             return EnterHandlerDelegate.Result.Stop
         }
+
         return EnterHandlerDelegate.Result.Continue
     }
 

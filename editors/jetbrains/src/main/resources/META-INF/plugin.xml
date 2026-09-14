@@ -12,7 +12,9 @@
     <lang.commenter language="Sushi" implementationClass="dev.sushi.jetbrains.SushiCommenter" />
     <lang.syntaxHighlighterFactory language="Sushi" implementationClass="dev.sushi.jetbrains.SushiSyntaxHighlighterFactory" />
     <lang.braceMatcher language="Sushi" implementationClass="dev.sushi.jetbrains.SushiBraceMatcher" />
+    <enterBetweenBracesDelegate language="Sushi" implementationClass="dev.sushi.jetbrains.SushiEnterBetweenBracesDelegate" />
     <typedHandler implementation="dev.sushi.jetbrains.SushiQuoteTypedHandler" />
+    <enterHandlerDelegate implementation="dev.sushi.jetbrains.SushiEnterHandler" />
     <platform.lsp.integrationProvider implementation="dev.sushi.jetbrains.SushiLspIntegrationProvider" />
     <applicationService serviceImplementation="dev.sushi.jetbrains.SushiSettings" />
     <postStartupActivity implementation="dev.sushi.jetbrains.SushiDocumentationEditingStartupActivity" />
