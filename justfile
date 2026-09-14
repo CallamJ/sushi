@@ -65,13 +65,13 @@ vscode version="0.0.0":
 
 # Build the IntelliJ-based plugin ZIP
 jetbrains version="0.0.0":
-    gradle -p editors/jetbrains -PsushiVersion={{version}} buildPlugin
+    (cd editors/jetbrains && ./gradlew -PsushiVersion={{version}} buildPlugin)
 
 # Build both editor packages with a shared version
 package-editors version="0.0.0":
     (cd editors/vscode && npm ci)
     bash scripts/package-vscode.sh {{version}} publish/editors
-    gradle -p editors/jetbrains -PsushiVersion={{version}} buildPlugin
+    (cd editors/jetbrains && ./gradlew -PsushiVersion={{version}} buildPlugin)
     cp editors/jetbrains/build/distributions/*.zip publish/editors/
 
 # Build every supported standalone runtime
@@ -88,7 +88,7 @@ fmt-check:
 # Run the checks used before publishing a release
 ready: ci
     (cd editors/vscode && npm ci && npm run compile)
-    gradle -p editors/jetbrains buildPlugin
+    (cd editors/jetbrains && ./gradlew buildPlugin)
 
 # Validate a release version without creating a tag or pushing
 release-check kind="patch":

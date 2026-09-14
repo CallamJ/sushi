@@ -68,10 +68,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
       - working-directory: editors/jetbrains
-        run: gradle buildPlugin
+        run: ./gradlew buildPlugin
 
   package-smoke:
     name: Linux package smoke test
@@ -263,15 +261,13 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '21' }
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
       - shell: bash
         run: |
           tag="${{ inputs.release_tag || github.ref_name }}"
           version="${tag#v}"
           (cd editors/vscode && npm ci)
           bash scripts/package-vscode.sh "$version" artifacts/editors
-          gradle -p editors/jetbrains -PsushiVersion="$version" buildPlugin
+          (cd editors/jetbrains && ./gradlew -PsushiVersion="$version" buildPlugin)
           cp editors/jetbrains/build/distributions/*.zip artifacts/editors/
       - uses: actions/upload-artifact@v4
         with:
