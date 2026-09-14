@@ -1445,6 +1445,11 @@ public class Parser
         {
             return ParseNewExpression();
         }
+
+        if (token.IsKeyword("switch"))
+        {
+            return ParseSwitchExpression();
+        }
         
         // @ placeholder for pipes
         if (token.Is(ClassifiedTokenKind.At))
@@ -1513,6 +1518,45 @@ public class Parser
         }
         
         throw new Exception($"Unexpected token: {token} at {token.Line}:{token.Column}");
+    }
+
+    private ExpressionNode ParseSwitchExpression()
+    {
+        var start = Expect(ClassifiedTokenKind.Keyword, "switch");
+        Expect(ClassifiedTokenKind.LeftParen);
+        var value = ParseExpression();
+        Expect(ClassifiedTokenKind.RightParen);
+        Expect(ClassifiedTokenKind.LeftBrace);
+
+        var arms = new List<(ExpressionNode Condition, ExpressionNode Result)>();
+        ExpressionNode? fallback = null;
+        while (!Check(ClassifiedTokenKind.RightBrace) && !IsAtEnd())
+        {
+            if (Match(ClassifiedTokenKind.Semicolon) || Match(ClassifiedTokenKind.Comma)) continue;
+            if (MatchKeyword("default"))
+            {
+                ExpectOperator("->");
+                fallback = ParseExpression();
+            }
+            else
+            {
+                var matches = new List<ExpressionNode> { ParseExpression() };
+                while (Match(ClassifiedTokenKind.Comma)) matches.Add(ParseExpression());
+                ExpectOperator("->");
+                var result = ParseExpression();
+                foreach (var match in matches)
+                    arms.Add((new BinaryExpressionNode(value, "==", match, match.Line, match.Column), result));
+            }
+            Match(ClassifiedTokenKind.Comma);
+            OptionalSemicolon();
+        }
+        Expect(ClassifiedTokenKind.RightBrace);
+        if (fallback is null)
+            throw new Exception($"Switch expressions require a default arm at {start.Line}:{start.Column}");
+        var expression = fallback;
+        for (var index = arms.Count - 1; index >= 0; index--)
+            expression = new ConditionalExpressionNode(arms[index].Condition, arms[index].Result, expression, start.Line, start.Column);
+        return expression;
     }
 
     private NewExpressionNode ParseNewExpression()

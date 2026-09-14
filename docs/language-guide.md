@@ -98,6 +98,17 @@ while (count > 0) {
 Use `!` to negate a boolean expression. `for` supports iteration over arrays
 and ranges where the target can lower the operation natively.
 
+Switches can also be expressions. Expression arms return a value and require
+a `default` arm:
+
+```sushi
+var label = switch (status) {
+    "ok" -> "ready"
+    "error", "failed" -> "broken"
+    default -> "unknown"
+}
+```
+
 ## Functions
 
 Functions may have typed parameters and return values. Arguments can be

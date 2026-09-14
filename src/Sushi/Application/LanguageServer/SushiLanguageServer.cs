@@ -271,6 +271,18 @@ internal sealed class SushiLanguageServer
             return new { isIncomplete = false, items = new[] { "param", "returns", "throws", "deprecated", "example" }.Select(tag => new { label = "@" + tag, kind = 14, detail = "documentation tag" }).ToArray() };
         var items = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
         var localModel = SushiSemanticModel.Create(document.Text);
+        if (IsSwitchExpressionContext(localModel.Tokens, offset))
+        {
+            return new
+            {
+                isIncomplete = false,
+                items = new object[]
+                {
+                    new { label = "default ->", kind = 15, detail = "switch expression default arm", insertText = "default -> $0", insertTextFormat = 2 },
+                    new { label = "case ->", kind = 15, detail = "switch expression arm", insertText = "$0 -> $1", insertTextFormat = 2 }
+                }
+            };
+        }
         var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
         if (!memberContext && !HasIdentifierPrefix(document.Text, offset))
             return new { isIncomplete = false, items = Array.Empty<object>() };
@@ -343,6 +355,26 @@ internal sealed class SushiLanguageServer
 
     private static bool IsMemberCompletionContext(IReadOnlyList<ClassifiedToken> tokens, int offset) =>
         tokens.LastOrDefault(token => token.End <= offset)?.Kind == ClassifiedTokenKind.Dot;
+
+    private static bool IsSwitchExpressionContext(IReadOnlyList<ClassifiedToken> tokens, int offset)
+    {
+        var prior = tokens.Where(token => token.End <= offset).ToArray();
+        var depth = 0;
+        for (var index = prior.Length - 1; index >= 0; index--)
+        {
+            if (prior[index].Kind == ClassifiedTokenKind.RightBrace) depth++;
+            else if (prior[index].Kind == ClassifiedTokenKind.LeftBrace)
+            {
+                if (depth > 0) { depth--; continue; }
+                var switchIndex = prior.Take(index).ToList().FindLastIndex(token => token.IsKeyword("switch"));
+                if (switchIndex < 0) return false;
+                var previous = switchIndex > 0 ? prior[switchIndex - 1] : null;
+                return previous is not null && (previous.IsOperator("=") || previous.IsKeyword("return") ||
+                    previous.Kind is ClassifiedTokenKind.LeftParen or ClassifiedTokenKind.Comma);
+            }
+        }
+        return false;
+    }
 
     private static bool HasIdentifierPrefix(string text, int offset)
     {
