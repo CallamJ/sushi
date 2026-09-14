@@ -42,6 +42,7 @@ public sealed class BashEmitter : IBackendEmitter
     private bool _emittedTopLevelSection;
     private Dictionary<string, int> _positionalParameterReferences = new(StringComparer.Ordinal);
     private HashSet<string>? _runtimeFunctionFilter;
+    private bool _nativeGlobHelper;
 
     public BashEmitter()
     {
@@ -82,6 +83,7 @@ public sealed class BashEmitter : IBackendEmitter
         _emittedTopLevelSection = false;
         _positionalParameterReferences.Clear();
         _runtimeFunctionFilter = null;
+        _nativeGlobHelper = program.Statements.OfType<IrStandardLibraryImportStatement>().Any();
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -141,7 +143,7 @@ public sealed class BashEmitter : IBackendEmitter
     private static bool HasFsGlobImport(IrProgram program)
     {
         var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
-        return imports.Count == 0 || imports.Any(import => import.Module.Equals("std.fs", StringComparison.Ordinal) &&
+        return imports.Count == 0 || imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
             (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
     }
 
@@ -3798,7 +3800,13 @@ __sushi_native_obj_to_json() {
                 var cwd = intrinsic.Arguments.Count > 1 ? intrinsic.Arguments[1] : new IrLiteralExpression(null);
                 var root = PrepareValue(cwd, inFunction);
                 WriteLine($"{arrayDeclaration}-a {name}=()");
-                WriteLine($"__sushi_fs_glob_into {name} {pattern} {root}");
+                if (_nativeGlobHelper)
+                    WriteLine($"__sushi_fs_glob_into {name} {pattern} {root}");
+                else
+                {
+                    WriteLine($"__sushi_fs_glob_into {pattern} {root}");
+                    WriteLine($"while IFS= read -r __sushi_path; do {name}+=(\"$__sushi_path\"); done < <(__sushi_array_each_raw \"${{__sushi_result-}}\")");
+                }
                 _nativeArrayVariables[name] = name;
                 _arrayInitializers.Remove(name);
                 return true;

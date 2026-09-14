@@ -1,2 +1,4 @@
+use std.fs.{glob}
+
 var files = std.fs.glob("src/**/*.cs")
 println("glob_done")

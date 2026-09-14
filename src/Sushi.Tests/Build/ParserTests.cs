@@ -950,6 +950,15 @@ namespace Sushi.Tests
         }
 
         [Fact]
+        public void TestStandardLibrarySingleUseDeclaration()
+        {
+            var ast = Parse("use std.fs.glob");
+            var useDecl = Assert.IsType<UseDeclarationNode>(Assert.Single(ast.Declarations));
+            Assert.Equal("std.fs.glob", useDecl.ImportPath);
+            Assert.Empty(useDecl.Members);
+        }
+
+        [Fact]
         public void TestExportDeclaration()
         {
             var ast = Parse("export greet(name) { return name }");

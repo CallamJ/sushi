@@ -1,2 +1,4 @@
+use std.process.{run}
+
 var result = std.process.run("dotnet", ["--version"], allowFailure: true)
 println(result.code)

@@ -146,7 +146,7 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private static bool HasFsGlobImport(IrProgram program)
     {
         var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
-        return imports.Count == 0 || imports.Any(import => import.Module.Equals("std.fs", StringComparison.Ordinal) &&
+        return imports.Count == 0 || imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
             (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
     }
 

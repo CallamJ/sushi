@@ -1,6 +1,9 @@
+use std.process
+
 var stages = [
     { command: "dotnet", args: ["--list-sdks"] },
     { command: "sort", args: [] }
 ]
 var result = std.process.pipeline(stages, allowFailure: true)
 println(result.code)
+use std.process.{pipeline}

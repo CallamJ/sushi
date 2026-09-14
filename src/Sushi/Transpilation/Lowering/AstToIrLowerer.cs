@@ -69,6 +69,7 @@ public sealed class AstToIrLowerer
     private readonly Dictionary<string, IrTypeRef> _knownVariableTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _standardImportAliases = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _standardImportNames = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _standardImportedPaths = new(StringComparer.Ordinal);
 
     private string _sourcePath = "";
     private string? _currentFunctionName;
@@ -116,6 +117,7 @@ public sealed class AstToIrLowerer
         _knownVariableTypes.Clear();
         _standardImportAliases.Clear();
         _standardImportNames.Clear();
+        _standardImportedPaths.Clear();
         _tempId = 0;
         _lambdaId = 0;
         _loopDepth = 0;
@@ -161,6 +163,15 @@ public sealed class AstToIrLowerer
             var alias = use.Alias ?? use.ImportPath[(use.ImportPath.LastIndexOf('.') + 1)..];
             if (use.Members.Count == 0)
             {
+                if (_intrinsicRegistry.TryResolve(use.ImportPath, out _))
+                {
+                    var member = use.ImportPath[(use.ImportPath.LastIndexOf('.') + 1)..];
+                    if (!_standardImportNames.TryAdd(member, use.ImportPath))
+                        AddDiagnostic("SUSHI1055", $"Duplicate standard-library import '{member}'.", use.Line, use.Column);
+                    _standardImportedPaths.Add(use.ImportPath);
+                    continue;
+                }
+                _standardImportedPaths.Add(use.ImportPath);
                 if (!_standardImportAliases.TryAdd(alias, use.ImportPath))
                     AddDiagnostic("SUSHI1055", $"Duplicate standard-library alias '{alias}'.", use.Line, use.Column);
                 continue;
@@ -173,6 +184,7 @@ public sealed class AstToIrLowerer
                     AddDiagnostic("SUSHI1056", $"Unknown standard-library member '{use.ImportPath}.{member}'.", use.Line, use.Column);
                     continue;
                 }
+                _standardImportedPaths.Add($"{use.ImportPath}.{member}");
                 if (!_standardImportNames.TryAdd(member, $"{use.ImportPath}.{member}"))
                     AddDiagnostic("SUSHI1055", $"Duplicate standard-library import '{member}'.", use.Line, use.Column);
             }
@@ -979,6 +991,13 @@ public sealed class AstToIrLowerer
 
         if (TryGetCalleePath(node.Callee, out var calleePath))
         {
+            if (calleePath.StartsWith("std.", StringComparison.Ordinal) &&
+                _standardImportedPaths.Count > 0 &&
+                !_standardImportedPaths.Contains(calleePath) &&
+                !_standardImportedPaths.Any(path => calleePath.StartsWith(path + ".", StringComparison.Ordinal)))
+            {
+                AddDiagnostic("SUSHI1057", $"Standard-library API '{calleePath}' must be explicitly imported with a 'use' declaration.", node.Line, node.Column);
+            }
             calleePath = ResolveStandardImport(calleePath);
             if (node.Callee is IdentifierExpressionNode &&
                 loweredArguments.Count == 1 &&

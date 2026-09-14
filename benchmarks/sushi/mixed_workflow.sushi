@@ -1,3 +1,6 @@
+use std.process
+use std.string
+
 var user = { hello: "world", n: 1 }
 var run = std.process.run("dotnet", ["--version"], allowFailure: true)
 var text = "  " + user.hello + "  "
@@ -11,3 +14,4 @@ while (i < 25) {
 
 println(output)
 println(run.code)
+use std.process.{run}

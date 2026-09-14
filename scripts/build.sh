@@ -43,10 +43,12 @@ if [[ "${1-}" == "-h" ]] || [[ "${1-}" == "--help" ]]; then
 fi
 BUILD_PLATFORMS=("$@")
 echo -e "${GREEN}  Building ${PROJECT_NAME}${NC}"
-# Clean output directory
+# Clean only artifacts owned by this binary build.  Keep editor packages and
+# NuGet artifacts that may already exist under publish/.
 if [ -d "$OUTPUT_DIR" ]; then
-    echo -e "${YELLOW}Cleaning output directory...${NC}"
-    rm -rf "$OUTPUT_DIR"
+    echo -e "${YELLOW}Cleaning previous binary artifacts...${NC}"
+    find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'Sushi-*' -delete
+    find "$OUTPUT_DIR" -maxdepth 1 -type d -name 'temp_*' -prune -exec rm -rf {} +
 fi
 mkdir -p "$OUTPUT_DIR"
 

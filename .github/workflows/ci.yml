@@ -178,17 +178,17 @@ jobs:
         run: |
           $outputDir = "tmp/benchmarks/ci-${{ github.run_id }}-${{ matrix.target }}"
           New-Item -ItemType Directory -Force $outputDir | Out-Null
+          "OUTPUT_DIR=$outputDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $args = @("run", "--project", "src/Sushi", "--", "benchmark", "--targets", "${{ matrix.target }}", "--iterations", "10", "--warmup", "2", "--output-dir", $outputDir)
           if (Test-Path "tmp/baseline/results.json") { $args += @("--baseline", "tmp/baseline/results.json") }
           dotnet @args
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "OUTPUT_DIR=$outputDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: benchmark-${{ matrix.target }}-results
-          path: ${{ env.OUTPUT_DIR }}
-          if-no-files-found: error
+          path: tmp/benchmarks/ci-${{ github.run_id }}-${{ matrix.target }}
+          if-no-files-found: warn
 
   release-binaries:
     name: Release binary (${{ matrix.rid }})
