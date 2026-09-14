@@ -150,9 +150,14 @@ public static class DocumentationParser
         {
             if (tokens[index].Kind != ClassifiedTokenKind.Identifier) continue;
             var previous = index > start ? tokens[index - 1] : null;
-            var next = index + 1 < end ? tokens[index + 1] : null;
-            if (previous?.Kind == ClassifiedTokenKind.Identifier ||
-                ((previous is null || previous.Kind is ClassifiedTokenKind.Comma or ClassifiedTokenKind.LeftParen) && next?.Kind is ClassifiedTokenKind.Comma or ClassifiedTokenKind.RightParen or ClassifiedTokenKind.Operator))
+            // `end` is the closing parenthesis, which is needed to recognize
+            // the final untyped parameter in a list such as `name(value)`.
+            var next = index + 1 <= end ? tokens[index + 1] : null;
+            var typedName = previous?.Kind == ClassifiedTokenKind.Identifier;
+            var startsParameter = previous is null || previous.Kind == ClassifiedTokenKind.Comma;
+            var untypedName = startsParameter && next?.Kind is
+                ClassifiedTokenKind.Comma or ClassifiedTokenKind.RightParen or ClassifiedTokenKind.Operator;
+            if (typedName || untypedName)
                 yield return tokens[index].Text;
         }
     }

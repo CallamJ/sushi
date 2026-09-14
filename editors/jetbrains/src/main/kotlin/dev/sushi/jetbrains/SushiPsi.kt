@@ -3,6 +3,7 @@ package dev.sushi.jetbrains
 import com.intellij.extapi.psi.ASTWrapperPsiElement
 import com.intellij.extapi.psi.PsiFileBase
 import com.intellij.lang.ASTNode
+import com.intellij.lang.CodeDocumentationAwareCommenter
 import com.intellij.lang.ParserDefinition
 import com.intellij.lang.PsiBuilder
 import com.intellij.lang.PsiParser
@@ -46,4 +47,25 @@ private class SushiParser : PsiParser {
 class SushiPsiFile(viewProvider: FileViewProvider) : PsiFileBase(viewProvider, SushiLanguage) {
     override fun getFileType() = SushiFileType
     override fun toString() = "Sushi File"
+}
+
+/** Lets IntelliJ's built-in Enter and comment actions recognize Sushi's /// docs. */
+class SushiCommenter : CodeDocumentationAwareCommenter {
+    override fun getLineCommentPrefix() = "//"
+    override fun getBlockCommentPrefix() = "/*"
+    override fun getBlockCommentSuffix() = "*/"
+    override fun getCommentedBlockCommentPrefix() = "/*"
+    override fun getCommentedBlockCommentSuffix() = "*/"
+    override fun getLineCommentTokenType() = SushiTokenTypes.COMMENT
+    override fun getBlockCommentTokenType() = SushiTokenTypes.COMMENT
+    override fun getDocumentationCommentTokenType() = SushiTokenTypes.DOC_COMMENT
+    override fun getDocumentationCommentPrefix() = "///"
+    override fun getDocumentationCommentLinePrefix() = "///"
+    override fun getDocumentationCommentSuffix() = ""
+    override fun getDocumentationLineCommentTokenType() = SushiTokenTypes.DOC_COMMENT
+    override fun getDocumentationLineCommentPrefix() = "///"
+    override fun isDocumentationComment(element: com.intellij.psi.PsiComment) =
+        element.node.elementType == SushiTokenTypes.DOC_COMMENT
+    override fun isDocumentationLineComment(element: com.intellij.psi.PsiComment) =
+        element.node.elementType == SushiTokenTypes.DOC_COMMENT
 }

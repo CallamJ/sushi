@@ -15,6 +15,7 @@ using Sushi.Transpilation.Intrinsics;
 /// </summary>
 internal sealed class SushiLanguageServer
 {
+    private static readonly System.Text.RegularExpressions.Regex BareDocumentationLine = new("^\\s*///\\s*$", System.Text.RegularExpressions.RegexOptions.Compiled);
     private readonly Stream _input;
     private readonly Stream _output;
     private readonly TextWriter _log;
@@ -72,7 +73,7 @@ internal sealed class SushiLanguageServer
                     {
                         positionEncoding = "utf-16",
                         textDocumentSync = 1,
-                        completionProvider = new { triggerCharacters = new[] { ".", "@", "{" } },
+                        completionProvider = new { triggerCharacters = new[] { ".", "@", "{", "/" } },
                         hoverProvider = true,
                         definitionProvider = true,
                         typeDefinitionProvider = true,
@@ -261,6 +262,8 @@ internal sealed class SushiLanguageServer
     {
         var document = Document(parameters);
         var offset = Offset(document.Text, parameters.GetProperty("position"));
+        if (TryDocumentationTemplateCompletion(document, offset, out var documentationTemplate))
+            return new { isIncomplete = false, items = new[] { documentationTemplate } };
         if (IsDocumentationTagContext(document.Text, offset))
             return new { isIncomplete = false, items = new[] { "param", "returns", "throws", "deprecated", "example" }.Select(tag => new { label = "@" + tag, kind = 14, detail = "documentation tag" }).ToArray() };
         var items = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
@@ -297,6 +300,28 @@ internal sealed class SushiLanguageServer
             items = items.Values.OrderBy(item => item.Label, StringComparer.Ordinal)
                 .Select(item => new { label = item.Label, kind = item.Kind, detail = item.Detail, documentation = item.Documentation is null ? null : new { kind = "markdown", value = item.Documentation }, tags = item.Deprecated is null ? null : new[] { 1 }, insertText = item.InsertText, insertTextFormat = item.InsertTextFormat }).ToArray()
         };
+    }
+
+    private static bool TryDocumentationTemplateCompletion(OpenDocument document, int offset, out object item)
+    {
+        item = null!;
+        var lineStart = LineStart(document.Text, offset);
+        var line = LineText(document.Text, lineStart);
+        if (!BareDocumentationLine.IsMatch(line) || offset < lineStart + line.Length) return false;
+        var declarationStart = NextLineStart(document.Text, lineStart);
+        if (declarationStart >= document.Text.Length || String.IsNullOrWhiteSpace(LineText(document.Text, declarationStart))) return false;
+        var indentation = line[..line.IndexOf('/')];
+        if (!TryDocumentationTemplate(LineText(document.Text, declarationStart), indentation, out var template)) return false;
+        item = new
+        {
+            label = "Generate documentation template",
+            kind = 15,
+            detail = "documentation template",
+            documentation = new { kind = "markdown", value = "Generate a summary and documentation tags for the declaration below." },
+            textEdit = new { range = Range(document.Text, lineStart, lineStart + line.Length, 1, 1), newText = template },
+            insertTextFormat = 1
+        };
+        return true;
     }
 
     private static bool IsMemberCompletionContext(IReadOnlyList<ClassifiedToken> tokens, int offset) =>
@@ -363,7 +388,17 @@ internal sealed class SushiLanguageServer
             _ => $"{symbol.Kind.ToString().ToLowerInvariant()} {symbol.Name}"
         };
         signature = DeclarationWithInitializer(model, symbol) ?? signature;
-        return SushiCode(signature) + DocumentationMarkdown(symbol.Documentation);
+        var documentation = symbol.Documentation;
+        if (documentation is null && symbol.Kind == SushiSymbolKind.Parameter)
+            documentation = model.Symbols
+                .Where(candidate => candidate.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method or SushiSymbolKind.Constructor)
+                .FirstOrDefault(candidate => ParametersFor(model, candidate).Any(parameter => parameter.Token.Start == symbol.Token.Start))
+                ?.Documentation;
+        var parameterDocumentation = symbol.Kind == SushiSymbolKind.Parameter
+            ? documentation?.ParameterDocumentation(symbol.Name)
+            : null;
+        return SushiCode(signature) + DocumentationMarkdown(documentation) +
+               (String.IsNullOrWhiteSpace(parameterDocumentation) ? "" : $"\n\n**Parameter:** {RenderDocumentation(parameterDocumentation)}");
     }
 
     private static string ParameterSignature(SushiSemanticModel model, SushiSymbol symbol)
@@ -682,6 +717,53 @@ internal sealed class SushiLanguageServer
         return new[] { new { range = Range(document.Text, 0, document.Text.Length, 1, 1), newText = formatted } };
     }
 
+    private static bool TryDocumentationTemplate(string rawDeclaration, string indentation, out string template)
+    {
+        template = "";
+        var declaration = rawDeclaration.TrimStart();
+        var constructor = System.Text.RegularExpressions.Regex.Match(declaration, "^new\\s*\\((?<parameters>[^)]*)\\)");
+        if (constructor.Success)
+        {
+            if (String.IsNullOrWhiteSpace(constructor.Groups["parameters"].Value)) return false;
+            template = DocumentationTemplateLines(indentation, "constructor", constructor.Groups["parameters"].Value, returns: false);
+            return true;
+        }
+
+        var callable = System.Text.RegularExpressions.Regex.Match(declaration, "^(?:export\\s+)?(?:(?<return>[A-Za-z_]\\w*)\\s+)?(?<name>[A-Za-z_]\\w*)\\s*\\((?<parameters>[^)]*)\\)");
+        if (callable.Success)
+        {
+            var returns = !String.Equals(callable.Groups["return"].Value, "void", StringComparison.OrdinalIgnoreCase);
+            if (String.IsNullOrWhiteSpace(callable.Groups["parameters"].Value) && !returns) return false;
+            template = DocumentationTemplateLines(indentation, callable.Groups["name"].Value, callable.Groups["parameters"].Value, returns);
+            return true;
+        }
+        return false;
+    }
+
+    private static string DocumentationTemplateLines(string indentation, string name, string parameters, bool returns)
+    {
+        var lines = new List<string> { $"{indentation}///" };
+        foreach (var parameter in parameters.Split(','))
+        {
+            var parameterName = System.Text.RegularExpressions.Regex.Match(parameter.Split('=')[0].Trim(), "(?<name>[A-Za-z_]\\w*)\\s*$");
+            if (parameterName.Success) lines.Add($"{indentation}/// @param {parameterName.Groups["name"].Value}");
+        }
+        if (returns) lines.Add($"{indentation}/// @returns");
+        return String.Join("\n", lines);
+    }
+
+    private static string LineText(string text, int start)
+    {
+        var end = text.IndexOf('\n', start);
+        return text[start..(end < 0 ? text.Length : end)].TrimEnd('\r');
+    }
+
+    private static int NextLineStart(string text, int start)
+    {
+        var end = text.IndexOf('\n', start);
+        return end < 0 ? text.Length : end + 1;
+    }
+
     private object CodeActions(JsonElement parameters)
     {
         var document = Document(parameters);
@@ -940,12 +1022,17 @@ internal sealed class SushiLanguageServer
     {
         edit = null!;
         name = "";
-        var symbol = model.SymbolAt(offset);
+        var symbol = SymbolAtDocumentationOrDeclaration(model, offset);
         if (symbol is null || symbol.Documentation is not null || symbol.Kind is SushiSymbolKind.Parameter or SushiSymbolKind.Variable or SushiSymbolKind.Namespace or SushiSymbolKind.Module) return false;
-        var parameters = symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method ? ParametersFor(model, symbol).ToArray() : Array.Empty<SushiSymbol>();
-        var text = new StringBuilder("/// TODO: Describe ").Append(symbol.Name).Append(".\n");
-        foreach (var parameter in parameters) text.Append("/// @param ").Append(parameter.Name).Append(" TODO.\n");
-        if (symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method) text.Append("/// @returns TODO.\n");
+        var callable = symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method or SushiSymbolKind.Constructor;
+        var parameters = callable ? ParametersFor(model, symbol).ToArray() : Array.Empty<SushiSymbol>();
+        var returns = symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method &&
+                      !String.Equals(symbol.DeclaredType, "void", StringComparison.OrdinalIgnoreCase);
+        if (!callable || (parameters.Length == 0 && !returns)) return false;
+
+        var text = new StringBuilder("///\n");
+        foreach (var parameter in parameters) text.Append("/// @param ").Append(parameter.Name).Append('\n');
+        if (returns) text.Append("/// @returns\n");
         var insertion = LineStart(document.Text, symbol.Token.Start);
         edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = text.ToString() } } } };
         name = symbol.Name;
@@ -956,15 +1043,19 @@ internal sealed class SushiLanguageServer
     {
         edit = null!;
         parameterName = "";
-        var symbol = model.SymbolAt(offset);
-        if (symbol?.Documentation is null || symbol.Kind is not (SushiSymbolKind.Function or SushiSymbolKind.Method)) return false;
+        var symbol = SymbolAtDocumentationOrDeclaration(model, offset);
+        if (symbol?.Documentation is null || symbol.Kind is not (SushiSymbolKind.Function or SushiSymbolKind.Method or SushiSymbolKind.Constructor)) return false;
         var missing = ParametersFor(model, symbol).FirstOrDefault(parameter => symbol.Documentation.ParameterDocumentation(parameter.Name) is null);
         if (missing is null) return false;
         var insertion = symbol.Documentation.End;
-        edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = $"\n/// @param {missing.Name} TODO." } } } };
+        edit = new { changes = new Dictionary<string, object> { [document.Uri] = new[] { new { range = Range(document.Text, insertion, insertion, 1, 1), newText = $"\n/// @param {missing.Name}" } } } };
         parameterName = missing.Name;
         return true;
     }
+
+    private static SushiSymbol? SymbolAtDocumentationOrDeclaration(SushiSemanticModel model, int offset) =>
+        model.SymbolAt(offset) ?? model.Symbols.FirstOrDefault(symbol =>
+            symbol.Documentation is { } documentation && documentation.Start <= offset && offset <= documentation.End);
 
     private static bool TryInlineVariable(OpenDocument document, SushiSemanticModel model, int offset, out object edit, out string name)
     {
@@ -1305,15 +1396,25 @@ internal sealed class SushiLanguageServer
     private static string DocumentationMarkdown(DocumentationComment? documentation)
     {
         if (documentation is null) return "";
-        string Render(string text) => System.Text.RegularExpressions.Regex.Replace(text, "\\{@link\\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\\s+([^}]+))?\\}", match => $"`{(match.Groups[2].Success ? match.Groups[2].Value.Trim() : match.Groups[1].Value)}`");
         var text = new StringBuilder();
-        if (!String.IsNullOrWhiteSpace(documentation.Body)) text.Append(Render(documentation.Body));
-        if (documentation.ReturnsDocumentation is { Length: > 0 } returns) text.Append("\n\n**Returns:** ").Append(Render(returns));
-        if (documentation.DeprecationMessage is { Length: > 0 } deprecated) text.Append("\n\n> **Deprecated:** ").Append(Render(deprecated));
-        foreach (var throws in documentation.TagsNamed("throws")) text.Append("\n\n**Throws:** ").Append(Render(throws.Description));
+        if (!String.IsNullOrWhiteSpace(documentation.Body)) text.Append(RenderDocumentation(documentation.Body));
+        var parameters = documentation.TagsNamed("param").Where(parameter => !String.IsNullOrWhiteSpace(parameter.Subject)).ToArray();
+        if (parameters.Length > 0)
+        {
+            text.Append("\n\n**Parameters:**");
+            foreach (var parameter in parameters)
+            {
+                text.Append("\n- `").Append(parameter.Subject).Append('`');
+                if (!String.IsNullOrWhiteSpace(parameter.Description)) text.Append(": ").Append(RenderDocumentation(parameter.Description));
+            }
+        }
+        if (documentation.ReturnsDocumentation is { Length: > 0 } returns) text.Append("\n\n**Returns:** ").Append(RenderDocumentation(returns));
+        if (documentation.DeprecationMessage is { Length: > 0 } deprecated) text.Append("\n\n> **Deprecated:** ").Append(RenderDocumentation(deprecated));
+        foreach (var throws in documentation.TagsNamed("throws")) text.Append("\n\n**Throws:** ").Append(RenderDocumentation(throws.Description));
         foreach (var example in documentation.TagsNamed("example")) text.Append("\n\n**Example**\n```sushi\n").Append(example.Description).Append("\n```");
         return text.Length == 0 ? "" : "\n\n" + text;
     }
+    private static string RenderDocumentation(string text) => System.Text.RegularExpressions.Regex.Replace(text, "\\{@link\\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\\s+([^}]+))?\\}", match => $"`{(match.Groups[2].Success ? match.Groups[2].Value.Trim() : match.Groups[1].Value)}`");
     private static bool IsDocumentationTagContext(string text, int offset)
     {
         var start = LineStart(text, offset);

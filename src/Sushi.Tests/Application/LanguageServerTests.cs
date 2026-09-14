@@ -9,6 +9,67 @@ using Xunit;
 public sealed class LanguageServerTests
 {
     [Fact]
+    public async Task Server_GeneratesConstructorParameterDocsAndOmitsVoidReturns()
+    {
+        const string source = "class Person {\n    new(string name) {}\n    void reset(string reason) {}\n}";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/generated-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/generated-docs.sushi\"},\"range\":{\"start\":{\"line\":1,\"character\":5},\"end\":{\"line\":1,\"character\":5}},\"context\":{\"diagnostics\":[]}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/generated-docs.sushi\"},\"range\":{\"start\":{\"line\":2,\"character\":9},\"end\":{\"line\":2,\"character\":9}},\"context\":{\"diagnostics\":[]}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("@param name", wire);
+        Assert.Contains("@param reason", wire);
+        Assert.DoesNotContain("@returns", wire);
+        Assert.DoesNotContain("TODO", wire);
+    }
+
+    [Fact]
+    public async Task Server_OffersMissingParameterDocumentationFromTheDocumentationDiagnostic()
+    {
+        const string source = "/// Greets a person.\nstring greet(string name) { return name }";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/missing-param-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/missing-param-docs.sushi\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}},\"context\":{\"diagnostics\":[]}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("Document parameter \\u0027name\\u0027", wire);
+        Assert.Contains("/// @param name", wire);
+        Assert.DoesNotContain("TODO", wire);
+    }
+
+    [Fact]
+    public async Task Server_OffersDocumentationTemplateOnlyForAnAdjacentBareComment()
+    {
+        const string adjacentSource = "///\nstring greet(string name) { return name }";
+        const string separatedSource = "///\n\nstring greet(string name) { return name }";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":53,\"method\":\"initialize\",\"params\":{}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/template-docs.sushi\",\"version\":1,\"text\":{JsonString(adjacentSource)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":54,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/template-docs.sushi\"},\"position\":{\"line\":0,\"character\":3}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/template-docs.sushi\",\"version\":2}},\"contentChanges\":[{{\"text\":{JsonString(separatedSource)}}}]}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":55,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/template-docs.sushi\"},\"position\":{\"line\":0,\"character\":3}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("Generate documentation template", wire);
+        Assert.Contains("/// @param name", wire);
+        Assert.DoesNotContain("TODO", wire);
+        Assert.Equal(1, wire.Split("Generate documentation template").Length - 1);
+    }
+
+    [Fact]
     public async Task Server_ShowsDocumentationForConstructors()
     {
         const string source = "class Person {\n    /// Creates a person.\n    /// @param name Initial name.\n    new(string name) {}\n}";
@@ -23,6 +84,27 @@ public sealed class LanguageServerTests
         var wire = Encoding.UTF8.GetString(output.ToArray());
         Assert.Contains("Creates a person.", wire);
         Assert.Contains("new(string name)", wire);
+    }
+
+    [Fact]
+    public async Task Server_IncludesDocumentationTagsInCallableAndParameterHovers()
+    {
+        const string source = "/// Adds a greeting.\n/// @param name The name to greet.\n/// @returns The greeting text.\n/// @throws When the name is invalid.\nstring greet(string name) { return name }";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/hover-tags.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":56,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/hover-tags.sushi\"},\"position\":{\"line\":4,\"character\":8}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":57,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/hover-tags.sushi\"},\"position\":{\"line\":4,\"character\":21}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("**Parameters:**", wire);
+        Assert.Contains("The name to greet.", wire);
+        Assert.Contains("**Returns:** The greeting text.", wire);
+        Assert.Contains("**Throws:** When the name is invalid.", wire);
+        Assert.Contains("**Parameter:** The name to greet.", wire);
     }
 
     [Fact]
@@ -113,7 +195,7 @@ public sealed class LanguageServerTests
         Assert.Contains("\"id\":36", wire);
         Assert.Contains("Person name.", wire);
         Assert.Contains("file:///tmp/docs.sushi#L6", wire);
-        Assert.Contains("Generate documentation for \\u0027Person\\u0027", wire);
+        Assert.DoesNotContain("Generate documentation for \\u0027Person\\u0027", wire);
     }
 
     [Fact]

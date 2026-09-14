@@ -31,4 +31,12 @@ public sealed class DocumentationParserTests
         Assert.Contains("SUSHI1103", codes);
         Assert.Contains("SUSHI1107", codes);
     }
+
+    [Fact]
+    public void AcceptsDocumentationForUntypedParameters()
+    {
+        const string source = "///\n/// @param param\n/// @returns\nname(param) {}";
+
+        Assert.Empty(DocumentationParser.ValidateSource(source));
+    }
 }
