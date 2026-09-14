@@ -68,6 +68,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
       - working-directory: editors/jetbrains
         run: gradle buildPlugin
 
@@ -261,6 +263,8 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '21' }
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
       - shell: bash
         run: |
           tag="${{ inputs.release_tag || github.ref_name }}"
