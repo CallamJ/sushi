@@ -272,8 +272,14 @@ internal sealed class SushiLanguageServer
         var items = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
         var localModel = SushiSemanticModel.Create(document.Text);
         var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
+        if (memberContext)
+        {
+            foreach (var member in MemberCompletionItems(localModel, offset))
+                items[member.Label] = member;
+        }
         foreach (var symbol in localModel.Symbols.Where(symbol => !memberContext || symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method or SushiSymbolKind.EnumMember))
-            items[symbol.Name] = CompletionForSymbol(localModel, symbol);
+            if (!memberContext || ReceiverMayExposeSymbol(localModel, offset, symbol))
+                items[symbol.Name] = CompletionForSymbol(localModel, symbol);
         foreach (var occurrence in AnalyzeAll().Where(symbol => !memberContext && symbol.Uri != document.Uri && symbol.Exported))
         {
             var model = SushiSemanticModel.Create(DocumentFor(occurrence.Uri).Text);
@@ -335,6 +341,65 @@ internal sealed class SushiLanguageServer
 
     private static bool IsMemberCompletionContext(IReadOnlyList<ClassifiedToken> tokens, int offset) =>
         tokens.LastOrDefault(token => token.End <= offset)?.Kind == ClassifiedTokenKind.Dot;
+
+    private static bool ReceiverMayExposeSymbol(SushiSemanticModel model, int offset, SushiSymbol symbol)
+    {
+        var dot = model.Tokens.LastOrDefault(token => token.End <= offset && token.Kind == ClassifiedTokenKind.Dot);
+        if (dot is null) return false;
+        var receiver = model.Tokens.LastOrDefault(token => token.End <= dot.Start && token.Kind == ClassifiedTokenKind.Identifier);
+        if (receiver is null) return false;
+        var receiverSymbol = model.SymbolFor(receiver);
+        return receiverSymbol?.DeclaredType is null || symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method;
+    }
+
+    private static IEnumerable<CompletionItem> MemberCompletionItems(SushiSemanticModel model, int offset)
+    {
+        var dot = model.Tokens.LastOrDefault(token => token.End <= offset && token.Kind == ClassifiedTokenKind.Dot);
+        var receiver = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start && token.Kind == ClassifiedTokenKind.Identifier);
+        var type = receiver is null ? null : model.SymbolFor(receiver)?.DeclaredType;
+        var isString = type is null || type.Equals("string", StringComparison.OrdinalIgnoreCase) || type.Equals("str", StringComparison.OrdinalIgnoreCase);
+        var isArray = type is null || type.EndsWith("[]", StringComparison.Ordinal) || type.Equals("array", StringComparison.OrdinalIgnoreCase);
+        if (isString)
+        {
+            foreach (var name in new[] { "trim", "lower", "upper", "length", "split", "contains", "startsWith", "endsWith", "replace", "isMatch", "match" })
+            {
+                var count = name switch { "length" or "trim" or "lower" or "upper" => 0, _ => 1 };
+                var detail = StandardLibrary.TryGetFunction($"std.string.{name}", out var function)
+                    ? function.ReturnType
+                    : "string";
+                // The receiver (`value`) is supplied by the expression before
+                // the dot and should not appear as an explicit method argument.
+                var parameters = function is null ? "" : string.Join(", ", function.Parameters.Skip(1).Select(parameter => parameter.DisplayName));
+                yield return new CompletionItem($"{name}({parameters})", 2, detail, function?.Documentation, null, CallableInsertText(name, count), count > 0 ? 2 : null);
+            }
+        }
+        if (isArray)
+        {
+            foreach (var name in new[] { "length", "push", "map", "filter", "reduce" })
+            {
+                var count = name == "length" ? 0 : 1;
+                var detail = name switch
+                {
+                    "length" => "int",
+                    "push" => "array",
+                    "map" => "array",
+                    "filter" => "array",
+                    "reduce" => "any",
+                    _ => "array"
+                };
+                var parameters = name switch
+                {
+                    "length" => "",
+                    "push" => "any value",
+                    "map" => "function callback",
+                    "filter" => "function predicate",
+                    "reduce" => "function callback, any initial = null",
+                    _ => ""
+                };
+                yield return new CompletionItem($"{name}({parameters})", 2, detail, null, null, CallableInsertText(name, count), count > 0 ? 2 : null);
+            }
+        }
+    }
 
     private static CompletionItem CompletionForSymbol(SushiSemanticModel model, SushiSymbol symbol)
     {

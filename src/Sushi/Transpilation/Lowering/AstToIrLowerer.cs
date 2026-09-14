@@ -2051,6 +2051,22 @@ public sealed class AstToIrLowerer
 
     private IrExpression LowerIdentifier(IdentifierExpressionNode identifier)
     {
+        // Within a class method/constructor, fields are implicitly addressed
+        // through the current receiver.  Keep `this.field` available, but let
+        // `field` remain idiomatic source syntax.
+        if (_knownObjectTypes.TryGetValue("this", out var currentType) &&
+            _classes.TryGetValue(currentType, out var currentClass))
+        {
+            var field = currentClass.Fields.FirstOrDefault(candidate => candidate.Name == identifier.Name);
+            if (field != null && !_definedVariables.Contains(identifier.Name))
+            {
+                return new IrMemberAccessExpression(
+                    new IrIdentifierExpression("this"),
+                    field.Name,
+                    LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'"));
+            }
+        }
+
         ValidateIdentifier(identifier);
         if (_enums.ContainsKey(ResolveCallable(identifier.Name)))
         {

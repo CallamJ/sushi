@@ -32,25 +32,25 @@ public sealed class IntrinsicRegistry
             new IntrinsicSignature(
                 "std.string.trim",
                 IntrinsicId.StringTrim,
-                new[] { new IntrinsicParameter("value") }),
+                new[] { new IntrinsicParameter("value", typeName: "string") }),
             new IntrinsicSignature(
                 "std.string.lower",
                 IntrinsicId.StringLower,
-                new[] { new IntrinsicParameter("value") }),
+                new[] { new IntrinsicParameter("value", typeName: "string") }),
             new IntrinsicSignature(
                 "std.string.upper",
                 IntrinsicId.StringUpper,
-                new[] { new IntrinsicParameter("value") }),
+                new[] { new IntrinsicParameter("value", typeName: "string") }),
             new IntrinsicSignature(
                 "std.string.length",
                 IntrinsicId.StringLength,
-                new[] { new IntrinsicParameter("value") }),
+                new[] { new IntrinsicParameter("value", typeName: "string") }),
             new IntrinsicSignature(
                 "std.string.split",
                 IntrinsicId.StringSplit,
                 new[]
                 {
-                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("value", typeName: "string"),
                     new IntrinsicParameter("sep"),
                     new IntrinsicParameter("limit", hasDefaultValue: true, defaultValue: 0)
                 }),
@@ -59,7 +59,7 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.StringContains,
                 new[]
                 {
-                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("value", typeName: "string"),
                     new IntrinsicParameter("needle")
                 }),
             new IntrinsicSignature(
@@ -67,7 +67,7 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.StringStartsWith,
                 new[]
                 {
-                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("value", typeName: "string"),
                     new IntrinsicParameter("prefix")
                 }),
             new IntrinsicSignature(
@@ -75,15 +75,15 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.StringEndsWith,
                 new[]
                 {
-                    new IntrinsicParameter("value"),
-                    new IntrinsicParameter("suffix")
+                    new IntrinsicParameter("value", typeName: "string"),
+                    new IntrinsicParameter("suffix", typeName: "string")
                 }),
             new IntrinsicSignature(
                 "std.string.replace",
                 IntrinsicId.StringReplace,
                 new[]
                 {
-                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("value", typeName: "string"),
                     new IntrinsicParameter("old"),
                     new IntrinsicParameter("new")
                 }),
@@ -92,7 +92,7 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.StringIsMatch,
                 new[]
                 {
-                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("value", typeName: "string"),
                     new IntrinsicParameter("pattern")
                 }),
             new IntrinsicSignature(
@@ -100,7 +100,7 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.StringMatch,
                 new[]
                 {
-                    new IntrinsicParameter("value"),
+                    new IntrinsicParameter("value", typeName: "string"),
                     new IntrinsicParameter("pattern")
                 }),
             new IntrinsicSignature(
