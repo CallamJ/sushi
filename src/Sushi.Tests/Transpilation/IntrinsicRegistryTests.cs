@@ -51,10 +51,13 @@ public class IntrinsicRegistryTests
         var registry = IntrinsicRegistry.CreateDefault();
 
         Assert.True(registry.TryResolve("std.string.trim", out var trim));
+        Assert.True(registry.TryResolve("std.string.length", out var length));
         Assert.True(registry.TryResolve("std.string.split", out var split));
         Assert.True(registry.TryResolve("std.string.match", out var match));
 
         Assert.Equal(IntrinsicId.StringTrim, trim.Id);
+        Assert.Equal(IntrinsicId.StringLength, length.Id);
+        Assert.Equal("int", length.ReturnType.Name);
         Assert.Equal(IntrinsicId.StringSplit, split.Id);
         Assert.Equal(IntrinsicId.StringMatch, match.Id);
     }

@@ -40,6 +40,7 @@ public sealed class AstToIrLowerer
         ["trim"] = "std.string.trim",
         ["lower"] = "std.string.lower",
         ["upper"] = "std.string.upper",
+        ["length"] = "std.string.length",
         ["split"] = "std.string.split",
         ["contains"] = "std.string.contains",
         ["startsWith"] = "std.string.startsWith",

@@ -2007,6 +2007,7 @@ function __sushi_call_method {
             IntrinsicId.StringTrim => $"$null = {EmitStringTrim(call.Arguments)}",
             IntrinsicId.StringLower => $"$null = {EmitStringLower(call.Arguments)}",
             IntrinsicId.StringUpper => $"$null = {EmitStringUpper(call.Arguments)}",
+            IntrinsicId.StringLength => $"$null = {EmitStringLength(call.Arguments)}",
             IntrinsicId.StringSplit => $"$null = {EmitStringSplit(call.Arguments)}",
             IntrinsicId.StringContains => $"$null = {EmitStringContains(call.Arguments)}",
             IntrinsicId.StringStartsWith => $"$null = {EmitStringStartsWith(call.Arguments)}",
@@ -2048,6 +2049,7 @@ function __sushi_call_method {
             IntrinsicId.StringTrim => EmitStringTrim(call.Arguments),
             IntrinsicId.StringLower => EmitStringLower(call.Arguments),
             IntrinsicId.StringUpper => EmitStringUpper(call.Arguments),
+            IntrinsicId.StringLength => EmitStringLength(call.Arguments),
             IntrinsicId.StringSplit => EmitStringSplit(call.Arguments),
             IntrinsicId.StringContains => EmitStringContains(call.Arguments),
             IntrinsicId.StringStartsWith => EmitStringStartsWith(call.Arguments),
@@ -2117,6 +2119,11 @@ function __sushi_call_method {
     private string EmitStringUpper(IReadOnlyList<IrExpression> arguments)
     {
         return $"([string]({Arg(arguments, 0)})).ToUpperInvariant()";
+    }
+
+    private string EmitStringLength(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"([string]({Arg(arguments, 0)})).Length";
     }
 
     private string EmitStringSplit(IReadOnlyList<IrExpression> arguments)

@@ -42,6 +42,10 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.StringUpper,
                 new[] { new IntrinsicParameter("value") }),
             new IntrinsicSignature(
+                "std.string.length",
+                IntrinsicId.StringLength,
+                new[] { new IntrinsicParameter("value") }),
+            new IntrinsicSignature(
                 "std.string.split",
                 IntrinsicId.StringSplit,
                 new[]

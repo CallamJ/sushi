@@ -7,6 +7,7 @@ public enum IntrinsicId
     StringTrim,
     StringLower,
     StringUpper,
+    StringLength,
     StringSplit,
     StringContains,
     StringStartsWith,

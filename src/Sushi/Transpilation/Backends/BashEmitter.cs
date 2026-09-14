@@ -4198,6 +4198,31 @@ __sushi_native_obj_to_json() {
                 return $"\"${{#{arrayName}[@]}}\"";
             }
 
+            case IrCallExpression { Callee: "__sushi_slice", Arguments: [var targetArgument, { Value: IrLiteralExpression { Value: null } }, { Value: IrIntrinsicCallExpression { Id: IntrinsicId.StringLength } }] }:
+                return PrepareValue(targetArgument.Value, inFunction);
+            case IrCallExpression { Callee: "__sushi_slice", Arguments: [var targetArgument, { Value: IrLiteralExpression { Value: 0 } }, { Value: IrIntrinsicCallExpression { Id: IntrinsicId.StringLength } }] }:
+                return PrepareValue(targetArgument.Value, inFunction);
+
+            case IrCallExpression { Callee: "__sushi_slice", Arguments: [var targetArgument, var startArgument, var endArgument] }:
+            {
+                var start = startArgument.Value;
+                var end = endArgument.Value;
+                var targetName = targetArgument.Value is IrIdentifierExpression targetIdentifier
+                    ? SanitizeVariableName(targetIdentifier.Name)
+                    : DeclareTemp(PrepareValue(targetArgument.Value, inFunction), inFunction);
+                var isArray = targetArgument.Value is IrIdentifierExpression && _nativeArrayVariables.ContainsKey(targetName);
+                var targetReference = isArray ? $"{targetName}[@]" : targetName;
+                var startText = start is IrLiteralExpression { Value: null }
+                    ? "0"
+                    : EmitNativeSliceBound(start);
+                if (end is IrLiteralExpression { Value: null })
+                    return $"\"${{{targetReference}:{startText}}}\"";
+
+                var lengthText = $"({EmitNativeSliceBound(end)} - ({startText}))";
+                return $"\"${{{targetReference}:{startText}:{lengthText}}}\"";
+            }
+
+
             case IrCallExpression call when
                 !call.Callee.StartsWith("__sushi_new_", StringComparison.Ordinal) &&
                 (_functions.ContainsKey(call.Callee) ||
@@ -5116,6 +5141,22 @@ __sushi_native_obj_to_json() {
         };
     }
 
+    private string EmitNativeSliceBound(IrExpression expression)
+    {
+        if (expression is IrLiteralExpression literal &&
+            literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong)
+        {
+            return Convert.ToString(literal.Value, CultureInfo.InvariantCulture) ?? "0";
+        }
+        if (expression is IrIdentifierExpression identifier &&
+            _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)))
+        {
+            return SanitizeVariableName(identifier.Name);
+        }
+
+        return EmitArithmeticExpression(expression);
+    }
+
     private string EmitCheckedInteger(string valueExpression, string context)
     {
         return $"$(__sushi_require_integer {valueExpression} {Escape.BashSingleQuoted(context)})";
@@ -5245,6 +5286,7 @@ __sushi_native_obj_to_json() {
             IntrinsicId.StringTrim => $"{EmitStringTrimInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.StringLower => $"{EmitStringLowerInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.StringUpper => $"{EmitStringUpperInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.StringLength => $"{EmitStringLengthInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.StringSplit => $"{EmitStringSplitInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.StringContains => $"{EmitStringContainsInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.StringStartsWith => $"{EmitStringStartsWithInvocation(call.Arguments)} >/dev/null",
@@ -5286,6 +5328,7 @@ __sushi_native_obj_to_json() {
             IntrinsicId.StringTrim => $"\"$({EmitStringTrimInvocation(call.Arguments)})\"",
             IntrinsicId.StringLower => $"\"$({EmitStringLowerInvocation(call.Arguments)})\"",
             IntrinsicId.StringUpper => $"\"$({EmitStringUpperInvocation(call.Arguments)})\"",
+            IntrinsicId.StringLength => $"$({EmitStringLengthInvocation(call.Arguments)})",
             IntrinsicId.StringSplit => $"\"$({EmitStringSplitInvocation(call.Arguments)})\"",
             IntrinsicId.StringContains => $"\"$({EmitStringContainsInvocation(call.Arguments)})\"",
             IntrinsicId.StringStartsWith => $"\"$({EmitStringStartsWithInvocation(call.Arguments)})\"",
@@ -5355,6 +5398,11 @@ __sushi_native_obj_to_json() {
     private string EmitStringUpperInvocation(IReadOnlyList<IrExpression> arguments)
     {
         return $"__sushi_string_upper {Arg(arguments, 0)}";
+    }
+
+    private string EmitStringLengthInvocation(IReadOnlyList<IrExpression> arguments)
+    {
+        return $"printf '%s' {Arg(arguments, 0)} | wc -m";
     }
 
     private string EmitStringSplitInvocation(IReadOnlyList<IrExpression> arguments)

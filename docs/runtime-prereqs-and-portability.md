@@ -148,6 +148,7 @@ Available string intrinsics:
 - `std.string.trim(value)`
 - `std.string.lower(value)`
 - `std.string.upper(value)`
+- `std.string.length(value)` (returns the string length as an `int`)
 - `std.string.split(value, sep, limit=0)`
 - `std.string.contains(value, needle)`
 - `std.string.startsWith(value, prefix)`
