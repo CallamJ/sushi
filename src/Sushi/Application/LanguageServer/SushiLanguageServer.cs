@@ -420,6 +420,9 @@ internal sealed class SushiLanguageServer
     private static IEnumerable<CompletionItem> MemberCompletionItems(SushiSemanticModel model, int offset)
     {
         var dot = model.Tokens.LastOrDefault(token => token.End <= offset && token.Kind == ClassifiedTokenKind.Dot);
+        var preceding = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start);
+        if (preceding?.Kind is ClassifiedTokenKind.IntegerLiteral or ClassifiedTokenKind.FloatLiteral)
+            yield break;
         var receiver = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start &&
             (token.Kind == ClassifiedTokenKind.Identifier || token.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString));
         var receiverSymbol = receiver is null ? null : model.SymbolFor(receiver);
