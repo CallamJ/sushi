@@ -271,7 +271,8 @@ internal sealed class SushiLanguageServer
             return new { isIncomplete = false, items = new[] { "param", "returns", "throws", "deprecated", "example" }.Select(tag => new { label = "@" + tag, kind = 14, detail = "documentation tag" }).ToArray() };
         var items = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
         var localModel = SushiSemanticModel.Create(document.Text);
-        if (IsSwitchExpressionContext(localModel.Tokens, offset))
+        var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
+        if (!memberContext && IsSwitchExpressionContext(localModel.Tokens, offset))
         {
             return new
             {
@@ -283,7 +284,6 @@ internal sealed class SushiLanguageServer
                 }
             };
         }
-        var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
         if (!memberContext && !HasIdentifierPrefix(document.Text, offset))
             return new { isIncomplete = false, items = Array.Empty<object>() };
         var prefix = memberContext ? "" : IdentifierPrefix(document.Text, offset);
@@ -397,18 +397,58 @@ internal sealed class SushiLanguageServer
     {
         var dot = model.Tokens.LastOrDefault(token => token.End <= offset && token.Kind == ClassifiedTokenKind.Dot);
         if (dot is null) return false;
+        var preceding = model.Tokens.LastOrDefault(token => token.End <= dot.Start);
+        if (preceding?.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString or
+            ClassifiedTokenKind.IntegerLiteral or ClassifiedTokenKind.FloatLiteral)
+            return false;
         var receiver = model.Tokens.LastOrDefault(token => token.End <= dot.Start && token.Kind == ClassifiedTokenKind.Identifier);
         if (receiver is null) return false;
         var receiverSymbol = model.SymbolFor(receiver);
-        return receiverSymbol?.DeclaredType is null || symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method;
+        var receiverType = receiverSymbol?.DeclaredType;
+        if (receiverType == "void" && receiverSymbol is not null)
+            receiverType = InferredCallableReturnType(model, receiverSymbol);
+        if (receiverSymbol?.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method && receiverType == "void")
+            return false;
+        if (receiverSymbol?.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method && receiverType is null)
+            return false;
+        // Primitive receivers expose their intrinsic/sugar members, not unrelated
+        // user-defined methods that happen to share the document.
+        if (receiverType is "string" or "str" or "int" or "float" or "bool" or "array") return false;
+        return receiverType is null || symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method;
     }
 
     private static IEnumerable<CompletionItem> MemberCompletionItems(SushiSemanticModel model, int offset)
     {
         var dot = model.Tokens.LastOrDefault(token => token.End <= offset && token.Kind == ClassifiedTokenKind.Dot);
-        var receiver = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start && token.Kind == ClassifiedTokenKind.Identifier);
-        var type = receiver is null ? null : model.SymbolFor(receiver)?.DeclaredType;
-        var modulePath = receiver is null ? null : ImportedModulePath(model, receiver.Text);
+        var receiver = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start &&
+            (token.Kind == ClassifiedTokenKind.Identifier || token.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString));
+        var receiverSymbol = receiver is null ? null : model.SymbolFor(receiver);
+        var type = receiver?.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString
+            ? "string"
+            : receiverSymbol?.DeclaredType;
+        if (type is null && receiver is not null)
+        {
+            var receiverIndex = model.Tokens.ToList().FindIndex(token => token.Start == receiver.Start);
+            var declaration = model.Tokens.Take(Math.Max(0, receiverIndex))
+                .Select((token, index) => (token, index))
+                .LastOrDefault(pair => pair.token.Text == receiver.Text && pair.index > 0 &&
+                    model.Tokens[pair.index - 1].Kind == ClassifiedTokenKind.Identifier &&
+                    SushiSemanticModel.IsTypeName(model.Tokens[pair.index - 1].Text));
+            if (declaration.token is not null) type = model.Tokens[declaration.index - 1].Text;
+        }
+        // A dot immediately after `new Type(...)` belongs to the constructed
+        // object, not to the last identifier inside its arguments.
+        var prior = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start);
+        if (prior?.Kind == ClassifiedTokenKind.RightParen)
+        {
+            var open = model.Tokens.ToList().FindLastIndex(token => token.Kind == ClassifiedTokenKind.LeftParen && token.Start < prior.Start);
+            if (open > 1 && model.Tokens[open - 1].Kind == ClassifiedTokenKind.Identifier &&
+                model.Tokens[open - 2].IsKeyword("new"))
+                type = model.Tokens[open - 1].Text;
+        }
+        if (type == "void" && receiverSymbol is not null)
+            type = InferredCallableReturnType(model, receiverSymbol);
+        var modulePath = receiver?.Kind == ClassifiedTokenKind.Identifier ? ImportedModulePath(model, receiver.Text) : null;
         if (modulePath is not null)
         {
             foreach (var function in StandardLibrary.Functions.Where(function => function.Name.StartsWith(modulePath + ".", StringComparison.Ordinal)))
@@ -462,6 +502,30 @@ internal sealed class SushiLanguageServer
                 yield return new CompletionItem($"{name}({parameters})", 2, detail, null, null, CallableInsertText(name, count), count > 0 ? 2 : null);
             }
         }
+    }
+
+    private static string? InferredCallableReturnType(SushiSemanticModel model, SushiSymbol callable)
+    {
+        var index = model.Tokens.ToList().FindIndex(token => token.Start == callable.Token.Start);
+        if (index < 0) return null;
+        var open = Enumerable.Range(index + 1, model.Tokens.Count - index - 1)
+            .FirstOrDefault(i => model.Tokens[i].Kind == ClassifiedTokenKind.LeftBrace);
+        if (open <= index) return null;
+        var close = FindMatching(model.Tokens, open, ClassifiedTokenKind.LeftBrace, ClassifiedTokenKind.RightBrace);
+        if (close < 0) return null;
+        for (var i = open + 1; i + 1 < close; i++)
+        {
+            if (!model.Tokens[i].IsKeyword("return")) continue;
+            var value = model.Tokens[i + 1];
+            if (value.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString) return "string";
+            if (value.Kind == ClassifiedTokenKind.IntegerLiteral) return "int";
+            if (value.Kind == ClassifiedTokenKind.FloatLiteral) return "float";
+            if (value.Kind != ClassifiedTokenKind.Identifier) continue;
+            var referenced = model.Symbols.FirstOrDefault(symbol => symbol.Name == value.Text &&
+                symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Variable or SushiSymbolKind.Parameter);
+            if (referenced?.DeclaredType is not null) return referenced.DeclaredType;
+        }
+        return null;
     }
 
     private static string? ImportedModulePath(SushiSemanticModel model, string alias)
