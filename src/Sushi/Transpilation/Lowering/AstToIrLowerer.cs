@@ -486,6 +486,7 @@ public sealed class AstToIrLowerer
         var itemValue = new IrIndexExpression(
             new IrIdentifierExpression(collectionTemp),
             new IrIdentifierExpression(indexTemp));
+        itemValue.Origin = new IrSourceOrigin(node.Line, node.Column);
         var lengthCall = new IrCallExpression(
             "__sushi_json_length",
             new IrExpression[] { new IrIdentifierExpression(collectionTemp) });
@@ -727,7 +728,7 @@ public sealed class AstToIrLowerer
             ObjectLiteralExpressionNode obj => LowerObjectLiteral(obj),
             InterpolatedStringExpressionNode interpolated => LowerInterpolatedString(interpolated),
             MemberAccessExpressionNode member => LowerMemberAccess(member),
-            IndexExpressionNode index => new IrIndexExpression(LowerExpression(index.Array), LowerExpression(index.Index)),
+            IndexExpressionNode index => IndexWithOrigin(index),
             SliceExpressionNode slice => new IrCallExpression(
                 "__sushi_slice",
                 new IrExpression[]
@@ -742,6 +743,13 @@ public sealed class AstToIrLowerer
             LambdaExpressionNode lambda => LowerLambdaExpression(lambda),
             _ => UnsupportedExpression(node)
         };
+    }
+
+    private IrExpression IndexWithOrigin(IndexExpressionNode node)
+    {
+        var expression = new IrIndexExpression(LowerExpression(node.Array), LowerExpression(node.Index));
+        expression.Origin = new IrSourceOrigin(node.Line, node.Column);
+        return expression;
     }
 
     private IrExpression LowerMemberAccess(MemberAccessExpressionNode member)

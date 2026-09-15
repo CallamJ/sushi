@@ -1,6 +1,11 @@
 namespace Sushi.Transpilation.IR;
 
-public abstract class IrNode;
+public sealed record IrSourceOrigin(int Line, int Column);
+
+public abstract class IrNode
+{
+    public IrSourceOrigin? Origin { get; set; }
+}
 
 public sealed class IrProgram : IrNode
 {
@@ -641,7 +646,6 @@ public sealed class IrIndexExpression : IrExpression
 {
     public IrExpression Target { get; }
     public IrExpression Index { get; }
-
     public IrIndexExpression(IrExpression target, IrExpression index)
     {
         Target = target;

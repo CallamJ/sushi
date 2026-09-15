@@ -4174,8 +4174,8 @@ __sushi_native_obj_to_json() {
                 return "''";
             }
 
-            case IrIndexExpression:
-                _context.Error(AmbiguousShapeCode, "Indexing requires a statically known native array or object shape");
+            case IrIndexExpression index:
+                _context.Error(AmbiguousShapeCode, "Indexing requires a statically known native array or object shape", index.Origin?.Line ?? 1, index.Origin?.Column ?? 1);
                 return "''";
 
             case IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%":
