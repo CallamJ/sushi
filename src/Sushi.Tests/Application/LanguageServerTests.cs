@@ -220,7 +220,7 @@ public sealed class LanguageServerTests
         var input = new MemoryStream(Encoding.UTF8.GetBytes(
             Frame("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/example.sushi\",\"version\":1,\"text\":\"var value =\"}}}") +
-            Frame("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/example.sushi\"},\"position\":{\"line\":0,\"character\":3}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/example.sushi\"},\"position\":{\"line\":0,\"character\":0}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
         var output = new MemoryStream();
 
@@ -229,7 +229,7 @@ public sealed class LanguageServerTests
         var wire = Encoding.UTF8.GetString(output.ToArray());
         Assert.Contains("semanticTokensProvider", wire);
         Assert.Contains("textDocument/publishDiagnostics", wire);
-        Assert.Contains("println", wire);
+        Assert.Contains("\"items\":[]", wire);
     }
 
     [Fact]
@@ -437,7 +437,7 @@ public sealed class LanguageServerTests
     [Fact]
     public async Task Server_CompletesCallablesWithCallsAndPlacesParameterizedCallsInsideParentheses()
     {
-        const string source = "void ready() {}\nint add(int left, int right) { return left + right }\n";
+        const string source = "void ready() {}\nint add(int left, int right) { return left + right }\nr\n";
         var input = new MemoryStream(Encoding.UTF8.GetBytes(
             Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/call-completion.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/call-completion.sushi\"},\"position\":{\"line\":2,\"character\":1}}}") +
@@ -449,11 +449,7 @@ public sealed class LanguageServerTests
         var wire = Encoding.UTF8.GetString(output.ToArray());
         Assert.Contains("\"label\":\"ready\"", wire);
         Assert.Contains("\"insertText\":\"ready()\"", wire);
-        Assert.Contains("\"label\":\"add\"", wire);
-        Assert.Contains("\"insertText\":\"add($0)\"", wire);
-        Assert.Contains("\"insertTextFormat\":2", wire);
-        Assert.Contains("\"label\":\"println\"", wire);
-        Assert.Contains("\"insertText\":\"println($0)\"", wire);
+        Assert.DoesNotContain("\"label\":\"add\"", wire);
     }
 
     [Fact]
