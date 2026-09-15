@@ -295,6 +295,9 @@ public sealed class AstToIrLowerer
             case VariableDeclarationStatementNode declaration:
             {
                 TrackVariableObjectType(declaration.Name, declaration.Type, declaration.Initializer);
+                if (declaration.Type is not null && declaration.Initializer is not null)
+                    ValidateConditionalArms(declaration.Initializer, LowerDeclaredType(declaration.Type, declaration.Line, declaration.Column, $"variable '{declaration.Name}'"),
+                        declaration.Line, declaration.Column, $"initializer for variable '{declaration.Name}'", InferredTypeConflictCode);
                 var initializer = declaration.Initializer != null ? LowerExpression(declaration.Initializer) : null;
                 var declarationName = _functionDepth == 0 ? ResolveTopLevel(declaration.Name) : declaration.Name;
                 DeclareVariableType(declaration.Name, declaration.Type, initializer, declaration.Line, declaration.Column);
@@ -2992,6 +2995,26 @@ public sealed class AstToIrLowerer
                 line,
                 column);
         }
+    }
+
+    private void ValidateConditionalArms(ExpressionNode expression, IrTypeRef expectedType, int line, int column, string context, string mismatchCode)
+    {
+        if (expression is not ConditionalExpressionNode conditional) return;
+        foreach (var arm in new[] { conditional.TrueExpression, conditional.FalseExpression })
+        {
+            if (arm is ConditionalExpressionNode nested)
+                ValidateConditionalArms(nested, expectedType, line, column, context, mismatchCode);
+            else if (TryInferAstExpressionType(arm, out var actual) && !IsTypeAssignable(expectedType, actual))
+                AddDiagnostic(mismatchCode,
+                    $"{context} expects type '{DescribeType(expectedType)}' but value has type '{DescribeType(actual)}'.",
+                    arm.Line, arm.Column);
+        }
+    }
+
+    private bool TryInferAstExpressionType(ExpressionNode expression, out IrTypeRef type)
+    {
+        type = InferAstExpressionType(expression, _knownVariableTypes);
+        return !type.IsAnyOrUnknown;
     }
 
     private void ValidateStructuralExpression(
