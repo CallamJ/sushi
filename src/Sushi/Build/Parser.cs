@@ -815,15 +815,28 @@ public class Parser
         if (MatchKeyword("var") || Check(ClassifiedTokenKind.Identifier))
         {
             bool hasVar = Previous().IsKeyword("var");
-            if (!hasVar && Check(ClassifiedTokenKind.Identifier))
+            if (hasVar)
             {
-                Advance(); // consume type name
+                loopVariable = Expect(ClassifiedTokenKind.Identifier).Text;
             }
-            
-            if (Check(ClassifiedTokenKind.Identifier))
+            else
             {
-                loopVariable = Advance().Text;
-                
+                var first = Advance();
+                // `for (file : files)` omits the type; `for (string file : files)`
+                // provides it explicitly. Defer the distinction until the next token.
+                if (Check(ClassifiedTokenKind.Identifier))
+                {
+                    Advance(); // consume the explicit type's variable name
+                    loopVariable = Previous().Text;
+                }
+                else
+                {
+                    loopVariable = first.Text;
+                }
+            }
+
+            if (loopVariable is not null)
+            {
                 // Check for comma (index,item pattern)
                 if (Match(ClassifiedTokenKind.Comma))
                 {

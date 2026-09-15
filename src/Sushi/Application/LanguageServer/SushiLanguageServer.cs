@@ -272,6 +272,9 @@ internal sealed class SushiLanguageServer
         var items = new Dictionary<string, CompletionItem>(StringComparer.Ordinal);
         var localModel = SushiSemanticModel.Create(document.Text);
         var memberContext = IsMemberCompletionContext(localModel.Tokens, offset);
+        var completionPrefix = document.Text[..Math.Clamp(offset, 0, document.Text.Length)];
+        if (System.Text.RegularExpressions.Regex.IsMatch(completionPrefix, @"\.{2,}$"))
+            return new { isIncomplete = false, items = Array.Empty<object>() };
         if (!memberContext && IsSwitchExpressionContext(localModel.Tokens, offset))
         {
             return new
@@ -362,6 +365,9 @@ internal sealed class SushiLanguageServer
     private static bool IsSwitchExpressionContext(IReadOnlyList<ClassifiedToken> tokens, int offset)
     {
         var prior = tokens.Where(token => token.End <= offset).ToArray();
+        if (prior.Length > 0 && (prior[^1].Kind == ClassifiedTokenKind.Dot ||
+                                prior[^1].IsOperator("..") || prior[^1].IsOperator("...")))
+            return false;
         var depth = 0;
         for (var index = prior.Length - 1; index >= 0; index--)
         {
@@ -398,9 +404,19 @@ internal sealed class SushiLanguageServer
         var dot = model.Tokens.LastOrDefault(token => token.End <= offset && token.Kind == ClassifiedTokenKind.Dot);
         if (dot is null) return false;
         var preceding = model.Tokens.LastOrDefault(token => token.End <= dot.Start);
+        if (preceding?.Kind == ClassifiedTokenKind.Dot)
+            return false;
         if (preceding?.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString or
             ClassifiedTokenKind.IntegerLiteral or ClassifiedTokenKind.FloatLiteral)
             return false;
+        if (preceding?.Kind == ClassifiedTokenKind.RightParen)
+        {
+            var open = model.Tokens.ToList().FindLastIndex(token => token.Kind == ClassifiedTokenKind.LeftParen && token.Start < preceding.Start);
+            var callee = open > 0 ? model.Tokens[open - 1].Text : null;
+            if (callee is not null && StandardLibrary.TryGetFunction(callee, out var function) &&
+                string.Equals(function.ReturnType, "void", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
         var receiver = model.Tokens.LastOrDefault(token => token.End <= dot.Start && token.Kind == ClassifiedTokenKind.Identifier);
         if (receiver is null) return false;
         var receiverSymbol = model.SymbolFor(receiver);
@@ -421,8 +437,18 @@ internal sealed class SushiLanguageServer
     {
         var dot = model.Tokens.LastOrDefault(token => token.End <= offset && token.Kind == ClassifiedTokenKind.Dot);
         var preceding = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start);
+        if (preceding?.Kind == ClassifiedTokenKind.Dot)
+            yield break;
         if (preceding?.Kind is ClassifiedTokenKind.IntegerLiteral or ClassifiedTokenKind.FloatLiteral)
             yield break;
+        if (preceding?.Kind == ClassifiedTokenKind.RightParen)
+        {
+            var open = model.Tokens.ToList().FindLastIndex(token => token.Kind == ClassifiedTokenKind.LeftParen && token.Start < preceding.Start);
+            var callee = open > 0 ? model.Tokens[open - 1].Text : null;
+            if (callee is not null && StandardLibrary.TryGetFunction(callee, out var function) &&
+                string.Equals(function.ReturnType, "void", StringComparison.OrdinalIgnoreCase))
+                yield break;
+        }
         var receiver = dot is null ? null : model.Tokens.LastOrDefault(token => token.End <= dot.Start &&
             (token.Kind == ClassifiedTokenKind.Identifier || token.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString));
         var receiverSymbol = receiver is null ? null : model.SymbolFor(receiver);
@@ -1781,7 +1807,7 @@ internal sealed class SushiLanguageServer
         new("if", "conditional block", "if (${1:condition}) {\n    ${0}\n}", "Creates an `if` block."),
         new("if / else", "conditional branches", "if (${1:condition}) {\n    ${2}\n} else {\n    ${0}\n}", "Creates an `if` / `else` block."),
         new("while", "loop", "while (${1:condition}) {\n    ${0}\n}", "Creates a `while` loop."),
-        new("for", "collection loop", "for (${1:item} in ${2:items}) {\n    ${0}\n}", "Creates a collection loop."),
+        new("for", "collection loop", "for (${1:item} : ${2:items}) {\n    ${0}\n}", "Creates a collection loop."),
         new("function", "function declaration", "${1:void} ${2:name}(${3}) {\n    ${0}\n}", "Creates a typed function."),
         new("class", "class declaration", "class ${1:Name} {\n    new(${2}) {\n        ${0}\n    }\n}", "Creates a class and constructor."),
         new("enum", "enum declaration", "enum ${1:Name} {\n    ${2:Value}\n}", "Creates an enum."),
