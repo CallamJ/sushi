@@ -77,6 +77,7 @@ internal sealed class SushiLanguageServer
                     {
                         positionEncoding = "utf-16",
                         textDocumentSync = 1,
+                        diagnosticProvider = new { interFileDependencies = false, workspaceDiagnostics = false },
                         completionProvider = new { triggerCharacters = new[] { ".", "@", "/" } },
                         hoverProvider = true,
                         definitionProvider = true,
@@ -123,6 +124,12 @@ internal sealed class SushiLanguageServer
             case "textDocument/didChange":
                 ApplyChange(parameters);
                 await PublishDiagnosticsAsync(parameters.GetProperty("textDocument").GetProperty("uri").GetString()!, cancellationToken);
+                break;
+            case "textDocument/diagnostic":
+                {
+                    var diagnosticUri = parameters.GetProperty("textDocument").GetProperty("uri").GetString()!;
+                    await ReplyAsync(id, new { kind = "full", items = BuildDiagnostics(diagnosticUri).Select(ToLspDiagnostic).ToArray() }, null, cancellationToken);
+                }
                 break;
             case "textDocument/didClose":
                 {
@@ -240,6 +247,13 @@ internal sealed class SushiLanguageServer
     private async Task PublishDiagnosticsAsync(string uri, CancellationToken cancellationToken)
     {
         if (!_documents.TryGetValue(uri, out var document)) return;
+        var diagnostics = BuildDiagnostics(uri).Select(ToLspDiagnostic);
+        await NotifyAsync("textDocument/publishDiagnostics", new { uri, version = document.Version, diagnostics }, cancellationToken);
+    }
+
+    private List<Diagnostic> BuildDiagnostics(string uri)
+    {
+        if (!_documents.TryGetValue(uri, out var document)) return [];
         var path = PathForUri(uri);
         var result = new Transpiler().Transpile(new TranspileRequest { SourcePath = path, SourceText = document.Text, TargetLanguage = _targetProfile.Shell, TargetProfile = _targetProfile });
         var allDiagnostics = result.Diagnostics.ToList();
@@ -253,15 +267,21 @@ internal sealed class SushiLanguageServer
                     allDiagnostics.Add(Diagnostic.Warning("SUSHI1109", $"Documentation link '{link.Target}' cannot be resolved.", new SourceSpan(path, comment.Line, comment.Column, comment.Start, comment.End)));
             }
         }
-        var diagnostics = allDiagnostics.Select(d => new
+        return allDiagnostics;
+    }
+
+    private object ToLspDiagnostic(Diagnostic d)
+    {
+        var uri = new Uri(Path.GetFullPath(d.Span.SourcePath)).AbsoluteUri;
+        var text = _documents.TryGetValue(uri, out var document) ? document.Text : string.Empty;
+        return new
         {
-            range = Range(document.Text, d.Span.StartOffset, d.Span.EndOffset > d.Span.StartOffset ? d.Span.EndOffset : d.Span.StartOffset + 1, d.Span.Line, d.Span.Column),
+            range = Range(text, d.Span.StartOffset, d.Span.EndOffset > d.Span.StartOffset ? d.Span.EndOffset : d.Span.StartOffset + 1, d.Span.Line, d.Span.Column),
             severity = d.Severity == DiagnosticSeverity.Error ? 1 : 2,
             code = d.Code,
             source = "sushi",
             message = d.Message
-        });
-        await NotifyAsync("textDocument/publishDiagnostics", new { uri, version = document.Version, diagnostics }, cancellationToken);
+        };
     }
 
     private object Completion(JsonElement parameters)
@@ -464,7 +484,7 @@ internal sealed class SushiLanguageServer
                 model.Tokens[open - 2].IsKeyword("new"))
                 type = model.Tokens[open - 1].Text;
         }
-        if (type == "void" && receiverSymbol is not null)
+        if (type == "void" && receiverSymbol is not null && receiver is not null)
             type = model.TypeOf(receiver);
         var modulePath = receiver?.Kind == ClassifiedTokenKind.Identifier ? ImportedModulePath(model, receiver.Text) : null;
         if (modulePath is not null)

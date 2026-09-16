@@ -35,6 +35,8 @@ public sealed class AstToIrLowerer
     private const string InferredTypeConflictCode = "SUSHI1049";
     private const string VoidReturnValueCode = "SUSHI1051";
     private const string MissingReturnValueCode = "SUSHI1052";
+    private const string DuplicateVariableCode = "SUSHI1053";
+    private const string InvalidOperatorTypeCode = "SUSHI1054";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -76,6 +78,9 @@ public sealed class AstToIrLowerer
     private string? _currentFunctionName;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
     private HashSet<string> _definedVariables = new(StringComparer.Ordinal);
+    // Names declared while lowering the current lexical scope. This is separate from
+    // _definedVariables, which is pre-populated with all globals for forward references.
+    private HashSet<string> _declaredVariables = new(StringComparer.Ordinal);
     private bool _validateIdentifiers;
     private int _tempId;
     private int _lambdaId;
@@ -130,6 +135,7 @@ public sealed class AstToIrLowerer
         ValidateTypeDeclarations(program);
         CollectGlobalVariables(program);
         _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
+        _declaredVariables.Clear();
         _validateIdentifiers = false;
         CollectFunctionSignatures(program);
         InferNamedFunctionReturnTypes(program);
@@ -227,6 +233,7 @@ public sealed class AstToIrLowerer
         var previousFunctionName = _currentFunctionName;
         var previousReturnType = _currentFunctionReturnType;
         var previousVariables = _definedVariables;
+        var previousDeclaredVariables = _declaredVariables;
         var previousObjectTypes = new Dictionary<string, string>(_knownObjectTypes, StringComparer.Ordinal);
         var previousVariableTypes = new Dictionary<string, IrTypeRef>(_knownVariableTypes, StringComparer.Ordinal);
         var previousLoopDepth = _loopDepth;
@@ -235,6 +242,7 @@ public sealed class AstToIrLowerer
         _functionDepth++;
         _loopDepth = 0;
         _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
+        _declaredVariables = new HashSet<string>(StringComparer.Ordinal);
         foreach (var parameter in signature.Parameters)
         {
             _definedVariables.Add(parameter.Name);
@@ -255,6 +263,7 @@ public sealed class AstToIrLowerer
         _functionDepth--;
         _loopDepth = previousLoopDepth;
         _definedVariables = previousVariables;
+        _declaredVariables = previousDeclaredVariables;
         RestoreKnownObjectTypes(previousObjectTypes);
         RestoreKnownVariableTypes(previousVariableTypes);
 
@@ -294,6 +303,14 @@ public sealed class AstToIrLowerer
 
             case VariableDeclarationStatementNode declaration:
             {
+                if (!_declaredVariables.Add(declaration.Name))
+                {
+                    AddDiagnostic(
+                        DuplicateVariableCode,
+                        $"Variable '{declaration.Name}' is already declared in this scope.",
+                        declaration.Line,
+                        declaration.Column);
+                }
                 TrackVariableObjectType(declaration.Name, declaration.Type, declaration.Initializer);
                 if (declaration.Type is not null && declaration.Initializer is not null)
                     ValidateConditionalArms(declaration.Initializer, LowerDeclaredType(declaration.Type, declaration.Line, declaration.Column, $"variable '{declaration.Name}'"),
@@ -967,6 +984,11 @@ public sealed class AstToIrLowerer
 
         var left = LowerExpression(node.Left);
         var right = LowerExpression(node.Right);
+        if (node.Operator is "-" or "*" or "/" or "%")
+        {
+            ValidateNumericOperand(left, node.Left.Line, node.Left.Column, node.Operator);
+            ValidateNumericOperand(right, node.Right.Line, node.Right.Column, node.Operator);
+        }
         if (node.Operator is "&&" or "||")
         {
             ValidateBooleanContext(left, node.Left.Line, node.Left.Column, $"left operand of '{node.Operator}'");
@@ -981,6 +1003,14 @@ public sealed class AstToIrLowerer
         }
 
         return new IrBinaryExpression(left, node.Operator, right);
+    }
+
+    private void ValidateNumericOperand(IrExpression expression, int line, int column, string op)
+    {
+        if (!TryInferStaticType(expression, out var type) || type.IsAnyOrUnknown) return;
+        if (type.Kind == IrTypeKind.Primitive && type.Name is "int" or "float" or "number" or "double" or "decimal") return;
+        AddDiagnostic(InvalidOperatorTypeCode,
+            $"Operator '{op}' requires numeric operands, but received '{DescribeType(type)}'.", line, column);
     }
 
     private IrExpression LowerCall(CallExpressionNode node)
@@ -2209,6 +2239,7 @@ public sealed class AstToIrLowerer
         var previousConstructorVariables = _definedVariables;
         var previousConstructorObjectTypes = new Dictionary<string, string>(_knownObjectTypes, StringComparer.Ordinal);
         _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal);
+        _declaredVariables = new HashSet<string>(StringComparer.Ordinal);
         _knownObjectTypes["this"] = resolvedTypeName;
         foreach (var parameter in ctorSignature.Parameters)
         {

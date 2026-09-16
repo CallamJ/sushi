@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using Sushi.Application.LanguageServer;
 using Xunit;
 
