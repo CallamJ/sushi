@@ -2,6 +2,7 @@ namespace Sushi.Application.LanguageServer;
 
 using Sushi.Build;
 using Sushi.Build.SyntaxTree;
+using Sushi.Transpilation.Intrinsics;
 
 /// <summary>
 /// A lossless, editor-facing view of a Sushi document. The compiler lexer deliberately
@@ -10,6 +11,7 @@ using Sushi.Build.SyntaxTree;
 /// </summary>
 internal sealed class SushiSemanticModel
 {
+    private static readonly StandardLibraryCatalog StandardLibrary = StandardLibraryCatalog.CreateDefault();
     private readonly Dictionary<int, SushiSymbol> _symbolsByTokenStart;
 
     private SushiSemanticModel(
@@ -88,6 +90,101 @@ internal sealed class SushiSemanticModel
     public SushiSymbol? SymbolFor(ClassifiedToken token) =>
         _symbolsByTokenStart.TryGetValue(token.Start, out var symbol) ? symbol : null;
 
+    /// <summary>Resolves the semantic type of an expression ending at <paramref name="offset"/>.
+    /// This is intentionally centralized so completion, hover and signature help do not each
+    /// invent a different receiver inference rule.</summary>
+    public string? TypeAt(int offset)
+    {
+        var token = Tokens.LastOrDefault(candidate => candidate.End <= offset &&
+            candidate.Kind != ClassifiedTokenKind.EndOfFile);
+        return token is null ? null : TypeOf(token);
+    }
+
+    public string? TypeOf(ClassifiedToken token)
+    {
+        if (token.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString) return "string";
+        if (token.Kind == ClassifiedTokenKind.IntegerLiteral) return "int";
+        if (token.Kind == ClassifiedTokenKind.FloatLiteral) return "float";
+        if (token.IsKeyword("true") || token.IsKeyword("false")) return "bool";
+        if (token.IsKeyword("null")) return "any";
+        var symbol = SymbolFor(token);
+        if (symbol is not null)
+        {
+            if (symbol.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method)
+                return symbol.DeclaredType ?? InferReturnType(symbol);
+            if (symbol.DeclaredType is not null) return symbol.DeclaredType;
+            if (symbol.Kind is SushiSymbolKind.Variable or SushiSymbolKind.Field)
+            {
+                var equals = symbol.DeclarationIndex + 1 < Tokens.Count && Tokens[symbol.DeclarationIndex + 1].IsOperator("=")
+                    ? symbol.DeclarationIndex + 2 : -1;
+                if (equals >= 0 && equals < Tokens.Count) return TypeOf(Tokens[equals]);
+            }
+            return null;
+        }
+
+        // A call may be incomplete while the user is typing. Resolve its callee through
+        // the same symbol table rather than treating every parenthesized expression alike.
+        var index = Array.FindIndex(Tokens.ToArray(), candidate => candidate.Start == token.Start);
+        if (index >= 0 && index + 1 < Tokens.Count && Tokens[index + 1].Kind == ClassifiedTokenKind.LeftParen)
+        {
+            var callable = Symbols.FirstOrDefault(candidate => candidate.Name == token.Text &&
+                candidate.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method);
+            if (callable is not null) return callable.DeclaredType ?? InferReturnType(callable);
+            if (StandardLibrary.TryGetFunction(token.Text, out var intrinsic)) return intrinsic.ReturnType;
+        }
+        return null;
+    }
+
+    public string ReturnTypeOf(SushiSymbol callable) => callable.DeclaredType ?? InferReturnType(callable) ?? "void";
+
+    private string? InferReturnType(SushiSymbol callable)
+    {
+        var index = Array.FindIndex(Tokens.ToArray(), candidate => candidate.Start == callable.Token.Start);
+        if (index < 0) return null;
+        var open = Enumerable.Range(index + 1, Tokens.Count - index - 1)
+            .FirstOrDefault(i => Tokens[i].Kind == ClassifiedTokenKind.LeftBrace);
+        if (open <= index) return null;
+        var close = FindMatching(Tokens.ToArray(), open, ClassifiedTokenKind.LeftBrace, ClassifiedTokenKind.RightBrace);
+        if (close < 0) return null;
+        string? inferred = null;
+        for (var i = open + 1; i < close; i++)
+        {
+            if (!Tokens[i].IsKeyword("return") || i + 1 >= close) continue;
+            var current = TypeOf(Tokens[i + 1]);
+            if (current is null) continue;
+            if (inferred is null) inferred = current;
+            else if (!String.Equals(inferred, current, StringComparison.Ordinal)) return "any";
+        }
+        return inferred ?? "void";
+    }
+
+    public string QualifiedNameAt(ClassifiedToken token)
+    {
+        var tokens = Tokens.ToList();
+        var index = tokens.FindIndex(candidate => candidate.Start == token.Start);
+        if (index < 0) return token.Text;
+        var parts = new List<string> { token.Text };
+        for (var cursor = index - 1; cursor >= 1 && tokens[cursor].Kind == ClassifiedTokenKind.Dot &&
+             tokens[cursor - 1].Kind == ClassifiedTokenKind.Identifier; cursor -= 2)
+            parts.Insert(0, tokens[cursor - 1].Text);
+        return string.Join('.', parts);
+    }
+
+    public IEnumerable<SushiSymbol> MembersFor(string? type)
+    {
+        if (String.IsNullOrWhiteSpace(type)) yield break;
+        var normalized = type.EndsWith("[]", StringComparison.Ordinal) ? "array" : type;
+        if (normalized.Equals("string", StringComparison.OrdinalIgnoreCase) || normalized.Equals("str", StringComparison.OrdinalIgnoreCase))
+            yield break; // intrinsic string members are supplied by the catalog layer
+        foreach (var symbol in Symbols.Where(symbol => symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method))
+        {
+            // Methods/fields currently carry their declaring class in the lexical scope. Until
+            // class symbols gain a qualified owner, expose only names that are unambiguous.
+            if (symbol.DeclaredType is not null || normalized.Equals("any", StringComparison.OrdinalIgnoreCase))
+                yield return symbol;
+        }
+    }
+
     public IEnumerable<ClassifiedToken> ReferencesOf(SushiSymbol symbol) => Tokens.Where(token =>
         token.Kind == ClassifiedTokenKind.Identifier &&
         _symbolsByTokenStart.TryGetValue(token.Start, out var candidate) && candidate.Id == symbol.Id);
@@ -162,9 +259,11 @@ internal sealed class SushiSemanticModel
             if (isFunction)
             {
                 var kind = IsInClassBody(tokens, index) ? SushiSymbolKind.Method : SushiSymbolKind.Function;
+                // Keep an omitted return type distinct from an explicit `void`; the semantic
+                // layer can then infer a concrete type from return expressions.
                 var returnType = index > 0 && tokens[index - 1].Kind == ClassifiedTokenKind.Identifier && IsTypeName(tokens[index - 1].Text)
                     ? tokens[index - 1].Text
-                    : "void";
+                    : null;
                 Add(index, kind, declaredType: returnType);
                 var bodyScope = closeParen + 1 < scopes.Length && tokens[closeParen + 1].Kind == ClassifiedTokenKind.LeftBrace
                     ? scopes[closeParen + 1] : scopes[index];
@@ -378,7 +477,43 @@ internal sealed record SushiSymbol(int Id, ClassifiedToken Token, SushiSymbolKin
     public string Name => Token.Text;
     public object Scope => ScopeHandle;
     public DocumentationComment? Documentation { get; set; }
+    public SushiType Type => Kind switch
+    {
+        SushiSymbolKind.Class => SushiType.Named(Name),
+        SushiSymbolKind.Enum => SushiType.Named(Name),
+        SushiSymbolKind.Function or SushiSymbolKind.Method or SushiSymbolKind.Constructor => SushiType.Function(DeclaredType ?? "void"),
+        _ => SushiType.Parse(DeclaredType)
+    };
 }
+
+/// <summary>Small, lossless type vocabulary shared by editor features. Unknown means the
+/// analyzer lacks information; Any is an explicit dynamic type and must not be treated as
+/// proof that every member exists.</summary>
+internal sealed record SushiType(SushiTypeKind Kind, string Name, SushiType? Element = null)
+{
+    public static SushiType Unknown { get; } = new(SushiTypeKind.Unknown, "unknown");
+    public static SushiType Any { get; } = new(SushiTypeKind.Any, "any");
+    public static SushiType Void { get; } = new(SushiTypeKind.Void, "void");
+    public static SushiType Named(string name) => Parse(name);
+    public static SushiType Function(string returnType) => new(SushiTypeKind.Function, returnType);
+    public static SushiType Parse(string? name)
+    {
+        if (String.IsNullOrWhiteSpace(name)) return Unknown;
+        if (name.EndsWith("[]", StringComparison.Ordinal)) return new(SushiTypeKind.Array, name, Parse(name[..^2]));
+        return name.ToLowerInvariant() switch
+        {
+            "any" or "object" => Any,
+            "void" => Void,
+            "string" or "str" => new(SushiTypeKind.String, name),
+            "int" => new(SushiTypeKind.Int, name),
+            "float" => new(SushiTypeKind.Float, name),
+            "bool" => new(SushiTypeKind.Bool, name),
+            _ => new(SushiTypeKind.Named, name)
+        };
+    }
+}
+
+internal enum SushiTypeKind { Unknown, Any, Void, String, Int, Float, Bool, Array, Named, Function }
 
 internal enum SushiSymbolKind
 {
