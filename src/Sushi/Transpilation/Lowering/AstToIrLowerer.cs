@@ -70,8 +70,11 @@ public sealed class AstToIrLowerer
     private readonly IReadOnlyDictionary<string, EnumDeclarationNode> _externalEnums;
     private readonly Dictionary<string, string> _topLevelSymbols = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _knownObjectTypes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _enumValueTypes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _functionOwnerTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _functionObjectReturnTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IrTypeRef> _knownVariableTypes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _bindingIds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IrTypeRef> _knownVarargElementTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _standardImportAliases = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _standardImportNames = new(StringComparer.Ordinal);
@@ -89,6 +92,7 @@ public sealed class AstToIrLowerer
     private int _lambdaId;
     private int _loopDepth;
     private int _functionDepth;
+    private int _bindingId;
     private bool _allowEnumMutation;
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
@@ -122,8 +126,12 @@ public sealed class AstToIrLowerer
         _globalVariables.Clear();
         _topLevelSymbols.Clear();
         _knownObjectTypes.Clear();
+        _enumValueTypes.Clear();
+        _functionOwnerTypes.Clear();
         _functionObjectReturnTypes.Clear();
         _knownVariableTypes.Clear();
+        _bindingIds.Clear();
+        _bindingId = 0;
         _standardImportAliases.Clear();
         _standardImportNames.Clear();
         _standardImportedPaths.Clear();
@@ -281,7 +289,8 @@ public sealed class AstToIrLowerer
 
         InjectAnonymousStructuralFieldBindings(node, signature, body);
 
-        return new IrFunctionDeclarationStatement(emittedName, signature.Parameters, body, signature.ReturnType);
+        return new IrFunctionDeclarationStatement(emittedName, signature.Parameters, body, signature.ReturnType,
+            symbolId: $"function:{_sourcePath}:{node.Line}:{node.Column}", role: IrFunctionRole.Function);
     }
 
     private IrBlockStatement LowerBlock(BlockStatementNode block)
@@ -331,7 +340,10 @@ public sealed class AstToIrLowerer
                     _knownVariableTypes[declarationName] = _knownVariableTypes[declaration.Name];
                 _definedVariables.Add(declaration.Name);
                 _definedVariables.Add(declarationName);
-                return new IrVariableDeclarationStatement(declarationName, initializer, declaredType);
+                var bindingId = $"binding:{++_bindingId}";
+                _bindingIds[declaration.Name] = bindingId;
+                _bindingIds[declarationName] = bindingId;
+                return new IrVariableDeclarationStatement(declarationName, initializer, declaredType, bindingId);
             }
 
             case ExpressionStatementNode expressionStatement:
@@ -741,7 +753,7 @@ public sealed class AstToIrLowerer
         {
             LiteralExpressionNode literal => new IrLiteralExpression(literal.Value),
             IdentifierExpressionNode identifier => LowerIdentifier(identifier),
-            ThisExpressionNode => new IrIdentifierExpression("this"),
+            ThisExpressionNode => CreateBoundIdentifier("this"),
             ParenthesizedExpressionNode parenthesized => LowerExpression(parenthesized.Expression),
             UnaryExpressionNode unary when unary.Operator == "?" => LowerTruthiness(unary),
             UnaryExpressionNode unary => LowerUnary(unary),
@@ -831,7 +843,8 @@ public sealed class AstToIrLowerer
                 return new IrMemberAccessExpression(
                     LowerExpression(member.Object),
                     storageName,
-                    GetEnumFieldType(enumType, storageName, member.Line, member.Column));
+                    GetEnumFieldType(enumType, storageName, member.Line, member.Column),
+                    $"enum-field:{objectType}.{storageName}");
             }
 
             if (_classes.TryGetValue(objectType, out var classType))
@@ -843,7 +856,8 @@ public sealed class AstToIrLowerer
                     return new IrMemberAccessExpression(
                         LowerExpression(member.Object),
                         member.MemberName,
-                        LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'"));
+                        LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'"),
+                        $"field:{objectType}.{field.Name}");
             }
         }
         var target = LowerExpression(member.Object);
@@ -851,7 +865,8 @@ public sealed class AstToIrLowerer
         {
             var field = targetType.StructuralFields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
             if (field != null)
-                return new IrMemberAccessExpression(target, member.MemberName, field.Type);
+                return new IrMemberAccessExpression(target, member.MemberName, field.Type,
+                    $"struct-field:{member.MemberName}");
         }
         return new IrMemberAccessExpression(target, member.MemberName);
     }
@@ -1157,7 +1172,8 @@ public sealed class AstToIrLowerer
                     _diagnostics.AddRange(binding.Diagnostics);
                     if (!binding.Success) return new IrLiteralExpression(null);
                     ValidateCallTypes(calleePath, externalSignature.Parameters, binding.OrderedArguments);
-                    return new IrCallExpression(externalCallee, binding.OrderedArguments);
+                    return new IrCallExpression(externalCallee, binding.OrderedArguments,
+                        $"function:{calleePath}", externalSignature.ReturnType);
                 }
                 if (loweredArguments.Any(argument => argument.Name != null))
                 {
@@ -1220,7 +1236,9 @@ public sealed class AstToIrLowerer
                         memberCallee.MemberName,
                         methodName,
                         binding.OrderedArguments[0].Value,
-                        binding.OrderedArguments.Skip(1));
+                        binding.OrderedArguments.Skip(1),
+                        $"method:{objectType}.{memberCallee.MemberName}",
+                        methodSignature.ReturnType);
                 }
                 return new IrResolvedMethodCallExpression(
                     objectType,
@@ -1311,7 +1329,8 @@ public sealed class AstToIrLowerer
             }
 
             ValidateCallTypes(callee.Name, functionSignature.Parameters, binding.OrderedArguments);
-            return new IrCallExpression(resolvedCallee, binding.OrderedArguments);
+            return new IrCallExpression(resolvedCallee, binding.OrderedArguments,
+                $"function:{callee.Name}", functionSignature.ReturnType);
         }
 
         if (loweredArguments.Any(argument => argument.Name != null))
@@ -1371,7 +1390,7 @@ public sealed class AstToIrLowerer
             }
 
             ValidateCallTypes(constructorName, signature.Parameters, binding.OrderedArguments);
-            return new IrConstructionExpression(resolvedTypeName, constructorName, binding.OrderedArguments);
+            return new IrConstructionExpression(resolvedTypeName, constructorName, binding.OrderedArguments, $"type:{resolvedTypeName}");
         }
 
         if (loweredArguments.Any(argument => argument.Name != null))
@@ -1384,7 +1403,7 @@ public sealed class AstToIrLowerer
             return new IrLiteralExpression(null);
         }
 
-        return new IrConstructionExpression(resolvedTypeName, constructorName, loweredArguments);
+        return new IrConstructionExpression(resolvedTypeName, constructorName, loweredArguments, $"type:{resolvedTypeName}");
     }
 
     private IrExpression LowerLambdaExpression(LambdaExpressionNode node)
@@ -1435,7 +1454,9 @@ public sealed class AstToIrLowerer
             lambdaName,
             parameters,
             body,
-            IrTypeRef.Any);
+            IrTypeRef.Any,
+            symbolId: $"lambda:{_sourcePath}:{node.Line}:{node.Column}",
+            role: IrFunctionRole.Lambda);
         _liftedFunctions.Add(lifted);
         _functionSignatures[lambdaName] = new IrFunctionSignature(IrTypeRef.Any, parameters);
 
@@ -1771,13 +1792,21 @@ public sealed class AstToIrLowerer
                     _classes[ResolveTopLevel(classDeclaration.Name)] = classDeclaration;
                     break;
                 case EnumDeclarationNode enumDeclaration:
-                    _enums[ResolveTopLevel(enumDeclaration.Name)] = enumDeclaration;
+                    var enumName = ResolveTopLevel(enumDeclaration.Name);
+                    _enums[enumName] = enumDeclaration;
+                    foreach (var value in enumDeclaration.Values)
+                        _enumValueTypes[ResolveTopLevel($"{enumName}_{value.Name}")] = enumName;
                     break;
             }
         }
 
         foreach (var external in _externalClasses) _classes[external.Key] = external.Value;
-        foreach (var external in _externalEnums) _enums[external.Key] = external.Value;
+        foreach (var external in _externalEnums)
+        {
+            _enums[external.Key] = external.Value;
+            foreach (var value in external.Value.Values)
+                _enumValueTypes[$"{external.Key}_{value.Name}"] = external.Key;
+        }
     }
 
     private void ValidateTypeDeclarations(ProgramNode program)
@@ -2008,7 +2037,7 @@ public sealed class AstToIrLowerer
             expression = null!;
             return false;
         }
-        expression = new IrIdentifierExpression($"{type}_{value}");
+        expression = CreateBoundIdentifier($"{type}_{value}");
         foreach (var member in remaining)
         {
             var storageName = member switch
@@ -2168,7 +2197,7 @@ public sealed class AstToIrLowerer
             if (field != null && !_definedVariables.Contains(identifier.Name))
             {
                 return new IrMemberAccessExpression(
-                    new IrIdentifierExpression("this"),
+                    CreateBoundIdentifier("this"),
                     field.Name,
                     LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'"));
             }
@@ -2180,7 +2209,28 @@ public sealed class AstToIrLowerer
             AddDiagnostic(UnknownMemberCode, $"Enum type '{identifier.Name}' is not a value; select one of its declared values.", identifier.Line, identifier.Column);
             return new IrLiteralExpression(null);
         }
-        return new IrIdentifierExpression(ResolveCallable(identifier.Name));
+        return CreateBoundIdentifier(ResolveCallable(identifier.Name));
+    }
+
+    private IrIdentifierExpression CreateBoundIdentifier(string name)
+    {
+        var resolved = ResolveCallable(name);
+        var bindingKey = _bindingIds.TryGetValue(name, out var existingKey) ? existingKey :
+            _bindingIds.TryGetValue(resolved, out existingKey) ? existingKey : null;
+        bindingKey ??= $"binding:{++_bindingId}";
+        _bindingIds[name] = bindingKey;
+        _bindingIds[resolved] = bindingKey;
+        if (_knownVariableTypes.TryGetValue(name, out var variableType))
+            return new IrIdentifierExpression(resolved, bindingKey, variableType);
+        if (_knownVariableTypes.TryGetValue(resolved, out variableType))
+            return new IrIdentifierExpression(resolved, bindingKey, variableType);
+        if (_knownObjectTypes.TryGetValue(name, out var objectType))
+            return new IrIdentifierExpression(resolved, bindingKey, IrTypeRef.Primitive(objectType, $"type:{objectType}"));
+        if (_knownObjectTypes.TryGetValue(resolved, out objectType))
+            return new IrIdentifierExpression(resolved, bindingKey, IrTypeRef.Primitive(objectType, $"type:{objectType}"));
+        if (_enumValueTypes.TryGetValue(resolved, out var enumType))
+            return new IrIdentifierExpression(resolved, bindingKey, IrTypeRef.Primitive(enumType, $"type:{enumType}"));
+        return new IrIdentifierExpression(resolved, bindingKey);
     }
 
     private void ValidateIdentifier(IdentifierExpressionNode identifier)
@@ -2231,11 +2281,11 @@ public sealed class AstToIrLowerer
         var resolvedTypeName = ResolveTopLevel(node.Name);
         var nativeMethods = new List<IrClassMethod>();
         var nativeAdapters = new List<IrClassMethod>();
-        var legacyFunctionNames = new List<string>();
 
         foreach (var method in node.Methods)
         {
             var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}";
+            _functionOwnerTypes[methodName] = resolvedTypeName;
             var parameters = new List<IrFunctionParameter>
             {
                 new("this", false, null, IrTypeRef.Primitive("object"))
@@ -2274,9 +2324,11 @@ public sealed class AstToIrLowerer
                 methodName,
                 parameters,
                 body,
-                _functionSignatures[methodName].ReturnType);
+                _functionSignatures[methodName].ReturnType,
+                symbolId: $"method:{_sourcePath}:{method.Line}:{method.Column}",
+                ownerTypeId: $"type:{resolvedTypeName}",
+                role: IrFunctionRole.Method);
             statements.Add(loweredMethod);
-            legacyFunctionNames.Add(methodName);
             nativeMethods.Add(new IrClassMethod(method.Name, parameters.Skip(1), body,
                 loweredMethod.ReturnType, methodName));
         }
@@ -2285,9 +2337,9 @@ public sealed class AstToIrLowerer
         {
             var loweredAdapter = (IrFunctionDeclarationStatement)LowerAdapter(resolvedTypeName, adapter);
             statements.Add(loweredAdapter);
-            legacyFunctionNames.Add(loweredAdapter.Name);
             nativeAdapters.Add(new IrClassMethod(adapter.TargetType, loweredAdapter.Parameters.Skip(1),
-                loweredAdapter.Body, loweredAdapter.ReturnType, loweredAdapter.Name));
+                loweredAdapter.Body, loweredAdapter.ReturnType, loweredAdapter.Name,
+                symbolId: loweredAdapter.SymbolId, ownerTypeId: $"type:{resolvedTypeName}", role: IrFunctionRole.Adapter));
         }
 
         var constructorName = $"__sushi_new_{resolvedTypeName}";
@@ -2343,7 +2395,8 @@ public sealed class AstToIrLowerer
                     $"initializer for field '{field.Name}'",
                     FieldTypeMismatchCode);
             }
-            nativeFields.Add(new IrClassField(field.Name, fieldType, fieldInitializer));
+            nativeFields.Add(new IrClassField(field.Name, fieldType, fieldInitializer,
+                symbolId: $"field:{_sourcePath}:{resolvedTypeName}:{field.Line}:{field.Column}"));
             if (matchingCtorParameter != null)
             {
                 objectProperties.Add(new IrObjectProperty(field.Name, new IrIdentifierExpression(field.Name)));
@@ -2385,11 +2438,13 @@ public sealed class AstToIrLowerer
             constructorName,
             ctorSignature.Parameters,
             ctorBody,
-            IrTypeRef.Primitive("object")));
-        legacyFunctionNames.Add(constructorName);
+            IrTypeRef.Primitive("object"),
+            symbolId: $"constructor:{_sourcePath}:{node.Line}:{node.Column}",
+            ownerTypeId: $"type:{resolvedTypeName}",
+            role: IrFunctionRole.Constructor));
         statements.Insert(0, new IrClassDeclarationStatement(resolvedTypeName, nativeFields,
             ctorSignature.Parameters, new IrBlockStatement(nativeConstructorStatements), nativeMethods,
-            nativeAdapters, legacyFunctionNames));
+            nativeAdapters, symbolId: $"type:{_sourcePath}:{node.Line}:{node.Column}"));
         _definedVariables = previousConstructorVariables;
         RestoreKnownObjectTypes(previousConstructorObjectTypes);
 
@@ -2434,7 +2489,6 @@ public sealed class AstToIrLowerer
             .ToList();
         var richMethods = new List<IrClassMethod>();
         var richAdapters = new List<IrClassMethod>();
-        var richLegacyFunctions = new List<string>();
         foreach (var method in node.Methods)
         {
             var methodName = $"{NativeObjectMetadata.MethodPrefix}{resolvedTypeName}_{method.Name}";
@@ -2479,7 +2533,6 @@ public sealed class AstToIrLowerer
                 _functionSignatures[methodName].ReturnType);
             statements.Add(loweredMethod);
             richMethods.Add(new IrClassMethod(method.Name, parameters.Skip(1), body, loweredMethod.ReturnType, methodName));
-            richLegacyFunctions.Add(methodName);
         }
 
         foreach (var adapter in node.TypeAdapters)
@@ -2488,7 +2541,6 @@ public sealed class AstToIrLowerer
             statements.Add(loweredAdapter);
             richAdapters.Add(new IrClassMethod(adapter.TargetType, loweredAdapter.Parameters.Skip(1), loweredAdapter.Body,
                 loweredAdapter.ReturnType, loweredAdapter.Name));
-            richLegacyFunctions.Add(loweredAdapter.Name);
         }
 
         for (var ordinal = 0; ordinal < node.Values.Count; ordinal++)
@@ -2534,8 +2586,10 @@ public sealed class AstToIrLowerer
                         sharedConstructorName,
                         parameters,
                         new IrBlockStatement(body),
-                        IrTypeRef.Primitive("object")));
-                    richLegacyFunctions.Add(sharedConstructorName);
+                        IrTypeRef.Primitive("object"),
+                        symbolId: $"constructor:{_sourcePath}:{node.Line}:{node.Column}",
+                        ownerTypeId: $"type:{resolvedTypeName}",
+                        role: IrFunctionRole.Constructor));
                 }
                 var arguments = (value.ConstructorArgs ?? new List<ExpressionNode>())
                     .Select(argument => new IrCallArgument(null, LowerExpression(argument), argument.Line, argument.Column))
@@ -2554,7 +2608,9 @@ public sealed class AstToIrLowerer
                 initializer = new IrConstructionExpression(
                     resolvedTypeName,
                     sharedConstructorName,
-                    binding.Success ? binding.OrderedArguments : arguments);
+                    binding.Success ? binding.OrderedArguments : arguments,
+                    $"type:{resolvedTypeName}",
+                    enumValueName: value.Name);
             }
             else if (node.RecordParameters != null)
             {
@@ -2578,19 +2634,20 @@ public sealed class AstToIrLowerer
         if (nativeEnumValues != null)
         {
             statements.Insert(0, new IrEnumDeclarationStatement(resolvedTypeName, nativeEnumValues,
-                node.Values.Select(value => $"{resolvedTypeName}_{value.Name}")));
+                symbolId: $"type:{_sourcePath}:{node.Line}:{node.Column}"));
         }
         else if (richEnumValues.Count == node.Values.Count)
         {
             statements.Insert(0, new IrRichEnumDeclarationStatement(resolvedTypeName, richEnumValues,
-                node.Values.Select(value => $"{resolvedTypeName}_{value.Name}"), richConstructorParameters, richConstructorBody,
-                richMethods, richAdapters, richLegacyFunctions));
+                richConstructorParameters, richConstructorBody,
+                richMethods, richAdapters,
+                symbolId: $"type:{_sourcePath}:{node.Line}:{node.Column}"));
         }
 
         return new IrBlockStatement(statements);
     }
 
-    private static List<IrEnumValue>? TryGetNativeEnumValues(EnumDeclarationNode node)
+    private List<IrEnumValue>? TryGetNativeEnumValues(EnumDeclarationNode node)
     {
         if (node.RecordParameters != null || node.ExplicitConstructor != null || node.Methods.Count > 0 || node.TypeAdapters.Count > 0)
             return null;
@@ -2606,7 +2663,8 @@ public sealed class AstToIrLowerer
             }
             else if (value.DirectValue != null) return null;
             if (output.Any(existing => existing.Value == nextValue)) return null;
-            output.Add(new IrEnumValue(value.Name, nextValue, output.Count));
+            output.Add(new IrEnumValue(value.Name, nextValue, output.Count,
+                symbolId: $"enum-value:{_sourcePath}:{node.Line}:{node.Column}:{value.Name}"));
             nextValue++;
         }
         return output;
@@ -2702,6 +2760,7 @@ public sealed class AstToIrLowerer
         _definedVariables = new HashSet<string>(_globalVariables, StringComparer.Ordinal) { "this" };
         _knownObjectTypes["this"] = resolvedTypeName;
         _currentFunctionName = name;
+        _functionOwnerTypes[name] = resolvedTypeName;
         _currentFunctionReturnType = LowerDeclaredType(adapter.TargetType, adapter.Line, adapter.Column, $"adapter on '{DisplayTypeName(resolvedTypeName)}'");
         _functionDepth++;
         var body = StatementToBlock(adapter.Body);
@@ -2714,7 +2773,10 @@ public sealed class AstToIrLowerer
             name,
             new[] { new IrFunctionParameter("this", false, null, IrTypeRef.Primitive("object")) },
             body,
-            LowerDeclaredType(adapter.TargetType, adapter.Line, adapter.Column, $"adapter on '{DisplayTypeName(resolvedTypeName)}'"));
+            LowerDeclaredType(adapter.TargetType, adapter.Line, adapter.Column, $"adapter on '{DisplayTypeName(resolvedTypeName)}'"),
+            symbolId: $"adapter:{_sourcePath}:{adapter.Line}:{adapter.Column}",
+            ownerTypeId: $"type:{resolvedTypeName}",
+            role: IrFunctionRole.Adapter);
     }
 
     private IrFunctionSignature BuildFunctionSignature(FunctionDeclarationNode function)
@@ -3253,41 +3315,22 @@ public sealed class AstToIrLowerer
                 type = IrTypeRef.Primitive(objectType);
                 return true;
 
-            // Generated class/enum methods always receive their receiver as
-            // `this`; retain its declared owner type even when validation is
-            // performed after the surrounding lowering scope has been restored.
-            case IrIdentifierExpression { Name: "this" } when _currentFunctionName is { } functionName:
-            {
-                var marker = functionName.StartsWith("_m_", StringComparison.Ordinal)
-                    ? functionName[3..]
-                    : functionName.StartsWith("__sushi_adapter_", StringComparison.Ordinal)
-                        ? functionName["__sushi_adapter_".Length..]
-                        : "";
-                var separator = marker.IndexOf('_');
-                if (separator > 0 && (_classes.ContainsKey(marker[..separator]) || _enums.ContainsKey(marker[..separator])))
-                {
-                    type = IrTypeRef.Primitive(marker[..separator]);
-                    return true;
-                }
-                type = IrTypeRef.Unknown;
-                return false;
-            }
+            case IrIdentifierExpression identifier when !identifier.StaticType.IsAnyOrUnknown:
+                type = identifier.StaticType;
+                return true;
 
             case IrIdentifierExpression identifier when _knownVariableTypes.TryGetValue(identifier.Name, out var variableType):
                 type = variableType;
                 return !type.IsAnyOrUnknown;
 
-            case IrIdentifierExpression identifier:
-            {
-                var separator = identifier.Name.IndexOf('_');
-                if (separator > 0 && _enums.ContainsKey(identifier.Name[..separator]))
-                {
-                    type = IrTypeRef.Primitive(identifier.Name[..separator]);
-                    return true;
-                }
+            case IrIdentifierExpression { Name: "this" } when _currentFunctionName is { } functionName &&
+                _functionOwnerTypes.TryGetValue(functionName, out var ownerType):
+                type = IrTypeRef.Primitive(ownerType, $"type:{ownerType}");
+                return true;
+
+            case IrIdentifierExpression:
                 type = IrTypeRef.Unknown;
                 return false;
-            }
 
             case IrTruthinessExpression:
                 type = IrTypeRef.Primitive("bool");
@@ -3331,6 +3374,10 @@ public sealed class AstToIrLowerer
                 type = signature.ReturnType;
                 return true;
 
+            case IrCallExpression call when !call.ReturnType.IsAnyOrUnknown:
+                type = call.ReturnType;
+                return true;
+
             case IrCallExpression call when call.Callee is "string" or "int" or "float" or "double" or "decimal" or "number":
                 type = LowerDeclaredType(call.Callee, 1, 1, "conversion result");
                 return !type.IsAnyOrUnknown;
@@ -3347,6 +3394,10 @@ public sealed class AstToIrLowerer
                 when _functionSignatures.TryGetValue(methodCall.Callee, out var methodSignature) &&
                      !methodSignature.ReturnType.IsAnyOrUnknown:
                 type = methodSignature.ReturnType;
+                return true;
+
+            case IrResolvedMethodCallExpression methodCall when !methodCall.ReturnType.IsAnyOrUnknown:
+                type = methodCall.ReturnType;
                 return true;
 
             case IrIntrinsicCallExpression intrinsic:

@@ -28,8 +28,6 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private Dictionary<string, string> _nativeClassNames = new(StringComparer.Ordinal);
     private Dictionary<string, string> _nativeEnumNames = new(StringComparer.Ordinal);
     private Dictionary<string, IrClassDeclarationStatement> _nativeClasses = new(StringComparer.Ordinal);
-    private HashSet<string> _suppressedFunctions = new(StringComparer.Ordinal);
-    private HashSet<string> _suppressedVariables = new(StringComparer.Ordinal);
     private Dictionary<string, IrClassMethod> _nativeMethods = new(StringComparer.Ordinal);
     private Dictionary<string, (string Type, string Value, int Ordinal)> _nativeEnumValues = new(StringComparer.Ordinal);
     private Dictionary<string, string> _nativeEnumVariableTypes = new(StringComparer.Ordinal);
@@ -47,8 +45,6 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _nativeClassNames.Clear();
         _nativeEnumNames.Clear();
         _nativeClasses.Clear();
-        _suppressedFunctions.Clear();
-        _suppressedVariables.Clear();
         _nativeMethods.Clear();
         _nativeEnumValues.Clear();
         _nativeEnumVariableTypes.Clear();
@@ -102,7 +98,6 @@ public sealed class PowerShellEmitter : IBackendEmitter
             var name = _names.Source(TargetNameKind.Type, declaration.Name);
             _nativeClassNames[declaration.Name] = name;
             _nativeClasses[declaration.Name] = declaration;
-            _suppressedFunctions.UnionWith(declaration.LegacyFunctionNames);
             foreach (var method in declaration.Methods.Concat(declaration.Adapters))
                 _nativeMethods[method.LegacyName] = method;
         }
@@ -123,13 +118,11 @@ public sealed class PowerShellEmitter : IBackendEmitter
             _indent--;
             WriteLine("}");
             WriteLine("");
-            _suppressedVariables.UnionWith(declaration.LegacyVariableNames);
         }
         var richEnums = CollectRichEnums(program.Statements).ToList();
         foreach (var declaration in richEnums)
         {
             _nativeClassNames[declaration.Name] = _names.Source(TargetNameKind.Type, declaration.Name);
-            _suppressedFunctions.UnionWith(declaration.LegacyFunctionNames);
             foreach (var method in declaration.Methods.Concat(declaration.Adapters))
                 _nativeMethods[method.LegacyName] = method;
         }
@@ -137,7 +130,6 @@ public sealed class PowerShellEmitter : IBackendEmitter
         {
             EmitRichEnum(declaration);
             WriteLine("");
-            _suppressedVariables.UnionWith(declaration.LegacyVariableNames);
         }
         foreach (var declaration in OrderClasses(classes))
         {
@@ -242,7 +234,6 @@ public sealed class PowerShellEmitter : IBackendEmitter
             WriteLine($"static [{typeName}] ${valueName} = [{typeName}]::new({arguments})");
             // Explicit enum constructors are only the portable construction
             // path. Static native instances above replace them on PowerShell.
-            _suppressedFunctions.Add($"__sushi_new_{declaration.Name}_{value.Name}");
         }
         _indent--;
         WriteLine("}");
@@ -1137,7 +1128,7 @@ function __sushi_call_method {
 
             case IrVariableDeclarationStatement variable:
             {
-                if (_suppressedVariables.Contains(variable.Name)) break;
+                if (_nativeEnumValues.ContainsKey(variable.Name) || _richEnumValues.ContainsKey(variable.Name)) break;
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);
                 var variableName = SanitizeName(variable.Name);
                 if (TryGetNativeEnumType(initializer, out var enumType))
@@ -1196,7 +1187,14 @@ function __sushi_call_method {
                 break;
 
             case IrFunctionDeclarationStatement function:
-                if (!_suppressedFunctions.Contains(function.Name)) EmitFunction(function);
+                // Native class/enum members are emitted by their declaration. The
+                // portable lowering is only emitted for standalone functions.
+                var nativeMember = function.Role is IrFunctionRole.Method or IrFunctionRole.Constructor or IrFunctionRole.Adapter;
+                var ownerType = function.OwnerTypeId is { } owner && owner.StartsWith("type:", StringComparison.Ordinal)
+                    ? owner["type:".Length..]
+                    : null;
+                if (!nativeMember || ownerType is null || !_nativeClasses.ContainsKey(ownerType))
+                    EmitFunction(function);
                 break;
 
             case IrClassDeclarationStatement:
@@ -1828,6 +1826,7 @@ function __sushi_call_method {
     {
         return expression switch
         {
+            IrIdentifierExpression identifier when identifier.StaticType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true => true,
             IrLiteralExpression literal => literal.Value is float or double or decimal,
             IrIdentifierExpression identifier => _knownFloatVariables.Contains(SanitizeName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyFloat(unary.Operand),
@@ -1848,6 +1847,7 @@ function __sushi_call_method {
     {
         return expression switch
         {
+            IrIdentifierExpression identifier when identifier.StaticType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true => true,
             IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
             IrIdentifierExpression identifier => _knownIntegerVariables.Contains(SanitizeName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),

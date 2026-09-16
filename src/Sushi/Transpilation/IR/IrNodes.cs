@@ -48,14 +48,16 @@ public sealed class IrVariableDeclarationStatement : IrStatement
 {
     public string Name { get; }
     public IrExpression? Initializer { get; }
+    public string? SymbolId { get; }
     /// <summary>Static declaration type, when the source declared one.</summary>
     public IrTypeRef DeclaredType { get; }
 
-    public IrVariableDeclarationStatement(string name, IrExpression? initializer, IrTypeRef? declaredType = null)
+    public IrVariableDeclarationStatement(string name, IrExpression? initializer, IrTypeRef? declaredType = null, string? symbolId = null)
     {
         Name = name;
         Initializer = initializer;
         DeclaredType = declaredType ?? IrTypeRef.Any;
+        SymbolId = symbolId;
     }
 }
 
@@ -153,14 +155,17 @@ public sealed class IrTypeRef
 {
     public IrTypeKind Kind { get; }
     public string? Name { get; }
+    /// <summary>Stable semantic identity for named declarations, when available.</summary>
+    public string? DeclarationId { get; }
     public List<IrStructuralField> StructuralFields { get; }
 
     public bool IsAnyOrUnknown => Kind is IrTypeKind.Any or IrTypeKind.Unknown;
 
-    private IrTypeRef(IrTypeKind kind, string? name, IEnumerable<IrStructuralField>? structuralFields)
+    private IrTypeRef(IrTypeKind kind, string? name, IEnumerable<IrStructuralField>? structuralFields, string? declarationId = null)
     {
         Kind = kind;
         Name = name;
+        DeclarationId = declarationId;
         StructuralFields = structuralFields?.ToList() ?? new List<IrStructuralField>();
     }
 
@@ -168,9 +173,9 @@ public sealed class IrTypeRef
     public static IrTypeRef Unknown { get; } = new(IrTypeKind.Unknown, null, null);
     public static IrTypeRef Void { get; } = new(IrTypeKind.Primitive, "void", null);
 
-    public static IrTypeRef Primitive(string name)
+    public static IrTypeRef Primitive(string name, string? declarationId = null)
     {
-        return new IrTypeRef(IrTypeKind.Primitive, name, null);
+        return new IrTypeRef(IrTypeKind.Primitive, name, null, declarationId);
     }
 
     public static IrTypeRef Structural(IEnumerable<IrStructuralField> fields)
@@ -195,23 +200,41 @@ public sealed class IrFunctionParameter
     }
 }
 
+public enum IrFunctionRole
+{
+    Function,
+    Method,
+    Constructor,
+    Adapter,
+    Lambda
+}
+
 public sealed class IrFunctionDeclarationStatement : IrStatement
 {
     public string Name { get; }
     public List<IrFunctionParameter> Parameters { get; }
     public IrBlockStatement Body { get; }
     public IrTypeRef ReturnType { get; }
+    public string? SymbolId { get; }
+    public string? OwnerTypeId { get; }
+    public IrFunctionRole Role { get; }
 
     public IrFunctionDeclarationStatement(
         string name,
         IEnumerable<IrFunctionParameter> parameters,
         IrBlockStatement body,
-        IrTypeRef? returnType = null)
+        IrTypeRef? returnType = null,
+        string? symbolId = null,
+        string? ownerTypeId = null,
+        IrFunctionRole role = IrFunctionRole.Function)
     {
         Name = name;
         Parameters = parameters.ToList();
         Body = body;
         ReturnType = returnType ?? IrTypeRef.Any;
+        SymbolId = symbolId;
+        OwnerTypeId = ownerTypeId;
+        Role = role;
     }
 
     public IrFunctionDeclarationStatement(string name, IEnumerable<string> parameters, IrBlockStatement body)
@@ -232,17 +255,17 @@ public sealed class IrFunctionDeclarationStatement : IrStatement
 public sealed class IrClassDeclarationStatement : IrStatement
 {
     public string Name { get; }
+    public string? SymbolId { get; }
     public List<IrClassField> Fields { get; }
     public List<IrFunctionParameter> ConstructorParameters { get; }
     public IrBlockStatement ConstructorBody { get; }
     public List<IrClassMethod> Methods { get; }
     public List<IrClassMethod> Adapters { get; }
-    public HashSet<string> LegacyFunctionNames { get; }
 
     public IrClassDeclarationStatement(string name, IEnumerable<IrClassField> fields,
         IEnumerable<IrFunctionParameter> constructorParameters, IrBlockStatement constructorBody,
         IEnumerable<IrClassMethod> methods, IEnumerable<IrClassMethod> adapters,
-        IEnumerable<string> legacyFunctionNames)
+        string? symbolId = null)
     {
         Name = name;
         Fields = fields.ToList();
@@ -250,40 +273,49 @@ public sealed class IrClassDeclarationStatement : IrStatement
         ConstructorBody = constructorBody;
         Methods = methods.ToList();
         Adapters = adapters.ToList();
-        LegacyFunctionNames = legacyFunctionNames.ToHashSet(StringComparer.Ordinal);
+        SymbolId = symbolId;
     }
 }
 
 public sealed class IrClassField
 {
     public string Name { get; }
+    public string? SymbolId { get; }
     public IrTypeRef Type { get; }
     public IrExpression? Initializer { get; }
 
-    public IrClassField(string name, IrTypeRef type, IrExpression? initializer)
+    public IrClassField(string name, IrTypeRef type, IrExpression? initializer, string? symbolId = null)
     {
         Name = name;
         Type = type;
         Initializer = initializer;
+        SymbolId = symbolId;
     }
 }
 
 public sealed class IrClassMethod
 {
     public string Name { get; }
+    public string? SymbolId { get; }
+    public string? OwnerTypeId { get; }
+    public IrFunctionRole Role { get; }
     public List<IrFunctionParameter> Parameters { get; }
     public IrBlockStatement Body { get; }
     public IrTypeRef ReturnType { get; }
     public string LegacyName { get; }
 
     public IrClassMethod(string name, IEnumerable<IrFunctionParameter> parameters,
-        IrBlockStatement body, IrTypeRef returnType, string legacyName)
+        IrBlockStatement body, IrTypeRef returnType, string legacyName, string? symbolId = null,
+        string? ownerTypeId = null, IrFunctionRole role = IrFunctionRole.Method)
     {
         Name = name;
         Parameters = parameters.ToList();
         Body = body;
         ReturnType = returnType;
         LegacyName = legacyName;
+        SymbolId = symbolId;
+        OwnerTypeId = ownerTypeId;
+        Role = role;
     }
 }
 
@@ -291,49 +323,48 @@ public sealed class IrClassMethod
 public sealed class IrEnumDeclarationStatement : IrStatement
 {
     public string Name { get; }
+    public string? SymbolId { get; }
     public List<IrEnumValue> Values { get; }
-    public HashSet<string> LegacyVariableNames { get; }
 
-    public IrEnumDeclarationStatement(string name, IEnumerable<IrEnumValue> values, IEnumerable<string> legacyVariableNames)
+    public IrEnumDeclarationStatement(string name, IEnumerable<IrEnumValue> values, string? symbolId = null)
     {
         Name = name;
         Values = values.ToList();
-        LegacyVariableNames = legacyVariableNames.ToHashSet(StringComparer.Ordinal);
+        SymbolId = symbolId;
     }
 }
 
 public sealed class IrEnumValue
 {
     public string Name { get; }
+    public string? SymbolId { get; }
     public int Value { get; }
     public int Ordinal { get; }
-    public IrEnumValue(string name, int value, int ordinal) { Name = name; Value = value; Ordinal = ordinal; }
+    public IrEnumValue(string name, int value, int ordinal, string? symbolId = null) { Name = name; Value = value; Ordinal = ordinal; SymbolId = symbolId; }
 }
 
 /// <summary>Class-shaped enum values that cannot be represented by a CLR enum.</summary>
 public sealed class IrRichEnumDeclarationStatement : IrStatement
 {
     public string Name { get; }
+    public string? SymbolId { get; }
     public List<IrRichEnumValue> Values { get; }
-    public HashSet<string> LegacyVariableNames { get; }
     public List<IrFunctionParameter> ConstructorParameters { get; }
     public IrBlockStatement? ConstructorBody { get; }
     public List<IrClassMethod> Methods { get; }
     public List<IrClassMethod> Adapters { get; }
-    public HashSet<string> LegacyFunctionNames { get; }
-    public IrRichEnumDeclarationStatement(string name, IEnumerable<IrRichEnumValue> values, IEnumerable<string> legacyVariableNames,
+    public IrRichEnumDeclarationStatement(string name, IEnumerable<IrRichEnumValue> values,
         IEnumerable<IrFunctionParameter>? constructorParameters = null, IrBlockStatement? constructorBody = null,
         IEnumerable<IrClassMethod>? methods = null, IEnumerable<IrClassMethod>? adapters = null,
-        IEnumerable<string>? legacyFunctionNames = null)
+        string? symbolId = null)
     {
         Name = name;
         Values = values.ToList();
-        LegacyVariableNames = legacyVariableNames.ToHashSet(StringComparer.Ordinal);
         ConstructorParameters = constructorParameters?.ToList() ?? new List<IrFunctionParameter>();
         ConstructorBody = constructorBody;
         Methods = methods?.ToList() ?? new List<IrClassMethod>();
         Adapters = adapters?.ToList() ?? new List<IrClassMethod>();
-        LegacyFunctionNames = legacyFunctionNames?.ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+        SymbolId = symbolId;
     }
 }
 
@@ -379,10 +410,14 @@ public sealed class IrLiteralExpression : IrExpression
 public sealed class IrIdentifierExpression : IrExpression
 {
     public string Name { get; }
+    public string? SymbolId { get; }
+    public IrTypeRef StaticType { get; }
 
-    public IrIdentifierExpression(string name)
+    public IrIdentifierExpression(string name, string? symbolId = null, IrTypeRef? staticType = null)
     {
         Name = name;
+        SymbolId = symbolId;
+        StaticType = staticType ?? IrTypeRef.Unknown;
     }
 }
 
@@ -461,11 +496,15 @@ public sealed class IrCallExpression : IrExpression
 {
     public string Callee { get; }
     public List<IrCallArgument> Arguments { get; }
+    public string? CallableSymbolId { get; }
+    public IrTypeRef ReturnType { get; }
 
-    public IrCallExpression(string callee, IEnumerable<IrCallArgument> arguments)
+    public IrCallExpression(string callee, IEnumerable<IrCallArgument> arguments, string? callableSymbolId = null, IrTypeRef? returnType = null)
     {
         Callee = callee;
         Arguments = arguments.ToList();
+        CallableSymbolId = callableSymbolId;
+        ReturnType = returnType ?? IrTypeRef.Unknown;
     }
 
     public IrCallExpression(string callee, IEnumerable<IrExpression> arguments)
@@ -481,12 +520,16 @@ public sealed class IrConstructionExpression : IrExpression
     public string TypeName { get; }
     public string ConstructorName { get; }
     public List<IrCallArgument> Arguments { get; }
+    public string? TypeSymbolId { get; }
+    public string? EnumValueName { get; }
 
-    public IrConstructionExpression(string typeName, string constructorName, IEnumerable<IrCallArgument> arguments)
+    public IrConstructionExpression(string typeName, string constructorName, IEnumerable<IrCallArgument> arguments, string? typeSymbolId = null, string? enumValueName = null)
     {
         TypeName = typeName;
         ConstructorName = constructorName;
         Arguments = arguments.ToList();
+        TypeSymbolId = typeSymbolId;
+        EnumValueName = enumValueName;
     }
 }
 
@@ -497,24 +540,32 @@ public sealed class IrResolvedMethodCallExpression : IrExpression
     public string Callee { get; }
     public IrExpression Target { get; }
     public List<IrCallArgument> Arguments { get; }
+    public string? CallableSymbolId { get; }
+    public IrTypeRef ReturnType { get; }
 
     public IrResolvedMethodCallExpression(
         string typeName,
         string methodName,
         string callee,
         IrExpression target,
-        IEnumerable<IrCallArgument> arguments)
+        IEnumerable<IrCallArgument> arguments,
+        string? callableSymbolId = null,
+        IrTypeRef? returnType = null)
     {
         TypeName = typeName;
         MethodName = methodName;
         Callee = callee;
         Target = target;
         Arguments = arguments.ToList();
+        CallableSymbolId = callableSymbolId;
+        ReturnType = returnType ?? IrTypeRef.Unknown;
     }
 
     public IrCallExpression AsFunctionCall() => new(
         Callee,
-        new[] { new IrCallArgument(null, Target, 1, 1) }.Concat(Arguments));
+        new[] { new IrCallArgument(null, Target, 1, 1) }.Concat(Arguments),
+        CallableSymbolId,
+        ReturnType);
 }
 
 public sealed class IrAdapterCallExpression : IrExpression
@@ -620,12 +671,14 @@ public sealed class IrMemberAccessExpression : IrExpression
     public IrExpression Target { get; }
     public string MemberName { get; }
     public IrTypeRef ValueType { get; }
+    public string? MemberSymbolId { get; }
 
-    public IrMemberAccessExpression(IrExpression target, string memberName, IrTypeRef? valueType = null)
+    public IrMemberAccessExpression(IrExpression target, string memberName, IrTypeRef? valueType = null, string? memberSymbolId = null)
     {
         Target = target;
         MemberName = memberName;
         ValueType = valueType ?? IrTypeRef.Any;
+        MemberSymbolId = memberSymbolId;
     }
 }
 

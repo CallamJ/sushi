@@ -19,6 +19,7 @@ public sealed class BashEmitter : IBackendEmitter
     private int _indent;
     private int _valueTempId;
     private string? _currentFunctionName;
+    private IrFunctionRole _currentFunctionRole = IrFunctionRole.Function;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
     private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
     private HashSet<string> _knownFloatVariables = new(StringComparer.Ordinal);
@@ -65,6 +66,7 @@ public sealed class BashEmitter : IBackendEmitter
         _indent = 0;
         _valueTempId = 0;
         _currentFunctionName = null;
+        _currentFunctionRole = IrFunctionRole.Function;
         _currentFunctionReturnType = IrTypeRef.Any;
         _knownIntegerVariables.Clear();
         _knownFloatVariables.Clear();
@@ -2845,7 +2847,7 @@ __sushi_native_obj_to_json() {
                         : properties.Select(property =>
                             $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
                     EmitAssociativeObject(name, entries, inFunction ? "local " : "declare ",
-                        name == "this" && _currentFunctionName?.StartsWith("__sushi_new_", StringComparison.Ordinal) == true);
+                        name == "this" && _currentFunctionRole == IrFunctionRole.Constructor);
                     _nativeObjectVariables.Add(name);
                     _nativeArrayVariables.Remove(name);
                     _arrayInitializers.Remove(name);
@@ -2923,7 +2925,7 @@ __sushi_native_obj_to_json() {
 
             case IrFunctionDeclarationStatement function:
                 EmitGeneratedFunctionComment(function);
-                var typeMemberIndent = IsTypeMemberFunction(function.Name);
+                var typeMemberIndent = function.Role is IrFunctionRole.Method or IrFunctionRole.Constructor or IrFunctionRole.Adapter;
                 if (typeMemberIndent) _indent++;
                 EmitFunctionDeclaration(function);
                 if (typeMemberIndent) _indent--;
@@ -3055,6 +3057,7 @@ __sushi_native_obj_to_json() {
         _indent++;
 
         var previousFunctionName = _currentFunctionName;
+        var previousFunctionRole = _currentFunctionRole;
         var previousReturnType = _currentFunctionReturnType;
         var previousFunctionReturnsValue = _currentFunctionReturnsValue;
         var previousOutputName = _currentOutputName;
@@ -3068,6 +3071,7 @@ __sushi_native_obj_to_json() {
         var previousZshReadOnlyParameters = _zshReadOnlyObjectParameters;
         var previousNativeObjectAliases = _nativeObjectAliases;
         _currentFunctionName = statement.Name;
+        _currentFunctionRole = statement.Role;
         _currentFunctionReturnType = statement.ReturnType;
         _currentFunctionReturnsValue = FunctionReturnsValue(statement);
         _currentOutputName = _currentFunctionReturnsValue
@@ -3084,7 +3088,7 @@ __sushi_native_obj_to_json() {
         _nativeObjectAliases = new Dictionary<string, string>(StringComparer.Ordinal);
         _positionalParameterReferences = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        var isConstructor = statement.Name.StartsWith("__sushi_new_", StringComparison.Ordinal);
+        var isConstructor = statement.Role == IrFunctionRole.Constructor;
         var mutatesReceiver = FunctionMutatesReceiver(statement.Body);
         var returnsObject = !isConstructor && IsNamedObjectType(statement.ReturnType);
         var argIndex = _currentFunctionReturnsValue ? 2 : 1;
@@ -3198,6 +3202,7 @@ __sushi_native_obj_to_json() {
             WriteLine("return 0");
         }
         _currentFunctionName = previousFunctionName;
+        _currentFunctionRole = previousFunctionRole;
         _currentFunctionReturnType = previousReturnType;
         _currentFunctionReturnsValue = previousFunctionReturnsValue;
         _currentOutputName = previousOutputName;
@@ -3217,29 +3222,24 @@ __sushi_native_obj_to_json() {
     private void EmitGeneratedFunctionComment(IrFunctionDeclarationStatement function)
     {
         var name = function.Name;
-        var isTypeMember = IsTypeMemberFunction(name);
+        var isTypeMember = function.Role is IrFunctionRole.Method or IrFunctionRole.Constructor or IrFunctionRole.Adapter;
         var parameters = string.Join(", ", function.Parameters
             .Where(parameter => parameter.Name != "this" &&
                                 !parameter.Name.StartsWith("__sushi_enum_field_", StringComparison.Ordinal))
             .Select(parameter => parameter.IsVarargs ? $"{parameter.Name}..." : parameter.Name));
         var signature = $"{name}({parameters})";
-        var label = name switch
+        var label = function.Role switch
         {
-            var value when value.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal) =>
-                $"method: {value[NativeObjectMetadata.MethodPrefix.Length..].Replace('_', '.')}({parameters})",
-            var value when value.StartsWith("__sushi_new_", StringComparison.Ordinal) =>
-                $"constructor: {value["__sushi_new_".Length..]}({parameters})",
-            var value when value.StartsWith("__sushi_adapter_", StringComparison.Ordinal) =>
-                $"adapter: {value["__sushi_adapter_".Length..].Replace('_', '.')}({parameters})",
+            IrFunctionRole.Method => $"method: {name}({parameters})",
+            IrFunctionRole.Constructor => $"constructor: {name}({parameters})",
+            IrFunctionRole.Adapter => $"adapter: {name}({parameters})",
             _ => $"function: {signature}"
         };
         if (isTypeMember)
         {
-            var type = name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal)
-                ? name[NativeObjectMetadata.MethodPrefix.Length..].Split('_')[0]
-                : name.StartsWith("__sushi_new_", StringComparison.Ordinal)
-                    ? name["__sushi_new_".Length..].Split('_')[0]
-                    : name["__sushi_adapter_".Length..].Split('_')[0];
+            var type = function.OwnerTypeId?.StartsWith("type:", StringComparison.Ordinal) == true
+                ? function.OwnerTypeId["type:".Length..]
+                : name;
             if (_commentedTypes.Add(type))
             {
                 WriteLine("");
@@ -3325,27 +3325,13 @@ __sushi_native_obj_to_json() {
     private bool TryGetGeneratedEnumValue(IrExpression? initializer, out string type, out string value)
     {
         if (initializer is IrConstructionExpression construction &&
-            construction.ConstructorName.StartsWith("__sushi_new_", StringComparison.Ordinal))
+            construction.TypeSymbolId is { } typeId &&
+            typeId.StartsWith("type:", StringComparison.Ordinal) &&
+            construction.EnumValueName is { } enumValue)
         {
-            var suffix = construction.ConstructorName["__sushi_new_".Length..];
-            var enumType = _enumTypeNames
-                .Where(candidate => suffix.StartsWith(candidate + "_", StringComparison.Ordinal))
-                .OrderByDescending(candidate => candidate.Length)
-                .FirstOrDefault();
-            if (enumType != null)
-            {
-                type = enumType;
-                value = suffix[(enumType.Length + 1)..];
-                return true;
-            }
-            enumType = _enumTypeNames.FirstOrDefault(candidate =>
-                string.Equals(suffix, candidate, StringComparison.Ordinal));
-            if (enumType != null)
-            {
-                type = enumType;
-                value = "";
-                return true;
-            }
+            type = typeId["type:".Length..];
+            value = enumValue;
+            return true;
         }
         type = "";
         value = "";
@@ -3356,7 +3342,7 @@ __sushi_native_obj_to_json() {
         block.Statements.LastOrDefault() is IrReturnStatement;
 
     private static bool FunctionReturnsValue(IrFunctionDeclarationStatement function) =>
-        function.Name.StartsWith("__sushi_new_", StringComparison.Ordinal) ||
+        function.Role == IrFunctionRole.Constructor ||
         IsNamedObjectType(function.ReturnType) ||
         ContainsValueReturn(function.Body);
 
@@ -3383,7 +3369,7 @@ __sushi_native_obj_to_json() {
 
     private void EmitReturn(IrReturnStatement statement, bool inFunction)
     {
-        if (inFunction && _currentFunctionName?.StartsWith("__sushi_new_", StringComparison.Ordinal) == true)
+        if (inFunction && _currentFunctionRole == IrFunctionRole.Constructor)
         {
             if (_zshMode)
             {
@@ -4861,6 +4847,7 @@ __sushi_native_obj_to_json() {
     {
         return expression switch
         {
+            IrIdentifierExpression identifier when identifier.StaticType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true => true,
             IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
             IrIdentifierExpression identifier => !_knownFloatVariables.Contains(SanitizeVariableName(identifier.Name)) &&
                                                  _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
@@ -4883,6 +4870,7 @@ __sushi_native_obj_to_json() {
     {
         return expression switch
         {
+            IrIdentifierExpression identifier when identifier.StaticType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true => true,
             IrLiteralExpression literal => literal.Value is float or double or decimal,
             IrIdentifierExpression identifier => _knownFloatVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyFloat(unary.Operand),
