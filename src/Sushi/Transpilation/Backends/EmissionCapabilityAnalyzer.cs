@@ -14,6 +14,7 @@ internal static class EmissionCapabilityAnalyzer
         IrVariableDeclarationStatement variable => variable.Initializer != null && UsesFsGlob(variable.Initializer),
         IrExpressionStatement expression => UsesFsGlob(expression.Expression),
         IrIfStatement conditional => UsesFsGlob(conditional.Condition) || UsesFsGlob(conditional.ThenBlock) || (conditional.ElseBlock != null && UsesFsGlob(conditional.ElseBlock)),
+        IrSwitchStatement selection => UsesFsGlob(selection.Value) || selection.Cases.Any(@case => @case.Matches.Any(UsesFsGlob) || UsesFsGlob(@case.Body)) || (selection.DefaultBody != null && UsesFsGlob(selection.DefaultBody)),
         IrWhileStatement loop => UsesFsGlob(loop.Condition) || UsesFsGlob(loop.Body),
         IrForStatement loop => (loop.Initializer != null && UsesFsGlob(loop.Initializer)) || (loop.Condition != null && UsesFsGlob(loop.Condition)) || (loop.Increment != null && UsesFsGlob(loop.Increment)) || UsesFsGlob(loop.Body),
         IrDoWhileStatement loop => UsesFsGlob(loop.Body) || UsesFsGlob(loop.Condition),

@@ -1568,7 +1568,7 @@ public class Parser
             throw new Exception($"Switch expressions require a default arm at {start.Line}:{start.Column}");
         var expression = fallback;
         for (var index = arms.Count - 1; index >= 0; index--)
-            expression = new ConditionalExpressionNode(arms[index].Condition, arms[index].Result, expression, start.Line, start.Column);
+            expression = new ConditionalExpressionNode(arms[index].Condition, arms[index].Result, expression, start.Line, start.Column, isSwitchExpression: true);
         return expression;
     }
 

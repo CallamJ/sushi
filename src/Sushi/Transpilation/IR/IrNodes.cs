@@ -85,6 +85,30 @@ public sealed class IrIfStatement : IrStatement
     }
 }
 
+public sealed class IrSwitchCase
+{
+    public List<IrExpression> Matches { get; }
+    public IrBlockStatement Body { get; }
+    public IrSwitchCase(IEnumerable<IrExpression> matches, IrBlockStatement body)
+    {
+        Matches = matches.ToList();
+        Body = body;
+    }
+}
+
+public sealed class IrSwitchStatement : IrStatement
+{
+    public IrExpression Value { get; }
+    public List<IrSwitchCase> Cases { get; }
+    public IrBlockStatement? DefaultBody { get; }
+    public IrSwitchStatement(IrExpression value, IEnumerable<IrSwitchCase> cases, IrBlockStatement? defaultBody)
+    {
+        Value = value;
+        Cases = cases.ToList();
+        DefaultBody = defaultBody;
+    }
+}
+
 public sealed class IrWhileStatement : IrStatement
 {
     public IrExpression Condition { get; }
@@ -625,12 +649,14 @@ public sealed class IrConditionalExpression : IrExpression
     public IrExpression Condition { get; }
     public IrExpression TrueExpression { get; }
     public IrExpression FalseExpression { get; }
+    public bool IsSwitchExpression { get; }
 
-    public IrConditionalExpression(IrExpression condition, IrExpression trueExpression, IrExpression falseExpression)
+    public IrConditionalExpression(IrExpression condition, IrExpression trueExpression, IrExpression falseExpression, bool isSwitchExpression = false)
     {
         Condition = condition;
         TrueExpression = trueExpression;
         FalseExpression = falseExpression;
+        IsSwitchExpression = isSwitchExpression;
     }
 }
 

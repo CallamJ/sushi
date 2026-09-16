@@ -10,6 +10,68 @@ using Xunit;
 
 public class EmitterTests
 {
+    [Fact]
+    public void PowerShellEmitter_EmitsNativeSwitchStatement()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrSwitchStatement(
+                new IrIdentifierExpression("suffix"),
+                new[]
+                {
+                    new IrSwitchCase(new IrExpression[] { new IrLiteralExpression("K") },
+                        new IrBlockStatement(new IrStatement[] { new IrVariableDeclarationStatement("selected", new IrLiteralExpression(1000)) }))
+                },
+                new IrBlockStatement())
+        });
+        var diagnostics = new List<Diagnostic>();
+        var script = new PowerShellEmitter().Emit(program, new EmitContext("switch.sushi", diagnostics));
+
+        Assert.Contains("switch ($suffix)", script);
+        Assert.Contains("'K' {", script);
+        Assert.DoesNotContain("if (", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void PowerShellEmitter_EmitsNativeSwitchExpression()
+    {
+        var value = new IrIdentifierExpression("suffix");
+        var expression = new IrConditionalExpression(
+            new IrBinaryExpression(value, "==", new IrLiteralExpression("K")),
+            new IrLiteralExpression(1000),
+            new IrLiteralExpression(1),
+            isSwitchExpression: true);
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("mult", expression)
+        });
+        var diagnostics = new List<Diagnostic>();
+        var script = new PowerShellEmitter().Emit(program, new EmitContext("switch-expression.sushi", diagnostics));
+
+        Assert.Contains("$(switch ($suffix)", script);
+        Assert.Contains("'K' {", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void BashEmitter_LowersSwitchToPortableConditions()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrSwitchStatement(
+                new IrIdentifierExpression("suffix"),
+                new[] { new IrSwitchCase(new IrExpression[] { new IrLiteralExpression("K") }, new IrBlockStatement()) },
+                new IrBlockStatement())
+        });
+        var diagnostics = new List<Diagnostic>();
+        var script = new BashEmitter().Emit(program, new EmitContext("switch.sushi", diagnostics));
+
+        Assert.Contains("if", script);
+        Assert.DoesNotContain("switch (", script);
+        Assert.Empty(diagnostics);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

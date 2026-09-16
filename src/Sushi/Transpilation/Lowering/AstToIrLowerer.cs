@@ -637,35 +637,12 @@ public sealed class AstToIrLowerer
 
     private IrStatement LowerSwitchStatement(SwitchStatementNode node)
     {
-        var switchTemp = CreateTempName("switch_value");
-        var loweredCases = node.Cases
-            .Select(c => (Case: c, Match: LowerCaseMatchExpression(new IrIdentifierExpression(switchTemp), c)))
-            .ToList();
-
-        IrBlockStatement? nextElse = node.DefaultCase != null ? LowerBlock(node.DefaultCase) : null;
-        for (var i = loweredCases.Count - 1; i >= 0; i--)
-        {
-            var current = loweredCases[i];
-            nextElse = new IrBlockStatement(new IrStatement[]
-            {
-                new IrIfStatement(
-                    current.Match,
-                    LowerBlock(current.Case.Body),
-                    nextElse)
-            });
-        }
-
-        var statements = new List<IrStatement>
-        {
-            new IrVariableDeclarationStatement(switchTemp, LowerExpression(node.Value))
-        };
-
-        if (nextElse != null)
-        {
-            statements.AddRange(nextElse.Statements);
-        }
-
-        return new IrBlockStatement(statements);
+        var value = LowerExpression(node.Value);
+        var cases = node.Cases.Select(@case => new IrSwitchCase(
+            @case.MatchValues.Select(LowerExpression),
+            LowerBlock(@case.Body))).ToList();
+        return new IrSwitchStatement(value, cases,
+            node.DefaultCase != null ? LowerBlock(node.DefaultCase) : null);
     }
 
     private IrExpression LowerCaseMatchExpression(IrExpression switchValue, SwitchCaseNode @case)
@@ -761,7 +738,7 @@ public sealed class AstToIrLowerer
             ConditionalExpressionNode conditional => new IrConditionalExpression(
                 LowerConditionalCondition(conditional),
                 LowerExpression(conditional.TrueExpression),
-                LowerExpression(conditional.FalseExpression)),
+                LowerExpression(conditional.FalseExpression), conditional.IsSwitchExpression),
             ArrayLiteralExpressionNode array => new IrArrayLiteralExpression(array.Elements.Select(LowerExpression)),
             ObjectLiteralExpressionNode obj => LowerObjectLiteral(obj),
             InterpolatedStringExpressionNode interpolated => LowerInterpolatedString(interpolated),

@@ -68,17 +68,19 @@ public class ConditionalExpressionNode : ExpressionNode
     public ExpressionNode Condition { get; }
     public ExpressionNode TrueExpression { get; }
     public ExpressionNode FalseExpression { get; }
+    public bool IsSwitchExpression { get; }
     
     public ConditionalExpressionNode(
         ExpressionNode condition,
         ExpressionNode trueExpr,
         ExpressionNode falseExpr,
         int line,
-        int column) : base(line, column)
+        int column, bool isSwitchExpression = false) : base(line, column)
     {
         Condition = condition;
         TrueExpression = trueExpr;
         FalseExpression = falseExpr;
+        IsSwitchExpression = isSwitchExpression;
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);

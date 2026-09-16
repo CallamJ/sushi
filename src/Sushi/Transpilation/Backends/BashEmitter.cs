@@ -2911,6 +2911,11 @@ __sushi_native_obj_to_json() {
                 EmitIfStatement(ifStatement, inFunction);
                 break;
 
+            case IrSwitchStatement switchStatement:
+                EnsureTopLevelSection(inFunction);
+                EmitSwitchAsConditions(switchStatement, inFunction);
+                break;
+
             case IrWhileStatement whileStatement:
                 EmitWhileStatement(whileStatement, inFunction);
                 break;
@@ -2966,6 +2971,21 @@ __sushi_native_obj_to_json() {
         }
 
         WriteLine("fi");
+    }
+
+    private void EmitSwitchAsConditions(IrSwitchStatement statement, bool inFunction)
+    {
+        var temp = $"__sushi_switch_{++_valueTempId}";
+        WriteLine($"{(inFunction ? "local " : "")}{temp}={EmitValueExpression(statement.Value)}");
+        IrBlockStatement? next = statement.DefaultBody;
+        for (var i = statement.Cases.Count - 1; i >= 0; i--)
+        {
+            var matches = statement.Cases[i].Matches
+                .Select(match => (IrExpression)new IrBinaryExpression(new IrIdentifierExpression(temp), "==", match))
+                .Aggregate((left, right) => new IrBinaryExpression(left, "||", right));
+            next = new IrBlockStatement(new IrStatement[] { new IrIfStatement(matches, statement.Cases[i].Body, next) });
+        }
+        if (next != null) EmitStatement(next, inFunction);
     }
 
     private void EmitWhileStatement(IrWhileStatement statement, bool inFunction)

@@ -1181,6 +1181,10 @@ function __sushi_call_method {
                 EmitIfStatement(ifStatement);
                 break;
 
+            case IrSwitchStatement switchStatement:
+                EmitSwitchStatement(switchStatement);
+                break;
+
             case IrWhileStatement whileStatement:
                 EmitWhileStatement(whileStatement);
                 break;
@@ -1257,6 +1261,34 @@ function __sushi_call_method {
             _indent--;
             WriteLine("}");
         }
+    }
+
+    private void EmitSwitchStatement(IrSwitchStatement statement)
+    {
+        WriteLine($"switch ({EmitValueExpression(statement.Value)}) {{");
+        _indent++;
+        foreach (var @case in statement.Cases)
+        {
+            foreach (var match in @case.Matches)
+            {
+                WriteLine($"{EmitValueExpression(match)} {{");
+                _indent++;
+                EmitStatement(@case.Body);
+                WriteLine("break");
+                _indent--;
+                WriteLine("}");
+            }
+        }
+        if (statement.DefaultBody != null)
+        {
+            WriteLine("default {");
+            _indent++;
+            EmitStatement(statement.DefaultBody);
+            _indent--;
+            WriteLine("}");
+        }
+        _indent--;
+        WriteLine("}");
     }
 
     private void EmitWhileStatement(IrWhileStatement statement)
@@ -1668,6 +1700,7 @@ function __sushi_call_method {
             IrTruthinessExpression truthiness => EmitTruthinessExpression(truthiness),
             IrUnaryExpression unary when unary.Operator is "-" or "+" =>
                 $"({unary.Operator}{EmitValueExpression(unary.Operand)})",
+            IrConditionalExpression conditional when conditional.IsSwitchExpression => EmitSwitchExpression(conditional),
             IrConditionalExpression conditional =>
                 $"$(if ({EmitConditionExpression(conditional.Condition)}) {{ {EmitValueExpression(conditional.TrueExpression)} }} else {{ {EmitValueExpression(conditional.FalseExpression)} }})",
             IrBinaryExpression binary when binary.Operator == "+" =>
@@ -1691,6 +1724,41 @@ function __sushi_call_method {
                 $"$(({EmitValueExpression(assignment.Target)}).{SanitizeMemberName(assignment.MemberName)} {assignment.Operator} {EmitValueExpression(assignment.Value)})",
             _ => "$null"
         };
+    }
+
+    private string EmitSwitchExpression(IrConditionalExpression root)
+    {
+        var arms = new List<(IrExpression Value, IrExpression Result)>();
+        IrExpression current = root;
+        while (current is IrConditionalExpression conditional && conditional.IsSwitchExpression &&
+               TryGetSwitchComparison(conditional.Condition, out var comparison))
+        {
+            arms.Add((comparison.Right, conditional.TrueExpression));
+            current = conditional.FalseExpression;
+        }
+        if (arms.Count == 0)
+            return $"$(if ({EmitConditionExpression(root.Condition)}) {{ {EmitValueExpression(root.TrueExpression)} }} else {{ {EmitValueExpression(root.FalseExpression)} }})";
+        TryGetSwitchComparison(root.Condition, out var firstComparison);
+        var value = firstComparison is not null ? EmitValueExpression(firstComparison.Left) : "$null";
+        var builder = new System.Text.StringBuilder($"$(switch ({value}) {{ ");
+        foreach (var arm in arms)
+            builder.Append($"{EmitValueExpression(arm.Value)} {{ {EmitValueExpression(arm.Result)}; break }} ");
+        var fallback = current is IrConditionalExpression fallbackConditional
+            ? $"$(if ({EmitConditionExpression(fallbackConditional.Condition)}) {{ {EmitValueExpression(fallbackConditional.TrueExpression)} }} else {{ {EmitValueExpression(fallbackConditional.FalseExpression)} }})"
+            : EmitValueExpression(current);
+        builder.Append($"default {{ {fallback} }} }})");
+        return builder.ToString();
+    }
+
+    private static bool TryGetSwitchComparison(IrExpression condition, out IrBinaryExpression? comparison)
+    {
+        comparison = condition switch
+        {
+            IrBinaryExpression { Operator: "==" } binary => binary,
+            IrTruthinessExpression { Operand: IrBinaryExpression { Operator: "==" } binary } => binary,
+            _ => null
+        };
+        return comparison is not null;
     }
 
     private string EmitNativeStringSlice(IrCallExpression slice)

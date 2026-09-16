@@ -7,6 +7,21 @@ using Xunit;
 public class TranspilerTests
 {
     [Fact]
+    public void Transpile_PowerShellSwitchExpression_UsesNativeSwitch()
+    {
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = "string suffix = \"K\"\nvar mult = switch (suffix) { \"K\" -> 1000, default -> 1 }",
+            SourcePath = "switch-expression.sushi",
+            TargetLanguage = TargetLanguage.Powershell51
+        });
+
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+        Assert.Contains("switch ($suffix)", result.EmittedCode);
+        Assert.DoesNotContain("$(if (", result.EmittedCode);
+    }
+
+    [Fact]
     public void Transpile_PureEnumComparison_PrintsWithoutTemporaryOrStatusWrapper()
     {
         var result = new Transpiler().Transpile(new TranspileRequest
