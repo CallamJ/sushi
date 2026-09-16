@@ -32,6 +32,11 @@ internal sealed class TargetNameAllocator
         }
     }
 
+    public TargetNameAllocator(PosixDialect dialect)
+        : this(dialect.Language, dialect.IsZsh)
+    {
+    }
+
     public string Source(TargetNameKind kind, string sourceName)
     {
         var key = (kind, sourceName);

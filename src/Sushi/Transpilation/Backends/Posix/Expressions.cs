@@ -7,9 +7,9 @@ using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
 
-namespace Sushi.Transpilation.Backends.Bash;
+namespace Sushi.Transpilation.Backends.Posix;
 
-public sealed partial class BashEmitter
+public sealed partial class PosixEmitter
 {
     private string PrepareValue(IrExpression expression, bool inFunction)
     {
@@ -37,10 +37,10 @@ public sealed partial class BashEmitter
             {
                 var result = DeclareUninitializedTemp(inFunction);
                 var entries = obj.Properties.Select(property =>
-                    $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}").ToList();
+                    $"[{Escape.PosixSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}").ToList();
                 EmitAssociativeObject(result, entries, inFunction ? "local " : "declare ", false);
                 _nativeObjectVariables.Add(result);
-                return Escape.BashSingleQuoted(result);
+                return Escape.PosixSingleQuoted(result);
             }
 
             case IrMemberAccessExpression member:
@@ -62,7 +62,7 @@ public sealed partial class BashEmitter
                 {
                     var sourceName = SanitizeVariableName(directIdentifier.Name);
                     var directName = ResolveNativeObjectName(sourceName);
-                    if (_zshMode && _zshReadOnlyObjectParameters.Contains(sourceName) &&
+                    if (_dialect.IsZsh && _zshReadOnlyObjectParameters.Contains(sourceName) &&
                         _zshObjectParameterNames.TryGetValue(sourceName, out var readOnlyReference))
                     {
                         return "\"${${(@P)" + readOnlyReference + "}[" + EmitObjectSubscript(member.MemberName) + "]-}\"";
@@ -171,7 +171,7 @@ public sealed partial class BashEmitter
                     else if (argument is IrConstructionExpression construction &&
                              parameter != null && IsNativeObjectType(parameter.DeclaredType))
                     {
-                        arguments.Add(Escape.BashSingleQuoted(PrepareConstructionReference(construction, inFunction)));
+                        arguments.Add(Escape.PosixSingleQuoted(PrepareConstructionReference(construction, inFunction)));
                     }
                     else if (argument is IrIdentifierExpression aggregateIdentifier &&
                              parameter?.DeclaredType.Kind == IrTypeKind.Structural)
@@ -187,7 +187,7 @@ public sealed partial class BashEmitter
                     else if (argument is IrIdentifierExpression aggregateIdentifier2 &&
                              parameter != null && (parameter.DeclaredType.Name == "array" || IsNativeObjectType(parameter.DeclaredType)))
                     {
-                        arguments.Add(Escape.BashSingleQuoted(ResolveNativeObjectName(SanitizeVariableName(aggregateIdentifier2.Name))));
+                        arguments.Add(Escape.PosixSingleQuoted(ResolveNativeObjectName(SanitizeVariableName(aggregateIdentifier2.Name))));
                     }
                     else
                     {
@@ -282,7 +282,7 @@ public sealed partial class BashEmitter
     private void EmitBooleanOutput(IrExpression expression)
     {
         var condition = PrepareCondition(expression, inFunction: true);
-        if (_zshMode)
+        if (_dialect.IsZsh)
         {
             WriteLine($"if {condition}; then : ${{(P){_currentOutputName}::='true'}}; else : ${{(P){_currentOutputName}::='false'}}; fi");
         }
@@ -303,11 +303,11 @@ public sealed partial class BashEmitter
     private void EmitNativeObject(string name, IrObjectLiteralExpression obj, bool inFunction)
     {
         var properties = MetadataProperties(obj.Properties);
-        var entries = (_zshMode
+        var entries = (_dialect.IsZsh
             ? properties.Select(property =>
-                $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
+                $"[{Escape.PosixSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
             : properties.Select(property =>
-                $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
+                $"[{Escape.PosixSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
         EmitAssociativeObject(name, entries, inFunction ? "local " : "declare ", false);
         _nativeObjectVariables.Add(name);
     }
@@ -448,10 +448,10 @@ public sealed partial class BashEmitter
         switch (expression)
         {
             case IrLiteralExpression { Value: string text }:
-                value = EscapeBashDoubleQuotedContent(text);
+                value = EscapePosixDoubleQuotedContent(text);
                 return true;
             case IrLiteralExpression { Value: char character }:
-                value = EscapeBashDoubleQuotedContent(character.ToString());
+                value = EscapePosixDoubleQuotedContent(character.ToString());
                 return true;
             case IrIdentifierExpression identifier:
                 value = _positionalParameterReferences.TryGetValue(SanitizeVariableName(identifier.Name), out var positional)
@@ -462,7 +462,7 @@ public sealed partial class BashEmitter
             {
                 var targetName = ResolveNativeObjectName(SanitizeVariableName(target.Name));
                 var sourceName = SanitizeVariableName(target.Name);
-                if (_zshMode && _zshReadOnlyObjectParameters.Contains(sourceName) &&
+                if (_dialect.IsZsh && _zshReadOnlyObjectParameters.Contains(sourceName) &&
                     _zshObjectParameterNames.TryGetValue(sourceName, out var readOnlyReference))
                 {
                     value = $"${{${{(@P){readOnlyReference}}}[{EmitObjectSubscript(member.MemberName)}]-}}";
@@ -511,14 +511,14 @@ public sealed partial class BashEmitter
         _ => false
     };
 
-    private static string EscapeBashDoubleQuotedContent(string value) => value
+    private static string EscapePosixDoubleQuotedContent(string value) => value
         .Replace("\\", "\\\\", StringComparison.Ordinal)
         .Replace("\"", "\\\"", StringComparison.Ordinal)
         .Replace("$", "\\$", StringComparison.Ordinal)
         .Replace("`", "\\`", StringComparison.Ordinal);
 
     private string EmitObjectSubscript(string memberName) =>
-        _zshMode ? memberName : Escape.BashSingleQuoted(memberName);
+        _dialect.IsZsh ? memberName : Escape.PosixSingleQuoted(memberName);
 
     private string PrepareCondition(IrExpression expression, bool inFunction)
     {
@@ -659,10 +659,10 @@ public sealed partial class BashEmitter
                     WriteLine($"{result}=\"${{{result}%\"${{{result}##*[![:space:]]}}\"}}\"");
                     break;
                 case IntrinsicId.StringLower:
-                    WriteLine(_zshMode ? $"{result}=\"${{(L){result}}}\"" : $"{result}=\"${{{result},,}}\"");
+                    WriteLine(_dialect.IsZsh ? $"{result}=\"${{(L){result}}}\"" : $"{result}=\"${{{result},,}}\"");
                     break;
                 case IntrinsicId.StringUpper:
-                    WriteLine(_zshMode ? $"{result}=\"${{(U){result}}}\"" : $"{result}=\"${{{result}^^}}\"");
+                    WriteLine(_dialect.IsZsh ? $"{result}=\"${{(U){result}}}\"" : $"{result}=\"${{{result}^^}}\"");
                     break;
                 case IntrinsicId.StringReplace:
                 {
@@ -937,9 +937,9 @@ public sealed partial class BashEmitter
                 when _nativeObjectVariables.Contains(SanitizeVariableName(target.Name)) =>
                 $"\"${{{ResolveNativeObjectName(SanitizeVariableName(target.Name))}[{EmitObjectSubscript(member.MemberName)}]-}}\"",
             IrIdentifierExpression identifier => EmitVariableValue(identifier.Name),
-            IrLiteralExpression literal when literal.Value is string str => Escape.BashSingleQuoted(str),
-            IrLiteralExpression literal when literal.Value is char ch => Escape.BashSingleQuoted(ch.ToString()),
-            IrLiteralExpression literal when literal.Value is bool boolean => Escape.BashSingleQuoted(boolean ? "true" : "false"),
+            IrLiteralExpression literal when literal.Value is string str => Escape.PosixSingleQuoted(str),
+            IrLiteralExpression literal when literal.Value is char ch => Escape.PosixSingleQuoted(ch.ToString()),
+            IrLiteralExpression literal when literal.Value is bool boolean => Escape.PosixSingleQuoted(boolean ? "true" : "false"),
             IrLiteralExpression literal when literal.Value == null => "''",
             IrLiteralExpression literal => literal.Value?.ToString() ?? "''",
             _ => EmitValueExpression(expression)
@@ -1059,7 +1059,7 @@ public sealed partial class BashEmitter
 
     private string EmitMemberValueExpression(IrMemberAccessExpression member)
     {
-        if (_zshMode && member.Target is IrIdentifierExpression identifier)
+        if (_dialect.IsZsh && member.Target is IrIdentifierExpression identifier)
         {
             var sourceName = SanitizeVariableName(identifier.Name);
             if (_zshReadOnlyObjectParameters.Contains(sourceName) &&
@@ -1115,10 +1115,10 @@ public sealed partial class BashEmitter
     {
         var name = DeclareUninitializedTemp(inFunction: _currentFunctionName != null);
         var entries = expression.Properties.Select(property =>
-            $"[{Escape.BashSingleQuoted(property.Name)}]={EmitValueExpression(property.Value)}").ToList();
+            $"[{Escape.PosixSingleQuoted(property.Name)}]={EmitValueExpression(property.Value)}").ToList();
         EmitAssociativeObject(name, entries, _currentFunctionName != null ? "local " : "declare ", false);
         _nativeObjectVariables.Add(name);
-        return Escape.BashSingleQuoted(name);
+        return Escape.PosixSingleQuoted(name);
     }
 
     private void EmitVarargsContractCheck(
@@ -1248,7 +1248,7 @@ public sealed partial class BashEmitter
 
     private string EmitCheckedInteger(string valueExpression, string context)
     {
-        return $"$(__sushi_require_integer {valueExpression} {Escape.BashSingleQuoted(context)})";
+        return $"$(__sushi_require_integer {valueExpression} {Escape.PosixSingleQuoted(context)})";
     }
 
     private string EmitLiteral(object? value)
@@ -1256,11 +1256,11 @@ public sealed partial class BashEmitter
         return value switch
         {
             null => "''",
-            string str => Escape.BashSingleQuoted(str),
-            char ch => Escape.BashSingleQuoted(ch.ToString()),
-            bool boolean => Escape.BashSingleQuoted(boolean ? "true" : "false"),
+            string str => Escape.PosixSingleQuoted(str),
+            char ch => Escape.PosixSingleQuoted(ch.ToString()),
+            bool boolean => Escape.PosixSingleQuoted(boolean ? "true" : "false"),
             int or long or double or float or decimal => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "0",
-            _ => Escape.BashSingleQuoted(value.ToString() ?? "")
+            _ => Escape.PosixSingleQuoted(value.ToString() ?? "")
         };
     }
 
@@ -1277,7 +1277,7 @@ public sealed partial class BashEmitter
         _builder.Append('\n');
     }
 
-    private static string PrettyPrintBash(string source)
+    private static string PrettyPrintPosix(string source)
     {
         var output = new StringBuilder(source.Length + 256);
         foreach (var line in source.Replace("\r\n", "\n").Split('\n'))

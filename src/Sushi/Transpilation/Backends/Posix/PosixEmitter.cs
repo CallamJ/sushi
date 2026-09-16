@@ -1,4 +1,4 @@
-namespace Sushi.Transpilation.Backends.Bash;
+namespace Sushi.Transpilation.Backends.Posix;
 
 using System.Globalization;
 using System.Linq;
@@ -9,13 +9,13 @@ using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
 
-public sealed partial class BashEmitter : IBackendEmitter
+public sealed partial class PosixEmitter : IBackendEmitter
 {
     private const string UnsupportedEmitCode = "SUSHI1100";
     private const string AmbiguousShapeCode = "SUSHI1030";
 
     private readonly StringBuilder _builder = new();
-    private readonly bool _zshMode;
+    private readonly PosixDialect _dialect;
     private EmitContext _context = null!;
     private int _indent;
     private int _valueTempId;
@@ -47,20 +47,12 @@ public sealed partial class BashEmitter : IBackendEmitter
     private Dictionary<string, int> _positionalParameterReferences = new(StringComparer.Ordinal);
     private bool _nativeGlobHelper;
 
-    public BashEmitter()
-    {
-        _zshMode = false;
-    }
-
-    public BashEmitter(bool zshMode)
-    {
-        _zshMode = zshMode;
-    }
+    public PosixEmitter(PosixDialect? dialect = null) => _dialect = dialect ?? PosixDialect.Bash;
 
     public string Emit(IrProgram program, EmitContext context)
     {
         _builder.Clear();
-        _names = new TargetNameAllocator(_zshMode ? TargetLanguage.Zsh : TargetLanguage.Bash, _zshMode);
+        _names = new TargetNameAllocator(_dialect);
         _generatedFunctionNames.Clear();
         _context = context;
         _indent = 0;
@@ -101,12 +93,12 @@ public sealed partial class BashEmitter : IBackendEmitter
             .Select(function => function.Name)
             .ToHashSet(StringComparer.Ordinal);
 
-        WriteLine(_zshMode ? "#!/usr/bin/env zsh" : "#!/usr/bin/env bash");
-        if (_zshMode)
+        WriteLine(_dialect.Shebang);
+        if (_dialect.IsZsh)
         {
             WriteLine("set -eu");
             WriteLine("set -o pipefail");
-            if (EmissionCapabilityAnalyzer.UsesArrays(program))
+            if (_dialect.SupportsKshArrays && EmissionCapabilityAnalyzer.UsesArrays(program))
             {
                 WriteLine("setopt ksharrays");
     }
@@ -132,7 +124,7 @@ public sealed partial class BashEmitter : IBackendEmitter
             EmitStatement(statement, inFunction: false);
         }
 
-        return PrettyPrintBash(_builder.ToString());
+        return PrettyPrintPosix(_builder.ToString());
     }
 
     private static bool HasFsGlobImport(IrProgram program)
@@ -144,7 +136,7 @@ public sealed partial class BashEmitter : IBackendEmitter
 
     private void EmitNativeGlobHelper()
     {
-        if (_zshMode)
+        if (_dialect.IsZsh)
         {
             AppendStdlibHelperBlock("""
 __sushi_fs_glob_into() {

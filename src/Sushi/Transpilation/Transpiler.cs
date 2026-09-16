@@ -3,7 +3,7 @@ namespace Sushi.Transpilation;
 using Sushi.Application;
 using Sushi.Build;
 using Sushi.Transpilation.Backends;
-using Sushi.Transpilation.Backends.Bash;
+using Sushi.Transpilation.Backends.Posix;
 using Sushi.Transpilation.Backends.PowerShell;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Lowering;
@@ -142,8 +142,8 @@ public sealed class Transpiler
     {
         return targetLanguage switch
         {
-            TargetLanguage.Bash => new BashEmitter(),
-            TargetLanguage.Zsh => new BashEmitter(zshMode: true),
+            TargetLanguage.Bash => new PosixEmitter(),
+            TargetLanguage.Zsh => new PosixEmitter(PosixDialect.Zsh),
             TargetLanguage.Powershell51 => new PowerShellEmitter(),
             _ => throw new ArgumentOutOfRangeException(nameof(targetLanguage), targetLanguage, "Unsupported target")
         };

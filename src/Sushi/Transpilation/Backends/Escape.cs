@@ -2,7 +2,7 @@ namespace Sushi.Transpilation.Backends;
 
 public static class Escape
 {
-    public static string BashSingleQuoted(string value)
+    public static string PosixSingleQuoted(string value)
     {
         return $"'{value.Replace("'", "'\"'\"'")}'";
     }

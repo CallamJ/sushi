@@ -7,9 +7,9 @@ using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
 
-namespace Sushi.Transpilation.Backends.Bash;
+namespace Sushi.Transpilation.Backends.Posix;
 
-public sealed partial class BashEmitter
+public sealed partial class PosixEmitter
 {
     private void EmitStatement(IrStatement statement, bool inFunction)
     {
@@ -77,7 +77,7 @@ public sealed partial class BashEmitter
                 {
                     WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
                     var arguments = constructor.Arguments.Select(argument => PrepareValue(argument.Value, inFunction));
-                    WriteLine($"{SanitizeFunctionName(constructor.ConstructorName)} {Escape.BashSingleQuoted(name)} {string.Join(" ", arguments)}");
+                    WriteLine($"{SanitizeFunctionName(constructor.ConstructorName)} {Escape.PosixSingleQuoted(name)} {string.Join(" ", arguments)}");
                     _nativeObjectVariables.Add(name);
                     break;
                 }
@@ -100,13 +100,13 @@ public sealed partial class BashEmitter
                     _nativeObjectVariables.Contains(SanitizeVariableName(objectAlias.Name)))
                 {
                     var source = ResolveNativeObjectName(SanitizeVariableName(objectAlias.Name));
-                    if (_zshMode)
+                    if (_dialect.IsZsh)
                     {
                         WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=( \"${{(@kv){source}}}\" )");
                         _nativeObjectAliases[name] = source;
                     }
                     else
-                        WriteLine($"{(inFunction ? "local " : "declare ")}-n {name}={Escape.BashSingleQuoted(source)}");
+                        WriteLine($"{(inFunction ? "local " : "declare ")}-n {name}={Escape.PosixSingleQuoted(source)}");
                     _nativeObjectAliases[name] = source;
                     _nativeObjectVariables.Add(name);
                     break;
@@ -138,11 +138,11 @@ public sealed partial class BashEmitter
                 if (initializer is IrObjectLiteralExpression obj)
                 {
                     var properties = MetadataProperties(obj.Properties);
-                    var entries = (_zshMode
+                    var entries = (_dialect.IsZsh
                         ? properties.Select(property =>
-                            $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
+                            $"[{Escape.PosixSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
                         : properties.Select(property =>
-                            $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
+                            $"[{Escape.PosixSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")).ToList();
                     EmitAssociativeObject(name, entries, inFunction ? "local " : "declare ",
                         name == "this" && _currentFunctionRole == IrFunctionRole.Constructor);
                     _nativeObjectVariables.Add(name);
@@ -411,7 +411,7 @@ public sealed partial class BashEmitter
         var argIndex = _currentFunctionReturnsValue ? 2 : 1;
         if (isConstructor)
         {
-            if (_zshMode)
+            if (_dialect.IsZsh)
             {
                 WriteLine("local this_name=\"$1\"");
                 WriteLine("local -A this=()");
@@ -424,14 +424,14 @@ public sealed partial class BashEmitter
         }
         else if (returnsObject)
         {
-            if (_zshMode)
+            if (_dialect.IsZsh)
                 WriteLine($"local {_currentOutputName}=\"$1\"");
             else
                 WriteLine($"local -n {_currentOutputName}=\"$1\"");
         }
         else if (_currentFunctionReturnsValue)
         {
-            WriteLine(_zshMode
+            WriteLine(_dialect.IsZsh
                 ? $"local {_currentOutputName}=\"$1\""
                 : $"local -n {_currentOutputName}=\"$1\"");
         }
@@ -466,7 +466,7 @@ public sealed partial class BashEmitter
                 }
                 else if (parameter.DeclaredType.Name == "array" || IsNativeObjectType(parameter.DeclaredType))
                 {
-                    if (_zshMode)
+                    if (_dialect.IsZsh)
                     {
                         var referenceName = $"{param}_name";
                         WriteLine($"local {referenceName}=\"${argIndex}\"");
@@ -688,7 +688,7 @@ public sealed partial class BashEmitter
     {
         if (inFunction && _currentFunctionRole == IrFunctionRole.Constructor)
         {
-            if (_zshMode)
+            if (_dialect.IsZsh)
             {
                 WriteLine("typeset -gA $this_name");
                 WriteLine("set -A $this_name \"${(@kv)this}\"");
@@ -708,7 +708,7 @@ public sealed partial class BashEmitter
             };
             if (source.Length > 0)
             {
-                if (_zshMode)
+                if (_dialect.IsZsh)
                 {
                     WriteLine($"typeset -gA ${{{_currentOutputName}}}");
                     WriteLine($"set -A ${{{_currentOutputName}}} \"${{(@kv){source}}}\"");

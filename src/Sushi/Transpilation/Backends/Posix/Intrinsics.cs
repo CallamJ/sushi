@@ -7,9 +7,9 @@ using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
 
-namespace Sushi.Transpilation.Backends.Bash;
+namespace Sushi.Transpilation.Backends.Posix;
 
-public sealed partial class BashEmitter
+public sealed partial class PosixEmitter
 {
     private string EmitIntrinsicCommand(IrIntrinsicCallExpression call)
     {

@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using Sushi.Transpilation;
 using Sushi.Transpilation.Backends;
-using Sushi.Transpilation.Backends.Bash;
+using Sushi.Transpilation.Backends.Posix;
 using Sushi.Transpilation.Backends.PowerShell;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
@@ -58,7 +58,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_LowersSwitchToPortableConditions()
+    public void PosixEmitter_LowersSwitchToPortableConditions()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -68,7 +68,7 @@ public class EmitterTests
                 new IrBlockStatement())
         });
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter().Emit(program, new EmitContext("switch.sushi", diagnostics));
+        var script = new PosixEmitter().Emit(program, new EmitContext("switch.sushi", diagnostics));
 
         Assert.Contains("if", script);
         Assert.DoesNotContain("switch (", script);
@@ -87,7 +87,8 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter(zsh).Emit(program, new EmitContext("float-mod.sushi", diagnostics));
+        var script = new PosixEmitter(zsh ? PosixDialect.Zsh : PosixDialect.Bash)
+            .Emit(program, new EmitContext("float-mod.sushi", diagnostics));
 
         Assert.Contains("awk", script);
         Assert.Contains("sushi_mod", script);
@@ -127,7 +128,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_FloatDeclarationDrivesLaterArithmetic()
+    public void PosixEmitter_FloatDeclarationDrivesLaterArithmetic()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -140,7 +141,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter().Emit(program, new EmitContext("float.sushi", diagnostics));
+        var script = new PosixEmitter().Emit(program, new EmitContext("float.sushi", diagnostics));
 
         Assert.Contains("awk", script);
         Assert.DoesNotContain("$(( value / 2 ))", script);
@@ -148,7 +149,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_FlattensNestedFloatArithmeticIntoOneAwkInvocation()
+    public void PosixEmitter_FlattensNestedFloatArithmeticIntoOneAwkInvocation()
     {
         var expression = new IrBinaryExpression(
             new IrBinaryExpression(new IrLiteralExpression(1.25), "+", new IrLiteralExpression(2.5)),
@@ -159,14 +160,14 @@ public class EmitterTests
                 "println", IntrinsicId.Println, new IrExpression[] { expression }))
         });
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter().Emit(program, new EmitContext("float.sushi", diagnostics));
+        var script = new PosixEmitter().Emit(program, new EmitContext("float.sushi", diagnostics));
 
         Assert.Single(Regex.Matches(script, "awk"));
         Assert.Empty(diagnostics);
     }
 
     [Fact]
-    public void BashEmitter_EmitsBasicScript()
+    public void PosixEmitter_EmitsBasicScript()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -181,7 +182,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
         Assert.Contains("#!/usr/bin/env bash", script);
@@ -218,7 +219,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_PassesValueResultsToTheContextualDestination()
+    public void PosixEmitter_PassesValueResultsToTheContextualDestination()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -236,7 +237,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter().Emit(program, new EmitContext("values.sushi", diagnostics));
+        var script = new PosixEmitter().Emit(program, new EmitContext("values.sushi", diagnostics));
 
         Assert.Contains("local -n out=\"$1\"", script);
         Assert.Contains("double 'doubled' 21", script);
@@ -257,7 +258,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter(zshMode: true).Emit(program, new EmitContext("values.sushi", diagnostics));
+        var script = new PosixEmitter(PosixDialect.Zsh).Emit(program, new EmitContext("values.sushi", diagnostics));
 
         Assert.Contains("local out=\"$1\"", script);
         Assert.Contains(": ${(P)out::=", script);
@@ -266,7 +267,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_EmitsStdIoExistsIntrinsic()
+    public void PosixEmitter_EmitsStdIoExistsIntrinsic()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -277,7 +278,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
         Assert.Contains("[[ -e", script);
@@ -338,7 +339,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_LowersStringIntrinsicsDirectly()
+    public void PosixEmitter_LowersStringIntrinsicsDirectly()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -361,7 +362,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("strings.sushi", diagnostics));
 
         Assert.Contains("[[", script);
@@ -372,7 +373,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_UsesNativeAssociativeArraysForObjects()
+    public void PosixEmitter_UsesNativeAssociativeArraysForObjects()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -387,7 +388,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("objects.sushi", diagnostics));
 
         Assert.Contains("declare -A obj=", script);
@@ -422,7 +423,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_WriteText_CreatesParentDirectory()
+    public void PosixEmitter_WriteText_CreatesParentDirectory()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -438,7 +439,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
         Assert.Contains("mkdir -p --", script);
@@ -483,7 +484,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_LowersHttpAndGlobDirectly()
+    public void PosixEmitter_LowersHttpAndGlobDirectly()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -508,7 +509,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
         Assert.Contains("curl -sS", script);
@@ -533,7 +534,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter(zshMode: true);
+        var emitter = new PosixEmitter(PosixDialect.Zsh);
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
         Assert.Contains("#!/usr/bin/env zsh", script);
@@ -544,7 +545,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_EmitsTimeoutHandlingInProcessRun()
+    public void PosixEmitter_EmitsTimeoutHandlingInProcessRun()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -565,7 +566,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("timeout.sushi", diagnostics));
 
         Assert.Contains("timeout '0.25s'", script);
@@ -604,7 +605,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_EmitsVarargsFunctionBinding()
+    public void PosixEmitter_EmitsVarargsFunctionBinding()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -622,7 +623,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("varargs.sushi", diagnostics));
 
         Assert.Contains("local -n out=\"$1\"", script);
@@ -661,7 +662,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_EmitsFunctionTypeContracts()
+    public void PosixEmitter_EmitsFunctionTypeContracts()
     {
         var structuralType = IrTypeRef.Structural(new[]
         {
@@ -697,7 +698,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("contracts.sushi", diagnostics));
 
         Assert.Contains("local -n out=\"$1\"", script);
@@ -747,7 +748,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_ArithmeticIndexExpression_UsesStrictNumericCheck()
+    public void PosixEmitter_ArithmeticIndexExpression_UsesStrictNumericCheck()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -762,7 +763,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new BashEmitter();
+        var emitter = new PosixEmitter();
         var script = emitter.Emit(program, new EmitContext("arith.sushi", diagnostics));
 
         Assert.DoesNotContain("__sushi_validate_integer", script);
@@ -772,7 +773,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_UsesNativeArrayStorageWithoutFullRuntimeForLiteralIndexing()
+    public void PosixEmitter_UsesNativeArrayStorageWithoutFullRuntimeForLiteralIndexing()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -788,7 +789,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter().Emit(program, new EmitContext("array.sushi", diagnostics));
+        var script = new PosixEmitter().Emit(program, new EmitContext("array.sushi", diagnostics));
 
         Assert.Contains("declare -a values=('first' 'second')", script);
         Assert.Contains("${values[0]-}", script);
@@ -797,7 +798,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_ReassignsArraysWithoutRevivingRuntimeHelpers()
+    public void PosixEmitter_ReassignsArraysWithoutRevivingRuntimeHelpers()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -819,7 +820,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter().Emit(program, new EmitContext("array.sushi", diagnostics));
+        var script = new PosixEmitter().Emit(program, new EmitContext("array.sushi", diagnostics));
 
         Assert.Contains("values=('second')", script);
         Assert.Contains("${values[0]-}", script);
@@ -828,7 +829,7 @@ public class EmitterTests
     }
 
     [Fact]
-    public void BashEmitter_PrintsStringPredicatesWithoutTemporaryValues()
+    public void PosixEmitter_PrintsStringPredicatesWithoutTemporaryValues()
     {
         var program = new IrProgram(new IrStatement[]
         {
@@ -850,7 +851,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var script = new BashEmitter().Emit(program, new EmitContext("strings.sushi", diagnostics));
+        var script = new PosixEmitter().Emit(program, new EmitContext("strings.sushi", diagnostics));
 
         Assert.Contains("if [[ \"${text:-}\" == *'ush'* ]]; then", script);
         Assert.Contains("printf '%s\\n' 'true'", script);

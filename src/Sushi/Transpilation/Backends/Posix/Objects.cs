@@ -7,9 +7,9 @@ using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
 
-namespace Sushi.Transpilation.Backends.Bash;
+namespace Sushi.Transpilation.Backends.Posix;
 
-public sealed partial class BashEmitter
+public sealed partial class PosixEmitter
 {
     private void EmitPrintedStringPredicate(IrIntrinsicCallExpression predicate, bool newline, bool inFunction)
     {
@@ -61,7 +61,7 @@ public sealed partial class BashEmitter
                 _nativeObjectVariables.Contains(SanitizeVariableName(objectAlias.Name)))
             {
                 var source = ResolveNativeObjectName(SanitizeVariableName(objectAlias.Name));
-                if (_zshMode)
+                if (_dialect.IsZsh)
                 {
                     WriteLine($"{name}=( \"${{(@kv){source}}}\" )");
                     _nativeObjectAliases[name] = source;
@@ -69,7 +69,7 @@ public sealed partial class BashEmitter
                 else
                 {
                     WriteLine(_nativeObjectAliases.ContainsKey(name) ? $"unset -n {name}" : $"unset {name}");
-                    WriteLine($"{(inFunction ? "local " : "declare ")}-n {name}={Escape.BashSingleQuoted(source)}");
+                    WriteLine($"{(inFunction ? "local " : "declare ")}-n {name}={Escape.PosixSingleQuoted(source)}");
                     _nativeObjectAliases[name] = source;
                 }
                 _nativeObjectVariables.Add(name);
@@ -105,11 +105,11 @@ public sealed partial class BashEmitter
 
             if (assignment.Value is IrObjectLiteralExpression obj)
             {
-                var entries = _zshMode
+                var entries = _dialect.IsZsh
                     ? obj.Properties.Select(property =>
-                        $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
+                        $"[{Escape.PosixSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}")
                     : obj.Properties.Select(property =>
-                        $"[{Escape.BashSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
+                        $"[{Escape.PosixSingleQuoted(property.Name)}]={PrepareValue(property.Value, inFunction)}");
                 WriteLine($"{name}=({string.Join(" ", entries)})");
                 _nativeObjectVariables.Add(name);
                 _nativeArrayVariables.Remove(name);
@@ -176,7 +176,7 @@ public sealed partial class BashEmitter
         IrFunctionDeclarationStatement function,
         bool inFunction)
     {
-        var arguments = new List<string> { Escape.BashSingleQuoted(destination) };
+        var arguments = new List<string> { Escape.PosixSingleQuoted(destination) };
         for (var index = 0; index < call.Arguments.Count; index++)
         {
             var argument = call.Arguments[index].Value;
@@ -202,9 +202,9 @@ public sealed partial class BashEmitter
                 }
             }
             else if (argument is IrIdentifierExpression identifier && parameter != null && IsNativeObjectType(parameter.DeclaredType))
-                arguments.Add(Escape.BashSingleQuoted(ResolveNativeObjectName(SanitizeVariableName(identifier.Name))));
+                arguments.Add(Escape.PosixSingleQuoted(ResolveNativeObjectName(SanitizeVariableName(identifier.Name))));
             else if (argument is IrConstructionExpression construction && parameter != null && IsNativeObjectType(parameter.DeclaredType))
-                arguments.Add(Escape.BashSingleQuoted(PrepareConstructionReference(construction, inFunction)));
+                arguments.Add(Escape.PosixSingleQuoted(PrepareConstructionReference(construction, inFunction)));
             else
                 arguments.Add(PrepareValue(argument, inFunction));
         }
@@ -252,14 +252,14 @@ public sealed partial class BashEmitter
         var name = _names.Generated(TargetNameKind.Variable, "_object" + (++_valueTempId));
         WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
         var arguments = construction.Arguments.Select(argument => PrepareValue(argument.Value, inFunction));
-        WriteLine($"{SanitizeFunctionName(construction.ConstructorName)} {Escape.BashSingleQuoted(name)} {string.Join(" ", arguments)}");
+        WriteLine($"{SanitizeFunctionName(construction.ConstructorName)} {Escape.PosixSingleQuoted(name)} {string.Join(" ", arguments)}");
         _nativeObjectVariables.Add(name);
         return name;
     }
 
     private void EmitZshObjectParameterWritebacks()
     {
-        if (!_zshMode) return;
+        if (!_dialect.IsZsh) return;
         foreach (var item in _zshObjectParameterNames)
         {
             if (_zshReadOnlyObjectParameters.Contains(item.Key)) continue;
@@ -282,7 +282,7 @@ public sealed partial class BashEmitter
 
     private void EmitFunctionOutputAssignment(string value)
     {
-        if (_zshMode)
+        if (_dialect.IsZsh)
         {
             WriteLine($": ${{(P){_currentOutputName}::={value}}}");
             return;
@@ -362,7 +362,7 @@ public sealed partial class BashEmitter
                 var value = PrepareValue(intrinsic.Arguments[0], inFunction);
                 var separator = PrepareValue(intrinsic.Arguments[1], inFunction);
                 WriteLine($"{arrayDeclaration}-a {name}=()");
-                if (_zshMode)
+                if (_dialect.IsZsh)
                 {
                     WriteLine($"{name}=(${{(s:{separator}:)${{:-{value}}}}})");
                 }
@@ -456,7 +456,7 @@ public sealed partial class BashEmitter
     private string PrepareRegex(IrExpression expression, bool inFunction)
     {
         var pattern = expression is IrLiteralExpression { Value: string literal }
-            ? Escape.BashSingleQuoted(literal
+            ? Escape.PosixSingleQuoted(literal
                 .Replace("\\d", "[0-9]", StringComparison.Ordinal)
                 .Replace("\\s", "[[:space:]]", StringComparison.Ordinal)
                 .Replace("\\w", "[[:alnum:]_]", StringComparison.Ordinal))
@@ -485,7 +485,7 @@ public sealed partial class BashEmitter
         var invocation = string.Join(" ", commandParts);
         if (arguments.Count > 5 && arguments[5] is IrLiteralExpression { Value: int timeoutMs } && timeoutMs > 0)
         {
-            invocation = $"timeout {Escape.BashSingleQuoted((timeoutMs / 1000d).ToString("0.###", CultureInfo.InvariantCulture) + "s")} {invocation}";
+            invocation = $"timeout {Escape.PosixSingleQuoted((timeoutMs / 1000d).ToString("0.###", CultureInfo.InvariantCulture) + "s")} {invocation}";
         }
         if (arguments.Count > 2 && arguments[2] is not IrLiteralExpression { Value: null })
         {
