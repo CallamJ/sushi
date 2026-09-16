@@ -7,7 +7,6 @@ using Sushi.Transpilation;
 using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.Backends.Bash;
 using Sushi.Transpilation.Backends.PowerShell;
-using Sushi.Transpilation.Backends.Zsh;
 using Sushi.Transpilation.IR;
 using Sushi.Transpilation.Intrinsics;
 using Xunit;
@@ -258,7 +257,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var script = new ZshEmitter().Emit(program, new EmitContext("values.sushi", diagnostics));
+        var script = new BashEmitter(zshMode: true).Emit(program, new EmitContext("values.sushi", diagnostics));
 
         Assert.Contains("local out=\"$1\"", script);
         Assert.Contains(": ${(P)out::=", script);
@@ -534,7 +533,7 @@ public class EmitterTests
         });
 
         var diagnostics = new List<Diagnostic>();
-        var emitter = new ZshEmitter();
+        var emitter = new BashEmitter(zshMode: true);
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
         Assert.Contains("#!/usr/bin/env zsh", script);
