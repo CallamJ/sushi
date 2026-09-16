@@ -2888,7 +2888,7 @@ __sushi_native_obj_to_json() {
 
                 var value = PrepareValue(initializer, inFunction);
                 WriteLine($"{(inFunction ? "local " : "")}{name}={value}");
-                SetKnownInteger(name, declaredInt || IsDefinitelyInteger(initializer));
+                SetKnownInteger(name, declaredInt || (!declaredFloat && IsDefinitelyInteger(initializer)));
                 SetKnownFloat(name, declaredFloat || IsDefinitelyFloat(initializer));
                 SetKnownArray(name, initializer is IrArrayLiteralExpression);
                     break;
@@ -4862,7 +4862,8 @@ __sushi_native_obj_to_json() {
         return expression switch
         {
             IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
-            IrIdentifierExpression identifier => _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
+            IrIdentifierExpression identifier => !_knownFloatVariables.Contains(SanitizeVariableName(identifier.Name)) &&
+                                                 _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrIndexExpression { Target: IrIdentifierExpression identifier } =>
                 _integerArrayVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),
@@ -4951,7 +4952,8 @@ __sushi_native_obj_to_json() {
         return expression switch
         {
             IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
-            IrIdentifierExpression identifier => _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
+            IrIdentifierExpression identifier => !_knownFloatVariables.Contains(SanitizeVariableName(identifier.Name)) &&
+                                                 _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => CanEmitInlineInteger(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
                 CanEmitInlineInteger(binary.Left) && CanEmitInlineInteger(binary.Right),

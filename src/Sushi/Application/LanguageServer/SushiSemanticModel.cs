@@ -95,8 +95,10 @@ internal sealed class SushiSemanticModel
     /// invent a different receiver inference rule.</summary>
     public string? TypeAt(int offset)
     {
-        var token = Tokens.LastOrDefault(candidate => candidate.End <= offset &&
-            candidate.Kind != ClassifiedTokenKind.EndOfFile);
+        var token = Tokens.FirstOrDefault(candidate => candidate.Start <= offset &&
+            offset < candidate.End && candidate.Kind != ClassifiedTokenKind.EndOfFile)
+            ?? Tokens.LastOrDefault(candidate => candidate.End <= offset &&
+                candidate.Kind != ClassifiedTokenKind.EndOfFile);
         return token is null ? null : TypeOf(token);
     }
 

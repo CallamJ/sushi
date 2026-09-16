@@ -72,6 +72,7 @@ public sealed class AstToIrLowerer
     private readonly Dictionary<string, string> _knownObjectTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _functionObjectReturnTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IrTypeRef> _knownVariableTypes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IrTypeRef> _knownVarargElementTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _standardImportAliases = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _standardImportNames = new(StringComparer.Ordinal);
     private readonly HashSet<string> _standardImportedPaths = new(StringComparer.Ordinal);
@@ -248,7 +249,10 @@ public sealed class AstToIrLowerer
         foreach (var parameter in signature.Parameters)
         {
             _definedVariables.Add(parameter.Name);
-            _knownVariableTypes[parameter.Name] = parameter.DeclaredType;
+            _knownVariableTypes[parameter.Name] = parameter.IsVarargs
+                ? IrTypeRef.Primitive("array")
+                : parameter.DeclaredType;
+            if (parameter.IsVarargs) _knownVarargElementTypes[parameter.Name] = parameter.DeclaredType;
         }
         TrackParameterObjectTypes(node.Parameters, signature.Parameters);
         AddAnonymousStructuralFieldNames(node.Parameters, signature.Parameters);
@@ -959,14 +963,16 @@ public sealed class AstToIrLowerer
                         return new IrLiteralExpression(null);
                     }
                 }
-                var loweredMember = LowerMemberAccess(member);
-                var target = loweredMember is IrMemberAccessExpression loweredAccess
-                    ? loweredAccess.Target
-                    : LowerExpression(member.Object);
+                var target = LowerExpression(member.Object);
                 var value = LowerExpression(node.Right);
-                var memberType = loweredMember is IrMemberAccessExpression typedMember
-                    ? typedMember.ValueType
-                    : IrTypeRef.Any;
+                var memberType = IrTypeRef.Any;
+                if (TryResolveExpressionObjectType(member.Object, out var memberObjectType) &&
+                    _classes.TryGetValue(memberObjectType, out var memberClass))
+                {
+                    var field = memberClass.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+                    if (field is not null)
+                        memberType = LowerDeclaredType(field.Type, 1, 1, $"field '{field.Name}'");
+                }
                 return new IrMemberAssignmentExpression(target, member.MemberName, node.Operator, value, memberType);
             }
 
@@ -2245,7 +2251,10 @@ public sealed class AstToIrLowerer
             foreach (var parameter in parameters)
             {
                 _definedVariables.Add(parameter.Name);
-                _knownVariableTypes[parameter.Name] = parameter.DeclaredType;
+                _knownVariableTypes[parameter.Name] = parameter.IsVarargs
+                    ? IrTypeRef.Primitive("array")
+                    : parameter.DeclaredType;
+                if (parameter.IsVarargs) _knownVarargElementTypes[parameter.Name] = parameter.DeclaredType;
             }
             TrackParameterObjectTypes(method.Parameters, parameters.Skip(1).ToList());
             _currentFunctionName = methodName;
@@ -2444,7 +2453,10 @@ public sealed class AstToIrLowerer
             foreach (var parameter in parameters)
             {
                 _definedVariables.Add(parameter.Name);
-                _knownVariableTypes[parameter.Name] = parameter.DeclaredType;
+                _knownVariableTypes[parameter.Name] = parameter.IsVarargs
+                    ? IrTypeRef.Primitive("array")
+                    : parameter.DeclaredType;
+                if (parameter.IsVarargs) _knownVarargElementTypes[parameter.Name] = parameter.DeclaredType;
             }
             TrackParameterObjectTypes(method.Parameters, parameters.Skip(1).ToList());
             _currentFunctionName = methodName;
@@ -3217,6 +3229,12 @@ public sealed class AstToIrLowerer
                 return !type.IsAnyOrUnknown;
 
             case IrIndexExpression index:
+                if (index.Target is IrIdentifierExpression varargIdentifier &&
+                    _knownVarargElementTypes.TryGetValue(varargIdentifier.Name, out var elementType))
+                {
+                    type = elementType;
+                    return !type.IsAnyOrUnknown;
+                }
                 if (TryInferStaticType(index.Target, out var indexedType) &&
                     indexedType.Kind == IrTypeKind.Primitive &&
                     string.Equals(indexedType.Name, "string", StringComparison.OrdinalIgnoreCase))
@@ -3235,9 +3253,41 @@ public sealed class AstToIrLowerer
                 type = IrTypeRef.Primitive(objectType);
                 return true;
 
+            // Generated class/enum methods always receive their receiver as
+            // `this`; retain its declared owner type even when validation is
+            // performed after the surrounding lowering scope has been restored.
+            case IrIdentifierExpression { Name: "this" } when _currentFunctionName is { } functionName:
+            {
+                var marker = functionName.StartsWith("_m_", StringComparison.Ordinal)
+                    ? functionName[3..]
+                    : functionName.StartsWith("__sushi_adapter_", StringComparison.Ordinal)
+                        ? functionName["__sushi_adapter_".Length..]
+                        : "";
+                var separator = marker.IndexOf('_');
+                if (separator > 0 && (_classes.ContainsKey(marker[..separator]) || _enums.ContainsKey(marker[..separator])))
+                {
+                    type = IrTypeRef.Primitive(marker[..separator]);
+                    return true;
+                }
+                type = IrTypeRef.Unknown;
+                return false;
+            }
+
             case IrIdentifierExpression identifier when _knownVariableTypes.TryGetValue(identifier.Name, out var variableType):
                 type = variableType;
                 return !type.IsAnyOrUnknown;
+
+            case IrIdentifierExpression identifier:
+            {
+                var separator = identifier.Name.IndexOf('_');
+                if (separator > 0 && _enums.ContainsKey(identifier.Name[..separator]))
+                {
+                    type = IrTypeRef.Primitive(identifier.Name[..separator]);
+                    return true;
+                }
+                type = IrTypeRef.Unknown;
+                return false;
+            }
 
             case IrTruthinessExpression:
                 type = IrTypeRef.Primitive("bool");
@@ -3252,6 +3302,13 @@ public sealed class AstToIrLowerer
                 return true;
 
             case IrBinaryExpression { Operator: "+" or "-" or "*" or "/" or "%" } arithmetic:
+                if (arithmetic.Operator == "+" &&
+                    ((TryInferStaticType(arithmetic.Left, out var stringLeft) && SameType(stringLeft, IrTypeRef.Primitive("string"))) ||
+                     (TryInferStaticType(arithmetic.Right, out var stringRight) && SameType(stringRight, IrTypeRef.Primitive("string")))))
+                {
+                    type = IrTypeRef.Primitive("string");
+                    return true;
+                }
                 if (TryInferStaticType(arithmetic.Left, out var arithmeticLeft) &&
                     TryInferStaticType(arithmetic.Right, out var arithmeticRight))
                 {

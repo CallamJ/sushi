@@ -25,7 +25,7 @@ public class EmitterTests
         var script = new BashEmitter(zsh).Emit(program, new EmitContext("float-mod.sushi", diagnostics));
 
         Assert.Contains("awk", script);
-        Assert.Contains("left % right", script);
+        Assert.Contains("sushi_mod", script);
         Assert.DoesNotContain("__sushi_float", script);
         Assert.Empty(diagnostics);
     }
@@ -96,7 +96,7 @@ public class EmitterTests
         var diagnostics = new List<Diagnostic>();
         var script = new BashEmitter().Emit(program, new EmitContext("float.sushi", diagnostics));
 
-        Assert.Equal(1, Regex.Matches(script, "awk").Count);
+        Assert.Single(Regex.Matches(script, "awk"));
         Assert.Empty(diagnostics);
     }
 

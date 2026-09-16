@@ -487,7 +487,7 @@ internal sealed class SushiLanguageServer
                 type = model.Tokens[open - 1].Text;
         }
         if (type == "void" && receiverSymbol is not null && receiver is not null)
-            type = model.TypeOf(receiver);
+            type = model.TypeOf(receiver!);
         var modulePath = receiver?.Kind == ClassifiedTokenKind.Identifier ? ImportedModulePath(model, receiver.Text) : null;
         if (modulePath is not null)
         {
