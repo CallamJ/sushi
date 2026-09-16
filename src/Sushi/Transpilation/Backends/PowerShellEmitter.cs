@@ -89,7 +89,14 @@ public sealed class PowerShellEmitter : IBackendEmitter
             _runtimeFunctionFilter = program.Statements.OfType<IrStandardLibraryImportStatement>().Any()
                 ? new HashSet<string>(new[] { "__sushi_glob_regex", "__sushi_fs_glob" }, StringComparer.Ordinal)
                 : null;
+            var runtimeStart = _builder.Length;
             EmitRuntimeHelpers();
+            if (_runtimeFunctionFilter is { } filter)
+            {
+                var runtimeText = _builder.ToString(runtimeStart, _builder.Length - runtimeStart);
+                _builder.Remove(runtimeStart, _builder.Length - runtimeStart);
+                _builder.Append(FilterRuntimeBlock(runtimeText, filter));
+            }
             _runtimeFunctionFilter = null;
         }
         var classes = CollectClasses(program.Statements).ToList();
