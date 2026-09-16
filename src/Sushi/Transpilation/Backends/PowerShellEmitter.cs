@@ -1700,6 +1700,8 @@ function __sushi_call_method {
                 $"({EmitValueExpression(binary.Left)} {MapBinaryOperator(binary.Operator)} {EmitValueExpression(binary.Right)})",
             IrIntrinsicCallExpression intrinsicCall =>
                 EmitIntrinsicValue(intrinsicCall),
+            IrCallExpression { Callee: "__sushi_json_length", Arguments: [{ Value: var target }] } =>
+                $"@({EmitValueExpression(target)}).Count",
             IrCallExpression { Callee: "__sushi_slice", Arguments: [var target, var start, var end] } slice =>
                 EmitNativeStringSlice(slice),
             IrCallExpression call =>
@@ -1721,9 +1723,10 @@ function __sushi_call_method {
     {
         var arms = new List<(IrExpression Value, IrExpression Result)>();
         IrExpression current = root;
-        while (current is IrConditionalExpression conditional && conditional.IsSwitchExpression &&
-               TryGetSwitchComparison(conditional.Condition, out var comparison))
+        while (current is IrConditionalExpression conditional && conditional.IsSwitchExpression)
         {
+            if (!TryGetSwitchComparison(conditional.Condition, out var comparison) || comparison is null)
+                break;
             arms.Add((comparison.Right, conditional.TrueExpression));
             current = conditional.FalseExpression;
         }
@@ -1877,7 +1880,7 @@ function __sushi_call_method {
             return $"($null -ne [object]({value}))";
         return type switch
         {
-            "bool" => $"([string]({value}) -eq 'true')",
+            "bool" => value,
             "int" or "float" => "$true",
             "string" => $"(-not [string]::IsNullOrEmpty({value}))",
             _ => "$false"
@@ -2254,52 +2257,63 @@ function __sushi_call_method {
 
     private string EmitStringTrim(IReadOnlyList<IrExpression> arguments)
     {
-        return $"([string]({Arg(arguments, 0)})).Trim()";
+        return $"({EmitStringArgument(arguments[0])}).Trim()";
+    }
+
+    private string EmitStringArgument(IrExpression expression)
+    {
+        var value = EmitValueExpression(expression);
+        return expression switch
+        {
+            IrLiteralExpression { Value: string } => value,
+            IrIdentifierExpression { StaticType.Name: "string" } => value,
+            _ => $"[string]({value})"
+        };
     }
 
     private string EmitStringLower(IReadOnlyList<IrExpression> arguments)
     {
-        return $"([string]({Arg(arguments, 0)})).ToLowerInvariant()";
+        return $"({EmitStringArgument(arguments[0])}).ToLowerInvariant()";
     }
 
     private string EmitStringUpper(IReadOnlyList<IrExpression> arguments)
     {
-        return $"([string]({Arg(arguments, 0)})).ToUpperInvariant()";
+        return $"({EmitStringArgument(arguments[0])}).ToUpperInvariant()";
     }
 
     private string EmitStringLength(IReadOnlyList<IrExpression> arguments)
     {
-        return $"([string]({Arg(arguments, 0)})).Length";
+        return $"({EmitStringArgument(arguments[0])}).Length";
     }
 
     private string EmitStringSplit(IReadOnlyList<IrExpression> arguments)
     {
-        return $"@(([string]({Arg(arguments, 0)})).Split([string]({Arg(arguments, 1)}), [int]({Arg(arguments, 2)})))";
+        return $"@(({EmitStringArgument(arguments[0])}).Split({EmitStringArgument(arguments[1])}, [int]({Arg(arguments, 2)})))";
     }
 
     private string EmitStringContains(IReadOnlyList<IrExpression> arguments)
     {
-        return $"([string]({Arg(arguments, 0)})).Contains([string]({Arg(arguments, 1)}))";
+        return $"({EmitStringArgument(arguments[0])}).Contains({EmitStringArgument(arguments[1])})";
     }
 
     private string EmitStringStartsWith(IReadOnlyList<IrExpression> arguments)
     {
-        return $"([string]({Arg(arguments, 0)})).StartsWith([string]({Arg(arguments, 1)}))";
+        return $"({EmitStringArgument(arguments[0])}).StartsWith({EmitStringArgument(arguments[1])})";
     }
 
     private string EmitStringEndsWith(IReadOnlyList<IrExpression> arguments)
     {
-        return $"([string]({Arg(arguments, 0)})).EndsWith([string]({Arg(arguments, 1)}))";
+        return $"({EmitStringArgument(arguments[0])}).EndsWith({EmitStringArgument(arguments[1])})";
     }
 
     private string EmitStringReplace(IReadOnlyList<IrExpression> arguments)
     {
-        return $"([string]({Arg(arguments, 0)})).Replace([string]({Arg(arguments, 1)}), [string]({Arg(arguments, 2)}))";
+        return $"({EmitStringArgument(arguments[0])}).Replace({EmitStringArgument(arguments[1])}, {EmitStringArgument(arguments[2])})";
     }
 
     private string EmitStringIsMatch(IReadOnlyList<IrExpression> arguments)
     {
-        return $"[regex]::IsMatch([string]({Arg(arguments, 0)}), [string]({Arg(arguments, 1)}))";
+        return $"[regex]::IsMatch({EmitStringArgument(arguments[0])}, {EmitStringArgument(arguments[1])})";
     }
 
     private string EmitStringMatch(IReadOnlyList<IrExpression> arguments)

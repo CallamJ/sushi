@@ -1,5 +1,6 @@
 namespace Sushi.Tests.Transpilation;
 
+using System.Linq;
 using Sushi.Application;
 using Sushi.Transpilation;
 using Xunit;
@@ -599,6 +600,23 @@ public class TranspilerTests
         Assert.NotNull(result.EmittedCode);
         Assert.Contains("local -a values=(\"${@:2}\")", result.EmittedCode);
         Assert.DoesNotContain("__sushi_json_index", result.EmittedCode);
+    }
+
+    [Fact]
+    public void Transpile_PowerShell_ForEach_UsesNativeCollectionLength()
+    {
+        const string source = "sum(int... values) {\n    var total = 0\n    for (int value : values) {\n        total = total + value\n    }\n    return total\n}\nprintln(sum(1, 2))";
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "powershell-foreach.sushi",
+            TargetLanguage = TargetLanguage.Powershell51
+        });
+
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        Assert.Contains(".Count", result.EmittedCode);
+        Assert.DoesNotContain("_s_json_length", result.EmittedCode);
     }
 
     [Fact]
