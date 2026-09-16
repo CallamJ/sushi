@@ -340,12 +340,14 @@ public class ForRangeStatementNode : StatementNode
 public class ForEachStatementNode : StatementNode
 {
     public string? IndexVariable { get; }  // Optional index variable
+    public string? ItemType { get; }
     public string ItemVariable { get; }
     public ExpressionNode Collection { get; }
     public StatementNode Body { get; }
     
     public ForEachStatementNode(
         string? indexVariable,
+        string? itemType,
         string itemVariable,
         ExpressionNode collection,
         StatementNode body,
@@ -353,9 +355,21 @@ public class ForEachStatementNode : StatementNode
         int column) : base(line, column)
     {
         IndexVariable = indexVariable;
+        ItemType = itemType;
         ItemVariable = itemVariable;
         Collection = collection;
         Body = body;
+    }
+
+    public ForEachStatementNode(
+        string? indexVariable,
+        string itemVariable,
+        ExpressionNode collection,
+        StatementNode body,
+        int line,
+        int column)
+        : this(indexVariable, null, itemVariable, collection, body, line, column)
+    {
     }
 
     public override void Accept(IAstVisitor visitor) => visitor.Visit(this);

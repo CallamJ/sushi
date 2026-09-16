@@ -28,6 +28,10 @@ internal static class EmissionCapabilityAnalyzer
         IrIntrinsicCallExpression { Id: IntrinsicId.FsGlob } => true,
         IrArrayLiteralExpression array => array.Elements.Any(UsesFsGlob),
         IrIndexExpression index => UsesFsGlob(index.Target) || UsesFsGlob(index.Index),
+        IrCollectionLengthExpression length => UsesFsGlob(length.Target),
+        IrSliceExpression slice => UsesFsGlob(slice.Target) ||
+                                   (slice.Start != null && UsesFsGlob(slice.Start)) ||
+                                   (slice.End != null && UsesFsGlob(slice.End)),
         IrMethodCallExpression method => UsesFsGlob(method.Target) || method.Arguments.Any(argument => UsesFsGlob(argument.Value)),
         IrIntrinsicCallExpression intrinsic => intrinsic.Arguments.Any(UsesFsGlob),
         IrAssignmentExpression assignment => UsesFsGlob(assignment.Value),
@@ -67,6 +71,10 @@ internal static class EmissionCapabilityAnalyzer
     {
         IrArrayLiteralExpression => true,
         IrIndexExpression index => UsesArrays(index.Target) || UsesArrays(index.Index),
+        IrCollectionLengthExpression length => UsesArrays(length.Target),
+        IrSliceExpression slice => UsesArrays(slice.Target) ||
+                                   (slice.Start != null && UsesArrays(slice.Start)) ||
+                                   (slice.End != null && UsesArrays(slice.End)),
         IrMethodCallExpression method => method.MethodName is "push" or "map" or "filter" or "reduce" or "length" ||
                                          UsesArrays(method.Target) || method.Arguments.Any(argument => UsesArrays(argument.Value)),
         IrIntrinsicCallExpression intrinsic => intrinsic.Id is IntrinsicId.StringSplit or IntrinsicId.ProcessArgs or IntrinsicId.FsGlob ||

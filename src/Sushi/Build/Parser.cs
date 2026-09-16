@@ -809,6 +809,7 @@ public class Parser
         var checkpoint = _position;
         bool isForEachOrRange = false;
         string? loopVariable = null;
+        string? loopVariableType = null;
         string? indexVariable = null;
         
         // Check for var/type followed by identifier and colon
@@ -826,6 +827,7 @@ public class Parser
                 // provides it explicitly. Defer the distinction until the next token.
                 if (Check(ClassifiedTokenKind.Identifier))
                 {
+                    loopVariableType = first.Text;
                     Advance(); // consume the explicit type's variable name
                     loopVariable = Previous().Text;
                 }
@@ -895,7 +897,7 @@ public class Parser
                     throw new Exception($"'step' keyword can only be used with range expressions (for-range loops) at {token.Line}:{token.Column}");
                 }
                 
-                var forEach = new ForEachStatementNode(indexVariable, loopVariable!, 
+                var forEach = new ForEachStatementNode(indexVariable, loopVariableType, loopVariable!,
                     rangeOrCollection, body, token.Line, token.Column);
                 OptionalSemicolon();
                 return forEach;

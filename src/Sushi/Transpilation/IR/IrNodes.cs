@@ -736,3 +736,27 @@ public sealed class IrIndexExpression : IrExpression
         Index = index;
     }
 }
+
+public sealed class IrCollectionLengthExpression : IrExpression
+{
+    public IrExpression Target { get; }
+
+    public IrCollectionLengthExpression(IrExpression target)
+    {
+        Target = target;
+    }
+}
+
+public sealed class IrSliceExpression : IrExpression
+{
+    public IrExpression Target { get; }
+    public IrExpression? Start { get; }
+    public IrExpression? End { get; }
+
+    public IrSliceExpression(IrExpression target, IrExpression? start, IrExpression? end)
+    {
+        Target = target;
+        Start = start;
+        End = end;
+    }
+}

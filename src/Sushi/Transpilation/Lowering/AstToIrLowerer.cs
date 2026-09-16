@@ -514,6 +514,11 @@ public sealed class AstToIrLowerer
     {
         var collectionExpression = LowerExpression(node.Collection);
         _definedVariables.Add(node.ItemVariable);
+        var itemType = node.ItemType is null
+            ? IrTypeRef.Unknown
+            : LowerDeclaredType(node.ItemType, node.Line, node.Column, $"foreach variable '{node.ItemVariable}'");
+        if (!itemType.IsAnyOrUnknown)
+            _knownVariableTypes[node.ItemVariable] = itemType;
         if (!string.IsNullOrWhiteSpace(node.IndexVariable))
         {
             _definedVariables.Add(node.IndexVariable);
@@ -525,9 +530,7 @@ public sealed class AstToIrLowerer
             new IrIdentifierExpression(collectionTemp),
             new IrIdentifierExpression(indexTemp));
         itemValue.Origin = new IrSourceOrigin(node.Line, node.Column);
-        var lengthCall = new IrCallExpression(
-            "__sushi_json_length",
-            new IrExpression[] { new IrIdentifierExpression(collectionTemp) });
+        var lengthCall = new IrCollectionLengthExpression(new IrIdentifierExpression(collectionTemp));
 
         var loopBodyStatements = new List<IrStatement>();
         if (node.IndexVariable != null)
@@ -537,7 +540,7 @@ public sealed class AstToIrLowerer
         }
 
         loopBodyStatements.Add(
-            new IrVariableDeclarationStatement(node.ItemVariable, itemValue));
+            new IrVariableDeclarationStatement(node.ItemVariable, itemValue, itemType));
 
         loopBodyStatements.AddRange(LowerLoopBody(node.Body).Statements);
 
@@ -590,14 +593,7 @@ public sealed class AstToIrLowerer
                 _definedVariables.Add(pattern.Name);
                 output.Add(new IrVariableDeclarationStatement(
                     pattern.Name,
-                    new IrCallExpression(
-                        "__sushi_slice",
-                        new IrExpression[]
-                        {
-                            source,
-                            new IrLiteralExpression(index),
-                            new IrLiteralExpression(null)
-                        })));
+                    new IrSliceExpression(source, new IrLiteralExpression(index), null)));
                 continue;
             }
 
@@ -767,14 +763,10 @@ public sealed class AstToIrLowerer
                 slice.Array.Line,
                 slice.Array.Column);
         }
-        return new IrCallExpression(
-            "__sushi_slice",
-            new IrExpression[]
-            {
-                LowerExpression(slice.Array),
-                slice.Start != null ? LowerExpression(slice.Start) : new IrLiteralExpression(null),
-                slice.End != null ? LowerExpression(slice.End) : new IrLiteralExpression(null)
-            });
+        return new IrSliceExpression(
+            LowerExpression(slice.Array),
+            slice.Start != null ? LowerExpression(slice.Start) : null,
+            slice.End != null ? LowerExpression(slice.End) : null);
     }
 
     private IrExpression IndexWithOrigin(IndexExpressionNode node)
@@ -3267,6 +3259,30 @@ public sealed class AstToIrLowerer
                 type = LowerDeclaredType(adapter.TargetTypeName, 1, 1, "conversion result");
                 return !type.IsAnyOrUnknown;
 
+            case IrCollectionLengthExpression length:
+                if (TryInferStaticType(length.Target, out var lengthType) &&
+                    lengthType.Kind == IrTypeKind.Primitive &&
+                    (string.Equals(lengthType.Name, "string", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(lengthType.Name, "array", StringComparison.OrdinalIgnoreCase)))
+                {
+                    type = IrTypeRef.Primitive("int");
+                    return true;
+                }
+                type = IrTypeRef.Unknown;
+                return false;
+
+            case IrSliceExpression slice:
+                if (TryInferStaticType(slice.Target, out var sliceType) &&
+                    sliceType.Kind == IrTypeKind.Primitive &&
+                    (string.Equals(sliceType.Name, "string", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(sliceType.Name, "array", StringComparison.OrdinalIgnoreCase)))
+                {
+                    type = sliceType;
+                    return true;
+                }
+                type = IrTypeRef.Unknown;
+                return false;
+
             case IrIndexExpression index:
                 if (index.Target is IrIdentifierExpression varargIdentifier &&
                     _knownVarargElementTypes.TryGetValue(varargIdentifier.Name, out var elementType))
@@ -3358,14 +3374,6 @@ public sealed class AstToIrLowerer
             case IrCallExpression call when call.Callee is "string" or "int" or "float" or "double" or "decimal" or "number":
                 type = LowerDeclaredType(call.Callee, 1, 1, "conversion result");
                 return !type.IsAnyOrUnknown;
-
-            case IrCallExpression slice
-                when slice.Callee == "__sushi_slice" && slice.Arguments.Count > 0 &&
-                     TryInferStaticType(slice.Arguments[0].Value, out var slicedType) &&
-                     slicedType.Kind == IrTypeKind.Primitive &&
-                     string.Equals(slicedType.Name, "string", StringComparison.OrdinalIgnoreCase):
-                type = IrTypeRef.Primitive("string");
-                return true;
 
             case IrResolvedMethodCallExpression methodCall
                 when _functionSignatures.TryGetValue(methodCall.Callee, out var methodSignature) &&

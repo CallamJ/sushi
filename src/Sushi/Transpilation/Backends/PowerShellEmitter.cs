@@ -154,7 +154,7 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private static bool HasFsGlobImport(IrProgram program)
     {
         var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
-        return imports.Count == 0 || imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
+        return imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
             (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
     }
 
@@ -1006,22 +1006,6 @@ function __sushi_struct_check {
 
         _builder.AppendLine(
 """
-function __sushi_slice {
-    param($target, $start = $null, $end = $null)
-    $items = @(__sushi_to_array $target)
-    $len = $items.Count
-    $s = if ($null -eq $start -or [string]::IsNullOrWhiteSpace([string]$start)) { 0 } else { [int]$start }
-    $e = if ($null -eq $end -or [string]::IsNullOrWhiteSpace([string]$end)) { $len } else { [int]$end }
-    if ($s -lt 0) { $s = $len + $s }
-    if ($e -lt 0) { $e = $len + $e }
-    if ($s -lt 0) { $s = 0 }
-    if ($e -lt 0) { $e = 0 }
-    if ($s -gt $len) { $s = $len }
-    if ($e -gt $len) { $e = $len }
-    if ($e -le $s) { return @() }
-    return @($items[$s..($e - 1)])
-}
-
 function __sushi_array_push {
     param($target, $values)
     $items = @(__sushi_to_array $target)
@@ -1686,6 +1670,8 @@ function __sushi_call_method {
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
             IrMemberAccessExpression member => EmitMemberAccess(member),
             IrIndexExpression index => $"({EmitValueExpression(index.Target)})[{EmitValueExpression(index.Index)}]",
+            IrCollectionLengthExpression length => $"@({EmitValueExpression(length.Target)}).Count",
+            IrSliceExpression slice => EmitNativeSlice(slice),
             IrUnaryExpression unary when unary.Operator is "!" =>
                 $"(-not {EmitValueExpression(unary.Operand)})",
             IrTruthinessExpression truthiness => EmitTruthinessExpression(truthiness),
@@ -1700,10 +1686,6 @@ function __sushi_call_method {
                 $"({EmitValueExpression(binary.Left)} {MapBinaryOperator(binary.Operator)} {EmitValueExpression(binary.Right)})",
             IrIntrinsicCallExpression intrinsicCall =>
                 EmitIntrinsicValue(intrinsicCall),
-            IrCallExpression { Callee: "__sushi_json_length", Arguments: [{ Value: var target }] } =>
-                $"@({EmitValueExpression(target)}).Count",
-            IrCallExpression { Callee: "__sushi_slice", Arguments: [var target, var start, var end] } slice =>
-                EmitNativeStringSlice(slice),
             IrCallExpression call =>
                 $"({EmitCallCommand(call)})",
             IrConstructionExpression construction => EmitNativeConstruction(construction),
@@ -1755,25 +1737,26 @@ function __sushi_call_method {
         return comparison is not null;
     }
 
-    private string EmitNativeStringSlice(IrCallExpression slice)
+    private string EmitNativeSlice(IrSliceExpression slice) =>
+        EmitNativeSlice(slice.Target, slice.Start, slice.End);
+
+    private string EmitNativeSlice(IrExpression targetExpression, IrExpression? startExpression, IrExpression? endExpression)
     {
-        var target = EmitValueExpression(slice.Arguments[0].Value);
-        var start = slice.Arguments[1].Value is IrLiteralExpression { Value: null }
-            ? "0"
-            : EmitValueExpression(slice.Arguments[1].Value);
-        var isArray = slice.Arguments[0].Value is IrIdentifierExpression identifier &&
+        var target = EmitValueExpression(targetExpression);
+        var start = startExpression == null ? "0" : EmitValueExpression(startExpression);
+        var isArray = targetExpression is IrIdentifierExpression identifier &&
                       _arrayInitializers.ContainsKey(SanitizeName(identifier.Name));
         if (isArray)
         {
-            if (slice.Arguments[2].Value is IrLiteralExpression { Value: null })
+            if (endExpression == null)
                 return "@(" + target + ")[([int]" + start + ")..($(@(" + target + ").Count) - 1)]";
-            var arrayEnd = EmitValueExpression(slice.Arguments[2].Value);
+            var arrayEnd = EmitValueExpression(endExpression);
             return "@(" + target + ")[([int]" + start + ")..([int](" + arrayEnd + ") - 1)]";
         }
-        if (slice.Arguments[2].Value is IrLiteralExpression { Value: null })
+        if (endExpression == null)
             return $"({target}).Substring([int]({start}))";
 
-        var end = EmitValueExpression(slice.Arguments[2].Value);
+        var end = EmitValueExpression(endExpression);
         return $"({target}).Substring([int]({start}), [int](({end}) - ({start})))";
     }
 

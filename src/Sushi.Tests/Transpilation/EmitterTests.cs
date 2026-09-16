@@ -1,5 +1,6 @@
 namespace Sushi.Tests.Transpilation;
 
+using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using Sushi.Transpilation;
@@ -484,6 +485,8 @@ public class EmitterTests
     {
         var program = new IrProgram(new IrStatement[]
         {
+            new IrStandardLibraryImportStatement("std.http", null, Array.Empty<string>()),
+            new IrStandardLibraryImportStatement("std.fs", null, new[] { "glob" }),
             new IrVariableDeclarationStatement("response", new IrIntrinsicCallExpression(
                 "std.http.get",
                 IntrinsicId.HttpGet,
@@ -508,7 +511,7 @@ public class EmitterTests
 
         Assert.Contains("curl -sS", script);
         Assert.Contains("__sushi_fs_glob_into", script);
-        Assert.Contains("__sushi_glob_regex_into", script);
+        Assert.DoesNotContain("__sushi_glob_regex_into", script);
         Assert.Empty(diagnostics);
     }
 

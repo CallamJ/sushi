@@ -224,6 +224,9 @@ public class TranspilerTests
     public void Transpile_Milestone3Apis_Succeeds()
     {
         const string source = """
+            use std.fs
+            use std.http
+            use std.process
             var files = std.fs.glob("*.sushi")
             var response = std.http.get("https://example.com")
             var result = std.process.run("pwsh", ["-NoProfile", "-Command", "Write-Output hi"], allowFailure: true)
@@ -605,7 +608,7 @@ public class TranspilerTests
     [Fact]
     public void Transpile_PowerShell_ForEach_UsesNativeCollectionLength()
     {
-        const string source = "sum(int... values) {\n    var total = 0\n    for (int value : values) {\n        total = total + value\n    }\n    return total\n}\nprintln(sum(1, 2))";
+        const string source = "sum(int... values) {\n    int total = 0\n    for (int value : values) {\n        total = total + value\n    }\n    return total\n}\nprintln(sum(1, 2))";
 
         var result = new Transpiler().Transpile(new TranspileRequest
         {

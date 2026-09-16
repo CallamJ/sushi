@@ -88,7 +88,7 @@ public sealed class BashEmitter : IBackendEmitter
         _emittedTopLevelSection = false;
         _positionalParameterReferences.Clear();
         _runtimeFunctionFilter = null;
-        _nativeGlobHelper = program.Statements.OfType<IrStandardLibraryImportStatement>().Any();
+        _nativeGlobHelper = HasFsGlobImport(program);
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -126,22 +126,7 @@ public sealed class BashEmitter : IBackendEmitter
         }
         if (EmissionCapabilityAnalyzer.UsesFsGlob(program) && HasFsGlobImport(program))
         {
-            if (program.Statements.OfType<IrStandardLibraryImportStatement>().Any())
-            {
-                EmitNativeGlobHelper();
-            }
-            else
-            {
-            _runtimeFunctionFilter = program.Statements.OfType<IrStandardLibraryImportStatement>().Any()
-                ? new HashSet<string>(StringComparer.Ordinal)
-            {
-                "__sushi_glob_regex_into", "__sushi_fs_glob_into"
-            }
-                : null;
-            EmitCoreRuntimeHelpers();
-            EmitRuntimeHelpers();
-            _runtimeFunctionFilter = null;
-            }
+            EmitNativeGlobHelper();
         }
         foreach (var statement in program.Statements)
         {
@@ -154,7 +139,7 @@ public sealed class BashEmitter : IBackendEmitter
     private static bool HasFsGlobImport(IrProgram program)
     {
         var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
-        return imports.Count == 0 || imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
+        return imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
             (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
     }
 
@@ -4203,6 +4188,24 @@ __sushi_native_obj_to_json() {
                 return "''";
             }
 
+            case IrCollectionLengthExpression length when length.Target is IrIdentifierExpression identifier &&
+                                                           _nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var lengthArrayName):
+                return $"\"${{#{lengthArrayName}[@]}}\"";
+
+            case IrSliceExpression slice:
+            {
+                var targetName = slice.Target is IrIdentifierExpression targetIdentifier
+                    ? SanitizeVariableName(targetIdentifier.Name)
+                    : DeclareTemp(PrepareValue(slice.Target, inFunction), inFunction);
+                var isArray = _nativeArrayVariables.ContainsKey(targetName);
+                var targetReference = isArray ? $"{targetName}[@]" : targetName;
+                var startText = slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start);
+                if (slice.End == null)
+                    return $"\"${{{targetReference}:{startText}}}\"";
+                var lengthText = $"({EmitNativeSliceBound(slice.End)} - ({startText}))";
+                return $"\"${{{targetReference}:{startText}:{lengthText}}}\"";
+            }
+
             case IrIndexExpression index when index.Target is IrIdentifierExpression identifier &&
                                              _nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var arrayName):
             {
@@ -4241,41 +4244,6 @@ __sushi_native_obj_to_json() {
                 var operandTemp = DeclareTemp(operand, inFunction);
                 return $"$(( {unary.Operator}{operandTemp} ))";
             }
-
-            // Foreach lowering uses this internal length operation.  When the
-            // value is a known native shell array, lower it directly instead
-            // of attempting to call the JSON runtime helper.
-            case IrCallExpression { Callee: "__sushi_json_length", Arguments: [{ Value: IrIdentifierExpression identifier }] }
-                when _nativeArrayVariables.ContainsKey(SanitizeVariableName(identifier.Name)):
-            {
-                var arrayName = SanitizeVariableName(identifier.Name);
-                return $"\"${{#{arrayName}[@]}}\"";
-            }
-
-            case IrCallExpression { Callee: "__sushi_slice", Arguments: [var targetArgument, { Value: IrLiteralExpression { Value: null } }, { Value: IrIntrinsicCallExpression { Id: IntrinsicId.StringLength } }] }:
-                return PrepareValue(targetArgument.Value, inFunction);
-            case IrCallExpression { Callee: "__sushi_slice", Arguments: [var targetArgument, { Value: IrLiteralExpression { Value: 0 } }, { Value: IrIntrinsicCallExpression { Id: IntrinsicId.StringLength } }] }:
-                return PrepareValue(targetArgument.Value, inFunction);
-
-            case IrCallExpression { Callee: "__sushi_slice", Arguments: [var targetArgument, var startArgument, var endArgument] }:
-            {
-                var start = startArgument.Value;
-                var end = endArgument.Value;
-                var targetName = targetArgument.Value is IrIdentifierExpression targetIdentifier
-                    ? SanitizeVariableName(targetIdentifier.Name)
-                    : DeclareTemp(PrepareValue(targetArgument.Value, inFunction), inFunction);
-                var isArray = targetArgument.Value is IrIdentifierExpression && _nativeArrayVariables.ContainsKey(targetName);
-                var targetReference = isArray ? $"{targetName}[@]" : targetName;
-                var startText = start is IrLiteralExpression { Value: null }
-                    ? "0"
-                    : EmitNativeSliceBound(start);
-                if (end is IrLiteralExpression { Value: null })
-                    return $"\"${{{targetReference}:{startText}}}\"";
-
-                var lengthText = $"({EmitNativeSliceBound(end)} - ({startText}))";
-                return $"\"${{{targetReference}:{startText}:{lengthText}}}\"";
-            }
-
 
             case IrCallExpression call when
                 !call.Callee.StartsWith("__sushi_new_", StringComparison.Ordinal) &&
@@ -4873,11 +4841,10 @@ __sushi_native_obj_to_json() {
                                                  _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrIndexExpression { Target: IrIdentifierExpression identifier } =>
                 _integerArrayVariables.Contains(SanitizeVariableName(identifier.Name)),
+            IrCollectionLengthExpression => true,
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
                 IsDefinitelyInteger(binary.Left) && IsDefinitelyInteger(binary.Right),
-            IrCallExpression { Callee: "__sushi_json_length", Arguments: [{ Value: IrIdentifierExpression identifier }] }
-                when _nativeArrayVariables.ContainsKey(SanitizeVariableName(identifier.Name)) => true,
             IrCallExpression call => _integerReturningFunctions.Contains(call.Callee),
             IrResolvedMethodCallExpression method => _integerReturningFunctions.Contains(method.Callee),
             IrAdapterCallExpression adapter => _integerReturningFunctions.Contains(adapter.Callee),
@@ -5107,6 +5074,10 @@ __sushi_native_obj_to_json() {
             IrArrayLiteralExpression array => EmitArrayLiteral(array),
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
             IrMemberAccessExpression member => EmitMemberValueExpression(member),
+            IrCollectionLengthExpression length when length.Target is IrIdentifierExpression identifier &&
+                                                     _nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var lengthArrayName) =>
+                $"\"${{#{lengthArrayName}[@]}}\"",
+            IrSliceExpression slice => EmitNativeSliceValue(slice),
             IrIndexExpression index => $"\"$(__sushi_json_index {EmitValueExpression(index.Target)} {EmitValueExpression(index.Index)})\"",
             IrUnaryExpression unary when unary.Operator == "!" =>
                 $"\"$(if {EmitConditionCommand(unary.Operand)}; then printf '%s' 'false'; else printf '%s' 'true'; fi)\"",
@@ -5135,6 +5106,21 @@ __sushi_native_obj_to_json() {
             IrAssignmentExpression assignment => $"$({EmitAssignmentExpression(assignment)}; printf '%s' \"${{{SanitizeVariableName(assignment.Target.Name)}:-}}\")",
             _ => "''"
         };
+    }
+
+    private string EmitNativeSliceValue(IrSliceExpression slice)
+    {
+        var target = EmitValueExpression(slice.Target);
+        var targetName = slice.Target is IrIdentifierExpression identifier
+            ? SanitizeVariableName(identifier.Name)
+            : null;
+        var isArray = targetName != null && _nativeArrayVariables.ContainsKey(targetName);
+        var targetReference = isArray ? $"{targetName}[@]" : target;
+        var start = slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start);
+        if (slice.End == null)
+            return $"\"${{{targetReference}:{start}}}\"";
+        var length = $"({EmitNativeSliceBound(slice.End)} - ({start}))";
+        return $"\"${{{targetReference}:{start}:{length}}}\"";
     }
 
     private string EmitVariableValue(string name)
