@@ -19,7 +19,9 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private string? _currentFunctionName;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
     private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
+    private HashSet<string> _knownFloatVariables = new(StringComparer.Ordinal);
     private HashSet<string> _integerReturningFunctions = new(StringComparer.Ordinal);
+    private HashSet<string> _floatReturningFunctions = new(StringComparer.Ordinal);
     private Dictionary<string, IrArrayLiteralExpression> _arrayInitializers = new(StringComparer.Ordinal);
     private TargetNameAllocator _names = null!;
     private Dictionary<string, string> _generatedFunctionNames = new(StringComparer.Ordinal);
@@ -60,11 +62,18 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
+        _knownFloatVariables = new HashSet<string>(StringComparer.Ordinal);
         _arrayInitializers.Clear();
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
                                function.ReturnType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true)
+            .Select(function => function.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _floatReturningFunctions = program.Statements
+            .OfType<IrFunctionDeclarationStatement>()
+            .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
+                               function.ReturnType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true)
             .Select(function => function.Name)
             .ToHashSet(StringComparer.Ordinal);
 
@@ -1153,8 +1162,16 @@ function __sushi_call_method {
                     SetKnownInteger(variableName, false);
                     break;
                 }
-                WriteLine($"${SanitizeName(variable.Name)} = {EmitValueExpression(initializer)}");
-                SetKnownInteger(SanitizeName(variable.Name), IsDefinitelyInteger(initializer));
+                var initializerText = EmitValueExpression(initializer);
+                if (variable.DeclaredType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true &&
+                    variable.Initializer != null)
+                {
+                    initializerText = $"[double]({initializerText})";
+                }
+                WriteLine($"${SanitizeName(variable.Name)} = {initializerText}");
+                var emittedName = SanitizeName(variable.Name);
+                SetKnownInteger(emittedName, variable.DeclaredType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true || IsDefinitelyInteger(initializer));
+                SetKnownFloat(emittedName, variable.DeclaredType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true || IsDefinitelyFloat(initializer));
                 break;
             }
 
@@ -1194,7 +1211,10 @@ function __sushi_call_method {
             case IrReturnStatement returnStatement:
                 if (returnStatement.Expression != null)
                 {
-                    WriteLine($"return {EmitValueExpression(returnStatement.Expression)}");
+                    var value = EmitValueExpression(returnStatement.Expression);
+                    if (_currentFunctionReturnType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true)
+                        value = $"[double]({value})";
+                    WriteLine($"return {value}");
                 }
                 else
                 {
@@ -1281,9 +1301,11 @@ function __sushi_call_method {
         var previousFunctionName = _currentFunctionName;
         var previousReturnType = _currentFunctionReturnType;
         var previousKnownIntegers = _knownIntegerVariables;
+        var previousKnownFloats = _knownFloatVariables;
         _currentFunctionName = statement.Name;
         _currentFunctionReturnType = statement.ReturnType;
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
+        _knownFloatVariables = new HashSet<string>(StringComparer.Ordinal);
         var previousReceiverName = _fallbackReceiverName;
         var previousRichEnumReceiver = _currentRichEnumReceiver;
         _fallbackReceiverName = statement.Parameters.Any(parameter => parameter.Name == "this") ? "self" : null;
@@ -1328,6 +1350,11 @@ function __sushi_call_method {
             {
                 _knownIntegerVariables.Add(paramName);
             }
+            if (parameter.DeclaredType.Kind == IrTypeKind.Primitive &&
+                parameter.DeclaredType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                _knownFloatVariables.Add(paramName);
+            }
             if (parameter.IsVarargs)
             {
                 if (parameter.DeclaredType.IsAnyOrUnknown)
@@ -1356,6 +1383,7 @@ function __sushi_call_method {
         _currentFunctionName = previousFunctionName;
         _currentFunctionReturnType = previousReturnType;
         _knownIntegerVariables = previousKnownIntegers;
+        _knownFloatVariables = previousKnownFloats;
         _fallbackReceiverName = previousReceiverName;
         _currentRichEnumReceiver = previousRichEnumReceiver;
         _indent--;
@@ -1796,6 +1824,26 @@ function __sushi_call_method {
         type.Kind == IrTypeKind.Primitive && type.Name is not null &&
         type.Name is not ("string" or "int" or "float" or "bool" or "array" or "object" or "any");
 
+    private bool IsDefinitelyFloat(IrExpression expression)
+    {
+        return expression switch
+        {
+            IrLiteralExpression literal => literal.Value is float or double or decimal,
+            IrIdentifierExpression identifier => _knownFloatVariables.Contains(SanitizeName(identifier.Name)),
+            IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyFloat(unary.Operand),
+            IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
+                IsDefinitelyFloat(binary.Left) || IsDefinitelyFloat(binary.Right),
+            IrCallExpression call => call.Callee.Equals("float", StringComparison.OrdinalIgnoreCase) ||
+                                      call.Callee.Equals("double", StringComparison.OrdinalIgnoreCase) ||
+                                      call.Callee.Equals("decimal", StringComparison.OrdinalIgnoreCase) ||
+                                      _floatReturningFunctions.Contains(call.Callee),
+            IrResolvedMethodCallExpression method => _floatReturningFunctions.Contains(method.Callee),
+            IrAdapterCallExpression adapter => _floatReturningFunctions.Contains(adapter.Callee),
+            IrMemberAccessExpression member => member.ValueType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true,
+            _ => false
+        };
+    }
+
     private bool IsDefinitelyInteger(IrExpression expression)
     {
         return expression switch
@@ -1822,6 +1870,12 @@ function __sushi_call_method {
         {
             _knownIntegerVariables.Remove(name);
         }
+    }
+
+    private void SetKnownFloat(string name, bool isFloat)
+    {
+        if (isFloat) _knownFloatVariables.Add(name);
+        else _knownFloatVariables.Remove(name);
     }
 
     private string EmitArrayLiteral(IrArrayLiteralExpression expression)

@@ -314,8 +314,11 @@ public sealed class AstToIrLowerer
                         declaration.Column);
                 }
                 TrackVariableObjectType(declaration.Name, declaration.Type, declaration.Initializer);
+                var declaredType = declaration.Type is null
+                    ? IrTypeRef.Any
+                    : LowerDeclaredType(declaration.Type, declaration.Line, declaration.Column, $"variable '{declaration.Name}'");
                 if (declaration.Type is not null && declaration.Initializer is not null)
-                    ValidateConditionalArms(declaration.Initializer, LowerDeclaredType(declaration.Type, declaration.Line, declaration.Column, $"variable '{declaration.Name}'"),
+                    ValidateConditionalArms(declaration.Initializer, declaredType,
                         declaration.Line, declaration.Column, $"initializer for variable '{declaration.Name}'", InferredTypeConflictCode);
                 var initializer = declaration.Initializer != null ? LowerExpression(declaration.Initializer) : null;
                 var declarationName = _functionDepth == 0 ? ResolveTopLevel(declaration.Name) : declaration.Name;
@@ -324,7 +327,7 @@ public sealed class AstToIrLowerer
                     _knownVariableTypes[declarationName] = _knownVariableTypes[declaration.Name];
                 _definedVariables.Add(declaration.Name);
                 _definedVariables.Add(declarationName);
-                return new IrVariableDeclarationStatement(declarationName, initializer);
+                return new IrVariableDeclarationStatement(declarationName, initializer, declaredType);
             }
 
             case ExpressionStatementNode expressionStatement:
@@ -956,9 +959,15 @@ public sealed class AstToIrLowerer
                         return new IrLiteralExpression(null);
                     }
                 }
-                var target = LowerExpression(member.Object);
+                var loweredMember = LowerMemberAccess(member);
+                var target = loweredMember is IrMemberAccessExpression loweredAccess
+                    ? loweredAccess.Target
+                    : LowerExpression(member.Object);
                 var value = LowerExpression(node.Right);
-                return new IrMemberAssignmentExpression(target, member.MemberName, node.Operator, value);
+                var memberType = loweredMember is IrMemberAccessExpression typedMember
+                    ? typedMember.ValueType
+                    : IrTypeRef.Any;
+                return new IrMemberAssignmentExpression(target, member.MemberName, node.Operator, value, memberType);
             }
 
             if (node.Left is not IdentifierExpressionNode identifier)

@@ -48,11 +48,14 @@ public sealed class IrVariableDeclarationStatement : IrStatement
 {
     public string Name { get; }
     public IrExpression? Initializer { get; }
+    /// <summary>Static declaration type, when the source declared one.</summary>
+    public IrTypeRef DeclaredType { get; }
 
-    public IrVariableDeclarationStatement(string name, IrExpression? initializer)
+    public IrVariableDeclarationStatement(string name, IrExpression? initializer, IrTypeRef? declaredType = null)
     {
         Name = name;
         Initializer = initializer;
+        DeclaredType = declaredType ?? IrTypeRef.Any;
     }
 }
 
@@ -632,13 +635,15 @@ public sealed class IrMemberAssignmentExpression : IrExpression
     public string MemberName { get; }
     public string Operator { get; }
     public IrExpression Value { get; }
+    public IrTypeRef MemberType { get; }
 
-    public IrMemberAssignmentExpression(IrExpression target, string memberName, string @operator, IrExpression value)
+    public IrMemberAssignmentExpression(IrExpression target, string memberName, string @operator, IrExpression value, IrTypeRef? memberType = null)
     {
         Target = target;
         MemberName = memberName;
         Operator = @operator;
         Value = value;
+        MemberType = memberType ?? IrTypeRef.Any;
     }
 }
 

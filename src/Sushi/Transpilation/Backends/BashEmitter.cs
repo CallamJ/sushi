@@ -21,7 +21,9 @@ public sealed class BashEmitter : IBackendEmitter
     private string? _currentFunctionName;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
     private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
+    private HashSet<string> _knownFloatVariables = new(StringComparer.Ordinal);
     private HashSet<string> _integerReturningFunctions = new(StringComparer.Ordinal);
+    private HashSet<string> _floatReturningFunctions = new(StringComparer.Ordinal);
     private Dictionary<string, string> _nativeArrayVariables = new(StringComparer.Ordinal);
     private HashSet<string> _nativeObjectVariables = new(StringComparer.Ordinal);
     private HashSet<string> _recordVariables = new(StringComparer.Ordinal);
@@ -65,6 +67,7 @@ public sealed class BashEmitter : IBackendEmitter
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
         _knownIntegerVariables.Clear();
+        _knownFloatVariables.Clear();
         _nativeArrayVariables.Clear();
         _nativeObjectVariables.Clear();
         _recordVariables.Clear();
@@ -88,6 +91,12 @@ public sealed class BashEmitter : IBackendEmitter
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
                                function.ReturnType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true)
+            .Select(function => function.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _floatReturningFunctions = program.Statements
+            .OfType<IrFunctionDeclarationStatement>()
+            .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
+                               function.ReturnType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true)
             .Select(function => function.Name)
             .ToHashSet(StringComparer.Ordinal);
 
@@ -2759,6 +2768,12 @@ __sushi_native_obj_to_json() {
                     
                 var initializer = variable.Initializer ?? new IrLiteralExpression(null);
                 var name = SanitizeVariableName(variable.Name);
+                var declaredInt = variable.DeclaredType.Kind == IrTypeKind.Primitive &&
+                                  variable.DeclaredType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true;
+                var declaredFloat = variable.DeclaredType.Kind == IrTypeKind.Primitive &&
+                                    variable.DeclaredType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true;
+                if (declaredInt) SetKnownInteger(name, true);
+                if (declaredFloat) SetKnownFloat(name, true);
                 if (initializer is IrConstructionExpression constructor)
                 {
                     WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
@@ -2778,7 +2793,8 @@ __sushi_native_obj_to_json() {
                 {
                     if (inFunction) WriteLine($"local {name}");
                     EmitCallInto(name, valueCall, valueFunction, inFunction);
-                    if (valueFunction.ReturnType.Name == "int") _knownIntegerVariables.Add(name);
+                    SetKnownInteger(name, declaredInt || valueFunction.ReturnType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true);
+                    SetKnownFloat(name, declaredFloat || valueFunction.ReturnType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true);
                     break;
                 }
                 if (initializer is IrIdentifierExpression objectAlias &&
@@ -2872,7 +2888,8 @@ __sushi_native_obj_to_json() {
 
                 var value = PrepareValue(initializer, inFunction);
                 WriteLine($"{(inFunction ? "local " : "")}{name}={value}");
-                SetKnownInteger(name, IsDefinitelyInteger(initializer));
+                SetKnownInteger(name, declaredInt || IsDefinitelyInteger(initializer));
+                SetKnownFloat(name, declaredFloat || IsDefinitelyFloat(initializer));
                 SetKnownArray(name, initializer is IrArrayLiteralExpression);
                     break;
                 }
@@ -3042,6 +3059,7 @@ __sushi_native_obj_to_json() {
         var previousFunctionReturnsValue = _currentFunctionReturnsValue;
         var previousOutputName = _currentOutputName;
         var previousKnownIntegers = _knownIntegerVariables;
+        var previousKnownFloats = _knownFloatVariables;
         var previousNativeArrays = _nativeArrayVariables;
         var previousNativeObjects = _nativeObjectVariables;
         var previousRecords = _recordVariables;
@@ -3056,6 +3074,7 @@ __sushi_native_obj_to_json() {
             ? AllocateFunctionOutputName(statement)
             : "";
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
+        _knownFloatVariables = new HashSet<string>(StringComparer.Ordinal);
         _nativeArrayVariables = new Dictionary<string, string>(StringComparer.Ordinal);
         _nativeObjectVariables = new HashSet<string>(StringComparer.Ordinal);
         _recordVariables = new HashSet<string>(StringComparer.Ordinal);
@@ -3163,6 +3182,11 @@ __sushi_native_obj_to_json() {
             {
                 _knownIntegerVariables.Add(param);
             }
+            else if (parameter.DeclaredType.Kind == IrTypeKind.Primitive &&
+                     parameter.DeclaredType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                _knownFloatVariables.Add(param);
+            }
         }
 
         EmitStatement(statement.Body, inFunction: true);
@@ -3178,6 +3202,7 @@ __sushi_native_obj_to_json() {
         _currentFunctionReturnsValue = previousFunctionReturnsValue;
         _currentOutputName = previousOutputName;
         _knownIntegerVariables = previousKnownIntegers;
+        _knownFloatVariables = previousKnownFloats;
         _nativeArrayVariables = previousNativeArrays;
         _nativeObjectVariables = previousNativeObjects;
         _recordVariables = previousRecords;
@@ -3548,6 +3573,13 @@ __sushi_native_obj_to_json() {
             return $"{name}={EmitValueExpression(assignment.Value)}";
         }
 
+        if (IsDefinitelyFloat(assignment.Value) || _knownFloatVariables.Contains(name))
+        {
+            var currentValue = $"\"${{{name}:-}}\"";
+            var rightValue = EmitFloatOperand(assignment.Value);
+            return $"{name}={EmitAwkArithmetic(currentValue, rightValue, assignment.Operator[0].ToString())}";
+        }
+
         var mathOp = assignment.Operator[0];
         var checkedCurrent = EmitCheckedInteger($"\"${{{name}:-}}\"", $"variable '{assignment.Target.Name}'");
         return $"{name}=$(( {checkedCurrent} {mathOp} {EmitArithmeticExpression(assignment.Value)} ))";
@@ -3594,6 +3626,7 @@ __sushi_native_obj_to_json() {
             {
                 EmitCallInto(name, valueCall, valueFunction, inFunction);
                 SetKnownInteger(name, valueFunction.ReturnType.Name == "int");
+                SetKnownFloat(name, valueFunction.ReturnType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true);
                 return;
             }
             if (assignment.Value is IrArrayLiteralExpression array)
@@ -3636,13 +3669,22 @@ __sushi_native_obj_to_json() {
         {
             WriteLine($"{name}={value}");
             SetKnownInteger(name, IsDefinitelyInteger(assignment.Value));
+            SetKnownFloat(name, IsDefinitelyFloat(assignment.Value));
             SetKnownArray(name, assignment.Value is IrArrayLiteralExpression);
             return;
         }
 
         var right = DeclareTemp(value, inFunction);
-        WriteLine($"{name}=$(( {name} {assignment.Operator[0]} {right} ))");
-        _knownIntegerVariables.Add(name);
+        if (IsDefinitelyFloat(assignment.Value) || _knownFloatVariables.Contains(name))
+        {
+            var currentValue = $"\"${{{name}:-}}\"";
+            var rightValue = $"\"${{{right}:-}}\"";
+            WriteLine($"{name}={EmitAwkArithmetic(currentValue, rightValue, assignment.Operator[0].ToString())}");
+        }
+        else
+            WriteLine($"{name}=$(( {name} {assignment.Operator[0]} {right} ))");
+        SetKnownInteger(name, !IsDefinitelyFloat(assignment.Value) && !_knownFloatVariables.Contains(name));
+        SetKnownFloat(name, IsDefinitelyFloat(assignment.Value) || _knownFloatVariables.Contains(name));
     }
 
     private void EmitMemberAssignment(IrMemberAssignmentExpression assignment, bool inFunction)
@@ -3653,6 +3695,12 @@ __sushi_native_obj_to_json() {
             var member = EmitObjectSubscript(assignment.MemberName);
             if (assignment.Operator == "=")
                 WriteLine($"{target}[{member}]={PrepareValue(assignment.Value, inFunction)}");
+            else if (assignment.MemberType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true ||
+                     IsDefinitelyFloat(assignment.Value))
+            {
+                var currentValue = $"\"${{{target}[{member}]:-}}\"";
+                WriteLine($"{target}[{member}]={EmitAwkArithmetic(currentValue, EmitValueExpression(assignment.Value), assignment.Operator[0].ToString())}");
+            }
             else
                 WriteLine($"{target}[{member}]=$(( ${{{target}[{member}]:-0}} {assignment.Operator[0]} {EmitArithmeticExpression(assignment.Value)} ))");
             return;
@@ -4507,6 +4555,11 @@ __sushi_native_obj_to_json() {
             return $"$(( {EmitInlineInteger(binary)} ))";
         }
 
+        if (IsDefinitelyFloat(binary))
+        {
+            return EmitAwkFloatExpression(binary);
+        }
+
         var leftExpression = PrepareValue(binary.Left, inFunction);
         var rightExpression = PrepareValue(binary.Right, inFunction);
         var left = DeclareTemp(leftExpression, inFunction);
@@ -4825,6 +4878,74 @@ __sushi_native_obj_to_json() {
         };
     }
 
+    private bool IsDefinitelyFloat(IrExpression expression)
+    {
+        return expression switch
+        {
+            IrLiteralExpression literal => literal.Value is float or double or decimal,
+            IrIdentifierExpression identifier => _knownFloatVariables.Contains(SanitizeVariableName(identifier.Name)),
+            IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyFloat(unary.Operand),
+            IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
+                IsDefinitelyFloat(binary.Left) || IsDefinitelyFloat(binary.Right),
+            IrCallExpression call => _floatReturningFunctions.Contains(call.Callee) ||
+                                      call.Callee.Equals("float", StringComparison.OrdinalIgnoreCase) ||
+                                      call.Callee.Equals("double", StringComparison.OrdinalIgnoreCase) ||
+                                      call.Callee.Equals("decimal", StringComparison.OrdinalIgnoreCase),
+            IrResolvedMethodCallExpression method => _floatReturningFunctions.Contains(method.Callee),
+            IrAdapterCallExpression adapter => _floatReturningFunctions.Contains(adapter.Callee),
+            IrMemberAccessExpression member => member.ValueType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true,
+            _ => false
+        };
+    }
+
+    private string EmitAwkArithmetic(string left, string right, string op)
+    {
+        var operation = op switch
+        {
+            "+" or "-" or "*" or "/" or "%" => $"left {op} right",
+            _ => throw new InvalidOperationException($"Unsupported floating-point operator '{op}'.")
+        };
+        var zeroGuard = op is "/" or "%" ? " if (right == 0) exit 2;" : "";
+        return $"$(LC_ALL=C awk -v left={left} -v right={right} 'BEGIN {{{zeroGuard} result = {operation}; if (result == 0) result = 0; printf \"%.17g\", result}}')";
+    }
+
+    private string EmitAwkFloatExpression(IrExpression expression)
+    {
+        var bindings = new List<(string Name, string Value)>();
+        string Build(IrExpression value)
+        {
+            switch (value)
+            {
+                case IrLiteralExpression literal when literal.Value is float or double or decimal:
+                    return EmitLiteral(literal.Value);
+                case IrLiteralExpression literal when literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong:
+                    return Convert.ToString(literal.Value, CultureInfo.InvariantCulture) ?? "0";
+                case IrIdentifierExpression identifier:
+                {
+                    var name = $"v{bindings.Count}";
+                    bindings.Add((name, $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\""));
+                    return name;
+                }
+                case IrUnaryExpression unary when unary.Operator is "+" or "-":
+                    return $"({unary.Operator}{Build(unary.Operand)})";
+                case IrBinaryExpression binary when binary.Operator is "+" or "-" or "*":
+                    return $"({Build(binary.Left)} {binary.Operator} {Build(binary.Right)})";
+                case IrBinaryExpression binary when binary.Operator is "/" or "%":
+                    return $"(sushi_{(binary.Operator == "/" ? "div" : "mod")}({Build(binary.Left)}, {Build(binary.Right)}))";
+                default:
+                {
+                    var name = $"v{bindings.Count}";
+                    bindings.Add((name, EmitValueExpression(value)));
+                    return name;
+                }
+            }
+        }
+
+        var expressionText = Build(expression);
+        var arguments = string.Join(" ", bindings.Select(binding => $"-v {binding.Name}={binding.Value}"));
+        return $"$(LC_ALL=C awk {arguments} 'function sushi_div(a,b) {{ if (b == 0) exit 2; return a / b }} function sushi_mod(a,b) {{ if (b == 0) exit 2; return a % b }} BEGIN {{ result = {expressionText}; if (result == 0) result = 0; printf \"%.17g\", result }}')";
+    }
+
     private bool CanEmitInlineInteger(IrExpression expression)
     {
         return expression switch
@@ -4860,6 +4981,14 @@ __sushi_native_obj_to_json() {
         {
             _knownIntegerVariables.Remove(name);
         }
+    }
+
+    private void SetKnownFloat(string name, bool isFloat)
+    {
+        if (isFloat)
+            _knownFloatVariables.Add(name);
+        else
+            _knownFloatVariables.Remove(name);
     }
 
     private void SetKnownArray(string name, bool isArray)
@@ -4919,16 +5048,27 @@ __sushi_native_obj_to_json() {
 
         if (expression is IrBinaryExpression comparison && comparison.Operator is "==" or "!=")
         {
+            if (IsDefinitelyFloat(comparison))
+                return EmitAwkComparison(comparison);
             var op = comparison.Operator == "==" ? "==" : "!=";
             return $"[[ {EmitComparableValue(comparison.Left)} {op} {EmitComparableValue(comparison.Right)} ]]";
         }
 
         if (expression is IrBinaryExpression relational && relational.Operator is "<" or ">" or "<=" or ">=")
         {
+            if (IsDefinitelyFloat(relational))
+                return EmitAwkComparison(relational);
             return $"(( {EmitArithmeticExpression(relational.Left)} {relational.Operator} {EmitArithmeticExpression(relational.Right)} ))";
         }
 
         return $"[[ {EmitValueExpression(expression)} == 'true' ]]";
+    }
+
+    private string EmitAwkComparison(IrBinaryExpression comparison)
+    {
+        var left = EmitFloatOperand(comparison.Left);
+        var right = EmitFloatOperand(comparison.Right);
+        return $"LC_ALL=C awk -v left={left} -v right={right} 'BEGIN {{ exit !(left {comparison.Operator} right) }}'";
     }
 
     private string EmitComparableValue(IrExpression expression)
@@ -4962,14 +5102,18 @@ __sushi_native_obj_to_json() {
                 $"\"$(if {EmitConditionCommand(unary.Operand)}; then printf '%s' 'false'; else printf '%s' 'true'; fi)\"",
             IrTruthinessExpression truthiness =>
                 $"\"$(if {EmitTruthinessCommand(truthiness)}; then printf '%s' 'true'; else printf '%s' 'false'; fi)\"",
+            IrUnaryExpression unary when unary.Operator is "-" or "+" && IsDefinitelyFloat(unary) =>
+                EmitArithmeticExpression(unary),
             IrUnaryExpression unary when unary.Operator is "-" or "+" =>
                 $"$(( {unary.Operator}{EmitArithmeticExpression(unary.Operand)} ))",
+            IrBinaryExpression binary when binary.Operator == "+" && IsDefinitelyFloat(binary) =>
+                EmitArithmeticExpression(binary),
             IrBinaryExpression binary when binary.Operator is "+" =>
                 $"\"$(__sushi_add {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})\"",
             IrBinaryExpression binary when binary.Operator is "==" or "!=" or "<" or ">" or "<=" or ">=" or "&&" or "||" =>
                 $"\"$(if {EmitConditionCommand(binary)}; then printf '%s' 'true'; else printf '%s' 'false'; fi)\"",
             IrBinaryExpression binary when binary.Operator is "-" or "*" or "/" or "%" =>
-                $"$(( {EmitArithmeticExpression(binary)} ))",
+                EmitArithmeticExpression(binary),
             IrConditionalExpression conditional =>
                 $"\"$(if {EmitConditionCommand(conditional.Condition)}; then printf '%s' {EmitValueExpression(conditional.TrueExpression)}; else printf '%s' {EmitValueExpression(conditional.FalseExpression)}; fi)\"",
             IrIntrinsicCallExpression intrinsicCall => EmitIntrinsicValue(intrinsicCall),
@@ -5118,6 +5262,10 @@ __sushi_native_obj_to_json() {
 
     private string EmitArithmeticExpression(IrExpression expression)
     {
+        if (IsDefinitelyFloat(expression))
+        {
+            return EmitAwkFloatExpression(expression);
+        }
         return expression switch
         {
             IrLiteralExpression literal when literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong
@@ -5139,6 +5287,25 @@ __sushi_native_obj_to_json() {
                 $"({EmitArithmeticExpression(binary.Left)} {binary.Operator} {EmitArithmeticExpression(binary.Right)})",
             _ => EmitCheckedInteger(EmitValueExpression(expression), "arithmetic operand")
         };
+    }
+
+    private string EmitFloatOperand(IrExpression expression)
+    {
+        return expression switch
+        {
+            IrLiteralExpression literal => EmitLiteral(literal.Value),
+            IrIdentifierExpression identifier => $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\"",
+            IrUnaryExpression unary when unary.Operator is "+" or "-" => EmitAwkUnary(unary.Operator, EmitFloatOperand(unary.Operand)),
+            IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
+                EmitAwkArithmetic(EmitFloatOperand(binary.Left), EmitFloatOperand(binary.Right), binary.Operator),
+            _ => EmitValueExpression(expression)
+        };
+    }
+
+    private static string EmitAwkUnary(string op, string operand)
+    {
+        var sign = op == "-" ? "-" : "+";
+        return $"$(LC_ALL=C awk -v value={operand} 'BEGIN {{ result = {sign}value; if (result == 0) result = 0; printf \"%.17g\", result }}')";
     }
 
     private string EmitNativeSliceBound(IrExpression expression)

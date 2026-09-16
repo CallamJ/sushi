@@ -1,6 +1,7 @@
 namespace Sushi.Tests.Transpilation;
 
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using Sushi.Transpilation;
 using Sushi.Transpilation.Backends;
 using Sushi.Transpilation.IR;
@@ -9,6 +10,96 @@ using Xunit;
 
 public class EmitterTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BashFamilyEmitter_UsesNativeAwkFloatingPointRemainder(bool zsh)
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("result", new IrBinaryExpression(
+                new IrLiteralExpression(7.25), "%", new IrLiteralExpression(2.5)))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new BashEmitter(zsh).Emit(program, new EmitContext("float-mod.sushi", diagnostics));
+
+        Assert.Contains("awk", script);
+        Assert.Contains("left % right", script);
+        Assert.DoesNotContain("__sushi_float", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void PowerShellEmitter_UsesNativeFloatingPointRemainder()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("result", new IrBinaryExpression(
+                new IrLiteralExpression(7.25), "%", new IrLiteralExpression(2.5)))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new PowerShellEmitter().Emit(program, new EmitContext("float-mod.sushi", diagnostics));
+
+        Assert.Contains("%", script);
+        Assert.DoesNotContain("IEEERemainder", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void PowerShellEmitter_CoercesExplicitFloatDeclarations()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("value", new IrLiteralExpression(1), IrTypeRef.Primitive("float"))
+        });
+        var diagnostics = new List<Diagnostic>();
+        var script = new PowerShellEmitter().Emit(program, new EmitContext("float.sushi", diagnostics));
+
+        Assert.Contains("[double](1)", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void BashEmitter_FloatDeclarationDrivesLaterArithmetic()
+    {
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("value", new IrLiteralExpression(1), IrTypeRef.Primitive("float")),
+            new IrExpressionStatement(new IrIntrinsicCallExpression(
+                "println", IntrinsicId.Println, new IrExpression[]
+                {
+                    new IrBinaryExpression(new IrIdentifierExpression("value"), "/", new IrLiteralExpression(2))
+                }))
+        });
+
+        var diagnostics = new List<Diagnostic>();
+        var script = new BashEmitter().Emit(program, new EmitContext("float.sushi", diagnostics));
+
+        Assert.Contains("awk", script);
+        Assert.DoesNotContain("$(( value / 2 ))", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void BashEmitter_FlattensNestedFloatArithmeticIntoOneAwkInvocation()
+    {
+        var expression = new IrBinaryExpression(
+            new IrBinaryExpression(new IrLiteralExpression(1.25), "+", new IrLiteralExpression(2.5)),
+            "*", new IrLiteralExpression(4.0));
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrExpressionStatement(new IrIntrinsicCallExpression(
+                "println", IntrinsicId.Println, new IrExpression[] { expression }))
+        });
+        var diagnostics = new List<Diagnostic>();
+        var script = new BashEmitter().Emit(program, new EmitContext("float.sushi", diagnostics));
+
+        Assert.Equal(1, Regex.Matches(script, "awk").Count);
+        Assert.Empty(diagnostics);
+    }
+
     [Fact]
     public void BashEmitter_EmitsBasicScript()
     {
