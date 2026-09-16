@@ -88,11 +88,11 @@ jobs:
             **/packages.lock.json
       - run: bash scripts/build.sh --runtime linux-x64
       - run: |
-          test -f publish/Sushi-linux_x64-64
-          publish/Sushi-linux_x64-64 --help >/dev/null
+          test -x dist/Sushi/Release/linux-x64/Sushi
+          dist/Sushi/Release/linux-x64/Sushi --help >/dev/null
           printf 'println("Sushi package smoke")\n' > /tmp/sushi-package-smoke.sushi
-          publish/Sushi-linux_x64-64 check /tmp/sushi-package-smoke.sushi --target bash-linux --format json >/dev/null
-          publish/Sushi-linux_x64-64 benchmark --targets bash --iterations 1 --warmup 0 --strict-output --filter regex_match --output-dir /tmp/sushi-package-smoke
+          dist/Sushi/Release/linux-x64/Sushi check /tmp/sushi-package-smoke.sushi --target bash-linux --format json >/dev/null
+          dist/Sushi/Release/linux-x64/Sushi benchmark --targets bash --iterations 1 --warmup 0 --strict-output --filter regex_match --output-dir /tmp/sushi-package-smoke
 
   transpilation-smoke:
     name: Transpilation smoke (${{ matrix.name }})
@@ -202,16 +202,12 @@ jobs:
             rid: linux-x64
           - os: ubuntu-latest
             rid: linux-arm64
-          - os: ubuntu-latest
-            rid: linux-arm
           - os: macos-15-intel
             rid: osx-x64
           - os: macos-latest
             rid: osx-arm64
           - os: windows-latest
             rid: win-x64
-          - os: windows-latest
-            rid: win-x86
           - os: windows-latest
             rid: win-arm64
     runs-on: ${{ matrix.os }}
@@ -226,7 +222,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sushi-${{ matrix.rid }}
-          path: publish/Sushi-*
+          path: dist/Sushi/Release/${{ matrix.rid }}/**
           if-no-files-found: error
 
   release-tool:
