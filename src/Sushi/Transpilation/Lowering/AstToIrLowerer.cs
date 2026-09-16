@@ -1285,6 +1285,27 @@ public sealed class AstToIrLowerer
                 return new IrLiteralExpression(null);
             }
 
+            var receiverType = InferAstExpressionType(memberCallee.Object, _knownVariableTypes);
+            if (receiverType.IsAnyOrUnknown)
+            {
+                AddDiagnostic(
+                    UnknownValueTypeCode,
+                    $"Method '{memberCallee.MemberName}' requires a statically known receiver type; cast the value first.",
+                    memberCallee.Line,
+                    memberCallee.Column);
+                return new IrLiteralExpression(null);
+            }
+            if (receiverType.Kind == IrTypeKind.Primitive &&
+                (receiverType.Name != "array" || memberCallee.MemberName is not ("length" or "push" or "map" or "filter" or "reduce")))
+            {
+                AddDiagnostic(
+                    UnknownMemberCode,
+                    $"Type '{DescribeType(receiverType)}' has no method '{memberCallee.MemberName}'.",
+                    memberCallee.Line,
+                    memberCallee.Column);
+                return new IrLiteralExpression(null);
+            }
+
             return new IrMethodCallExpression(
                 LowerExpression(memberCallee.Object),
                 memberCallee.MemberName,

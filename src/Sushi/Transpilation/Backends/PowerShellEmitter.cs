@@ -214,10 +214,10 @@ function __sushi_fs_glob {
              EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessFail) ||
              EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessRequireSuccess)))
             allowed.UnionWith(new[] { "__sushi_member", "__sushi_to_array", "__sushi_to_map", "__sushi_process_run", "__sushi_process_pipeline", "__sushi_process_fail", "__sushi_process_require_success" });
-        if (modules.Any(module => module is "std.http" or "std.http.get" or "std.http.post"))
+        if (modules.Any(module => module is "std.http" or "std.http.get" or "std.http.post") &&
+            (EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.HttpGet) ||
+             EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.HttpPost)))
             allowed.UnionWith(new[] { "__sushi_to_map", "__sushi_http_request", "__sushi_http_get", "__sushi_http_post" });
-        if (modules.Any(module => module is "std.json" or "std.json.parse" or "std.json.stringify"))
-            allowed.UnionWith(new[] { "__sushi_json_parse", "__sushi_json_sort_value", "__sushi_json_stringify" });
         if (allowed.Count == 0) return;
         var start = _builder.Length;
         EmitStdlibHelperDefinitions();
