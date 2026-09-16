@@ -1641,6 +1641,8 @@ function __sushi_call_method {
                 $"({EmitValueExpression(binary.Left)} {MapBinaryOperator(binary.Operator)} {EmitValueExpression(binary.Right)})",
             IrIntrinsicCallExpression intrinsicCall =>
                 EmitIntrinsicValue(intrinsicCall),
+            IrCallExpression { Callee: "__sushi_slice", Arguments: [var target, var start, var end] } slice =>
+                EmitNativeStringSlice(slice),
             IrCallExpression call =>
                 $"({EmitCallCommand(call)})",
             IrConstructionExpression construction => EmitNativeConstruction(construction),
@@ -1654,6 +1656,28 @@ function __sushi_call_method {
                 $"$(({EmitValueExpression(assignment.Target)}).{SanitizeMemberName(assignment.MemberName)} {assignment.Operator} {EmitValueExpression(assignment.Value)})",
             _ => "$null"
         };
+    }
+
+    private string EmitNativeStringSlice(IrCallExpression slice)
+    {
+        var target = EmitValueExpression(slice.Arguments[0].Value);
+        var start = slice.Arguments[1].Value is IrLiteralExpression { Value: null }
+            ? "0"
+            : EmitValueExpression(slice.Arguments[1].Value);
+        var isArray = slice.Arguments[0].Value is IrIdentifierExpression identifier &&
+                      _arrayInitializers.ContainsKey(SanitizeName(identifier.Name));
+        if (isArray)
+        {
+            if (slice.Arguments[2].Value is IrLiteralExpression { Value: null })
+                return "@(" + target + ")[([int]" + start + ")..($(@(" + target + ").Count) - 1)]";
+            var arrayEnd = EmitValueExpression(slice.Arguments[2].Value);
+            return "@(" + target + ")[([int]" + start + ")..([int](" + arrayEnd + ") - 1)]";
+        }
+        if (slice.Arguments[2].Value is IrLiteralExpression { Value: null })
+            return $"({target}).Substring([int]({start}))";
+
+        var end = EmitValueExpression(slice.Arguments[2].Value);
+        return $"({target}).Substring([int]({start}), [int](({end}) - ({start})))";
     }
 
     private string EmitIdentifier(IrIdentifierExpression identifier)

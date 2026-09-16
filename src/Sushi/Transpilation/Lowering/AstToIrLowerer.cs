@@ -38,6 +38,7 @@ public sealed class AstToIrLowerer
     private const string DuplicateVariableCode = "SUSHI1053";
     private const string InvalidOperatorTypeCode = "SUSHI1054";
     private const string UnknownValueTypeCode = "SUSHI1058";
+    private const string InvalidSliceTargetCode = "SUSHI1059";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -747,20 +748,37 @@ public sealed class AstToIrLowerer
             InterpolatedStringExpressionNode interpolated => LowerInterpolatedString(interpolated),
             MemberAccessExpressionNode member => LowerMemberAccess(member),
             IndexExpressionNode index => IndexWithOrigin(index),
-            SliceExpressionNode slice => new IrCallExpression(
-                "__sushi_slice",
-                new IrExpression[]
-                {
-                    LowerExpression(slice.Array),
-                    slice.Start != null ? LowerExpression(slice.Start) : new IrLiteralExpression(null),
-                    slice.End != null ? LowerExpression(slice.End) : new IrLiteralExpression(null)
-                }),
+            SliceExpressionNode slice => LowerSlice(slice),
             PipeExpressionNode pipe => LowerPipeExpression(pipe),
             CallExpressionNode call => LowerCall(call),
             NewExpressionNode @new => LowerNewExpression(@new),
             LambdaExpressionNode lambda => LowerLambdaExpression(lambda),
             _ => UnsupportedExpression(node)
         };
+    }
+
+    private IrExpression LowerSlice(SliceExpressionNode slice)
+    {
+        var targetType = InferAstExpressionType(slice.Array, _knownVariableTypes);
+        var supported = targetType.Kind == IrTypeKind.Primitive &&
+                        (string.Equals(targetType.Name, "string", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(targetType.Name, "array", StringComparison.OrdinalIgnoreCase));
+        if (!supported)
+        {
+            var description = targetType.IsAnyOrUnknown ? "unknown" : DescribeType(targetType);
+            AddDiagnostic(InvalidSliceTargetCode,
+                $"Slice expressions require a string or array target, but received '{description}'.",
+                slice.Array.Line,
+                slice.Array.Column);
+        }
+        return new IrCallExpression(
+            "__sushi_slice",
+            new IrExpression[]
+            {
+                LowerExpression(slice.Array),
+                slice.Start != null ? LowerExpression(slice.Start) : new IrLiteralExpression(null),
+                slice.End != null ? LowerExpression(slice.End) : new IrLiteralExpression(null)
+            });
     }
 
     private IrExpression IndexWithOrigin(IndexExpressionNode node)
@@ -1662,6 +1680,17 @@ public sealed class AstToIrLowerer
                 var container = InferAstExpressionType(indexed.Array, locals);
                 if (SameType(container, IrTypeRef.Primitive("string"))) return IrTypeRef.Primitive("string");
                 if (SameType(container, IrTypeRef.Primitive("array"))) return IrTypeRef.Any;
+                return IrTypeRef.Unknown;
+            }
+            case SliceExpressionNode sliced:
+            {
+                var container = InferAstExpressionType(sliced.Array, locals);
+                if (container.Kind == IrTypeKind.Primitive &&
+                    string.Equals(container.Name, "string", StringComparison.OrdinalIgnoreCase))
+                    return IrTypeRef.Primitive("string");
+                if (container.Kind == IrTypeKind.Primitive &&
+                    string.Equals(container.Name, "array", StringComparison.OrdinalIgnoreCase))
+                    return IrTypeRef.Primitive("array");
                 return IrTypeRef.Unknown;
             }
             case UnaryExpressionNode { Operator: "!" }: return IrTypeRef.Primitive("bool");
@@ -3174,6 +3203,10 @@ public sealed class AstToIrLowerer
                 type = IrTypeRef.Primitive(construction.TypeName);
                 return true;
 
+            case IrAdapterCallExpression adapter:
+                type = LowerDeclaredType(adapter.TargetTypeName, 1, 1, "conversion result");
+                return !type.IsAnyOrUnknown;
+
             case IrIndexExpression index:
                 if (TryInferStaticType(index.Target, out var indexedType) &&
                     indexedType.Kind == IrTypeKind.Primitive &&
@@ -3209,10 +3242,32 @@ public sealed class AstToIrLowerer
                 type = IrTypeRef.Primitive("bool");
                 return true;
 
+            case IrBinaryExpression { Operator: "+" or "-" or "*" or "/" or "%" } arithmetic:
+                if (TryInferStaticType(arithmetic.Left, out var arithmeticLeft) &&
+                    TryInferStaticType(arithmetic.Right, out var arithmeticRight))
+                {
+                    if (arithmetic.Operator == "+" &&
+                        (SameType(arithmeticLeft, IrTypeRef.Primitive("string")) ||
+                         SameType(arithmeticRight, IrTypeRef.Primitive("string"))))
+                    {
+                        type = IrTypeRef.Primitive("string");
+                        return true;
+                    }
+                    var merged = MergeReturnTypes(new[] { arithmeticLeft, arithmeticRight });
+                    type = merged.Type;
+                    return !merged.Type.IsAnyOrUnknown && !merged.Conflict;
+                }
+                type = IrTypeRef.Unknown;
+                return false;
+
             case IrCallExpression call when _functionSignatures.TryGetValue(call.Callee, out var signature) &&
                                                 !signature.ReturnType.IsAnyOrUnknown:
                 type = signature.ReturnType;
                 return true;
+
+            case IrCallExpression call when call.Callee is "string" or "int" or "float" or "double" or "decimal" or "number":
+                type = LowerDeclaredType(call.Callee, 1, 1, "conversion result");
+                return !type.IsAnyOrUnknown;
 
             case IrCallExpression slice
                 when slice.Callee == "__sushi_slice" && slice.Arguments.Count > 0 &&
