@@ -37,6 +37,7 @@ public sealed class AstToIrLowerer
     private const string MissingReturnValueCode = "SUSHI1052";
     private const string DuplicateVariableCode = "SUSHI1053";
     private const string InvalidOperatorTypeCode = "SUSHI1054";
+    private const string UnknownValueTypeCode = "SUSHI1058";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -968,7 +969,7 @@ public sealed class AstToIrLowerer
                 assignmentValue);
         }
 
-        if (node.Operator is "==" or "===" or "!=" or "!==" &&
+        if (node.Operator is ("==" or "===" or "!=" or "!==") &&
             TryResolveExpressionObjectType(node.Left, out var leftObjectType) &&
             TryResolveExpressionObjectType(node.Right, out var rightObjectType) &&
             (_enums.ContainsKey(leftObjectType) || _enums.ContainsKey(rightObjectType)))
@@ -989,6 +990,15 @@ public sealed class AstToIrLowerer
             ValidateNumericOperand(left, node.Left.Line, node.Left.Column, node.Operator);
             ValidateNumericOperand(right, node.Right.Line, node.Right.Column, node.Operator);
         }
+        if (node.Operator is "==" or "===" or "!=" or "!==" &&
+            TryInferStaticType(left, out var leftType) && TryInferStaticType(right, out var rightType) &&
+            leftType.Kind == IrTypeKind.Primitive && rightType.Kind == IrTypeKind.Primitive &&
+            !leftType.IsAnyOrUnknown && !rightType.IsAnyOrUnknown && !SameType(leftType, rightType))
+        {
+            AddDiagnostic(InvalidOperatorTypeCode,
+                $"Cannot compare values of type '{DescribeType(leftType)}' and '{DescribeType(rightType)}'.",
+                node.Line, node.Column);
+        }
         if (node.Operator is "&&" or "||")
         {
             ValidateBooleanContext(left, node.Left.Line, node.Left.Column, $"left operand of '{node.Operator}'");
@@ -1007,7 +1017,12 @@ public sealed class AstToIrLowerer
 
     private void ValidateNumericOperand(IrExpression expression, int line, int column, string op)
     {
-        if (!TryInferStaticType(expression, out var type) || type.IsAnyOrUnknown) return;
+        if (!TryInferStaticType(expression, out var type))
+        {
+            AddDiagnostic(UnknownValueTypeCode, $"Operator '{op}' requires an operand with a known numeric type.", line, column);
+            return;
+        }
+        if (type.Kind == IrTypeKind.Any) return;
         if (type.Kind == IrTypeKind.Primitive && type.Name is "int" or "float" or "number" or "double" or "decimal") return;
         AddDiagnostic(InvalidOperatorTypeCode,
             $"Operator '{op}' requires numeric operands, but received '{DescribeType(type)}'.", line, column);
@@ -1642,6 +1657,13 @@ public sealed class AstToIrLowerer
             case ThisExpressionNode: return IrTypeRef.Primitive("object");
             case NewExpressionNode constructed:
                 return TryResolveDeclaredObjectType(constructed.TypeName, out var objectType) ? IrTypeRef.Primitive(objectType) : IrTypeRef.Unknown;
+            case IndexExpressionNode indexed:
+            {
+                var container = InferAstExpressionType(indexed.Array, locals);
+                if (SameType(container, IrTypeRef.Primitive("string"))) return IrTypeRef.Primitive("string");
+                if (SameType(container, IrTypeRef.Primitive("array"))) return IrTypeRef.Any;
+                return IrTypeRef.Unknown;
+            }
             case UnaryExpressionNode { Operator: "!" }: return IrTypeRef.Primitive("bool");
             case ConditionalExpressionNode conditional:
                 return MergeReturnTypes(new[] { InferAstExpressionType(conditional.TrueExpression, locals), InferAstExpressionType(conditional.FalseExpression, locals) }).Type;
@@ -3023,6 +3045,11 @@ public sealed class AstToIrLowerer
 
         if (!TryInferStaticType(expression, out var actualType))
         {
+            AddDiagnostic(
+                UnknownValueTypeCode,
+                $"{context} cannot be validated because the expression has an unknown type. Add an explicit type or conversion.",
+                line,
+                column);
             return;
         }
 
@@ -3147,6 +3174,17 @@ public sealed class AstToIrLowerer
                 type = IrTypeRef.Primitive(construction.TypeName);
                 return true;
 
+            case IrIndexExpression index:
+                if (TryInferStaticType(index.Target, out var indexedType) &&
+                    indexedType.Kind == IrTypeKind.Primitive &&
+                    string.Equals(indexedType.Name, "string", StringComparison.OrdinalIgnoreCase))
+                {
+                    type = IrTypeRef.Primitive("string");
+                    return true;
+                }
+                type = IrTypeRef.Unknown;
+                return false;
+
             case IrMemberAccessExpression member when !member.ValueType.IsAnyOrUnknown:
                 type = member.ValueType;
                 return true;
@@ -3174,6 +3212,14 @@ public sealed class AstToIrLowerer
             case IrCallExpression call when _functionSignatures.TryGetValue(call.Callee, out var signature) &&
                                                 !signature.ReturnType.IsAnyOrUnknown:
                 type = signature.ReturnType;
+                return true;
+
+            case IrCallExpression slice
+                when slice.Callee == "__sushi_slice" && slice.Arguments.Count > 0 &&
+                     TryInferStaticType(slice.Arguments[0].Value, out var slicedType) &&
+                     slicedType.Kind == IrTypeKind.Primitive &&
+                     string.Equals(slicedType.Name, "string", StringComparison.OrdinalIgnoreCase):
+                type = IrTypeRef.Primitive("string");
                 return true;
 
             case IrResolvedMethodCallExpression methodCall

@@ -247,7 +247,9 @@ internal sealed class SushiLanguageServer
     private async Task PublishDiagnosticsAsync(string uri, CancellationToken cancellationToken)
     {
         if (!_documents.TryGetValue(uri, out var document)) return;
-        var diagnostics = BuildDiagnostics(uri).Select(ToLspDiagnostic);
+        var sourceDiagnostics = BuildDiagnostics(uri);
+        await _log.WriteLineAsync($"sushi-lsp: diagnostics uri={uri} count={sourceDiagnostics.Count}");
+        var diagnostics = sourceDiagnostics.Select(ToLspDiagnostic);
         await NotifyAsync("textDocument/publishDiagnostics", new { uri, version = document.Version, diagnostics }, cancellationToken);
     }
 
