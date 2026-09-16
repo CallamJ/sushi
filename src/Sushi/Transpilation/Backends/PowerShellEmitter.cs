@@ -1006,15 +1006,6 @@ function __sushi_struct_check {
 
         _builder.AppendLine(
 """
-function __sushi_json_length {
-    param($value)
-    if ($null -eq $value) { return 0 }
-    if ($value -is [string]) { return $value.Length }
-    if ($value -is [System.Collections.IDictionary]) { return $value.Count }
-    if ($value -is [System.Collections.IEnumerable]) { return @($value).Count }
-    return 0
-}
-
 function __sushi_slice {
     param($target, $start = $null, $end = $null)
     $items = @(__sushi_to_array $target)
@@ -1088,7 +1079,7 @@ function __sushi_call_method {
         'name' { return (__sushi_member $target '_name') }
         'ordinal' { return (__sushi_member $target '_ord') }
         'value' { return (__sushi_member $target '_value') }
-        'length' { return (__sushi_json_length $target) }
+        'length' { return @($target).Count }
         'push' { return (__sushi_array_push $target $argsList) }
         'map' { return (__sushi_method_map $target $argsList[0]) }
         'filter' { return (__sushi_method_filter $target $argsList[0]) }
