@@ -147,7 +147,7 @@ public sealed class BashEmitter : IBackendEmitter
     {
         if (_zshMode)
         {
-            AppendRuntimeBlock("""
+            AppendStdlibHelperBlock("""
 __sushi_fs_glob_into() {
   local out_name="${1-}" pattern="${2-}" cwd="${3-}" base="${PWD}" candidate
   typeset -n output="$out_name"
@@ -164,7 +164,7 @@ __sushi_fs_glob_into() {
 """);
             return;
         }
-        AppendRuntimeBlock("""
+        AppendStdlibHelperBlock("""
 __sushi_fs_glob_into() {
   local out_name="${1-}" pattern="${2-}" cwd="${3-}" base="${PWD}" candidate
   local -n output="$out_name"
@@ -182,9 +182,9 @@ __sushi_fs_glob_into() {
 """);
     }
 
-    private void EmitCoreRuntimeHelpers()
+    private void EmitStdlibHelperDefinitions()
     {
-        AppendRuntimeBlock(
+        AppendStdlibHelperBlock(
 """
 __sushi_j_is_integer() {
   [[ "${1-}" =~ ^-?[0-9]+$ ]]
@@ -236,7 +236,7 @@ __sushi_infer_kind_into() {
 }
 """);
 
-        AppendRuntimeBlock(_zshMode
+        AppendStdlibHelperBlock(_zshMode
             ? """
 __sushi_array_seq=0
 __sushi_is_array_handle() {
@@ -355,9 +355,9 @@ __sushi_array_append_to() {
 """);
     }
 
-    private void EmitRuntimeHelpers()
+    private void EmitStdlibHelperCatalog()
     {
-        AppendRuntimeBlock(
+        AppendStdlibHelperBlock(
 """
 __sushi_j_reset() {
   __sushi_j_src="${1-}"
@@ -1850,7 +1850,7 @@ __sushi_http_post() {
 }
 """);
 
-        AppendRuntimeBlock(
+        AppendStdlibHelperBlock(
 """
 __sushi_json_member_json() {
   local json="${1-}"
@@ -2080,7 +2080,7 @@ __sushi_validate_integer() {
 }
 """);
 
-        AppendRuntimeBlock(
+        AppendStdlibHelperBlock(
 """
 __sushi_is_json_array() {
   local value="${1-}"
@@ -2513,7 +2513,7 @@ __sushi_string_match() {
 
 """);
 
-        AppendRuntimeBlock(_zshMode
+        AppendStdlibHelperBlock(_zshMode
             ? """
 __sushi_native_object_seq=0
 __sushi_native_obj_new() {
@@ -2651,7 +2651,7 @@ __sushi_native_obj_to_json() {
 """);
     }
 
-    private void AppendRuntimeBlock(string text)
+    private void AppendStdlibHelperBlock(string text)
     {
         if (_runtimeFunctionFilter != null)
             text = FilterRuntimeBlock(text, _runtimeFunctionFilter);

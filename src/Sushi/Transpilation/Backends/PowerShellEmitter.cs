@@ -35,7 +35,6 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private Dictionary<string, string> _richEnumVariableTypes = new(StringComparer.Ordinal);
     private string? _currentRichEnumReceiver;
     private string? _fallbackReceiverName;
-    private HashSet<string>? _runtimeFunctionFilter;
 
     public string Emit(IrProgram program, EmitContext context)
     {
@@ -52,7 +51,6 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _richEnumVariableTypes.Clear();
         _currentRichEnumReceiver = null;
         _fallbackReceiverName = null;
-        _runtimeFunctionFilter = null;
         _context = context;
         _indent = 0;
         _currentFunctionName = null;
@@ -86,19 +84,9 @@ public sealed class PowerShellEmitter : IBackendEmitter
         }
         if (EmissionCapabilityAnalyzer.UsesFsGlob(program) && HasFsGlobImport(program))
         {
-            _runtimeFunctionFilter = program.Statements.OfType<IrStandardLibraryImportStatement>().Any()
-                ? new HashSet<string>(new[] { "__sushi_glob_regex", "__sushi_fs_glob" }, StringComparer.Ordinal)
-                : null;
-            var runtimeStart = _builder.Length;
-            EmitRuntimeHelpers();
-            if (_runtimeFunctionFilter is { } filter)
-            {
-                var runtimeText = _builder.ToString(runtimeStart, _builder.Length - runtimeStart);
-                _builder.Remove(runtimeStart, _builder.Length - runtimeStart);
-                _builder.Append(FilterRuntimeBlock(runtimeText, filter));
-            }
-            _runtimeFunctionFilter = null;
+            EmitFsGlobHelpers();
         }
+        EmitImportedStdlibHelpers(program);
         var classes = CollectClasses(program.Statements).ToList();
         foreach (var declaration in classes)
         {
@@ -156,6 +144,86 @@ public sealed class PowerShellEmitter : IBackendEmitter
         var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
         return imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
             (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
+    }
+
+    // Glob is an explicitly imported stdlib feature. Emit only the two
+    // functions required to implement it; the rest of the former runtime
+    // bundle must never be pulled into an otherwise native program.
+    private void EmitFsGlobHelpers()
+    {
+        _builder.AppendLine(
+"""
+function __sushi_glob_regex {
+    param([string]$pattern)
+    $pattern = $pattern.Replace('\\', '/')
+    $regex = [System.Text.StringBuilder]::new()
+    for ($index = 0; $index -lt $pattern.Length; $index++) {
+        $character = $pattern[$index]
+        switch ($character) {
+            '*' {
+                if ($index + 1 -lt $pattern.Length -and $pattern[$index + 1] -eq '*') {
+                    if ($index + 2 -lt $pattern.Length -and $pattern[$index + 2] -eq '/') {
+                        [void]$regex.Append('([^/]*/)*'); $index += 2
+                    } else { [void]$regex.Append('.*'); $index++ }
+                } else { [void]$regex.Append('[^/]*') }
+            }
+            '?' { [void]$regex.Append('[^/]') }
+            '[' {
+                $end = $pattern.IndexOf(']', $index + 1)
+                if ($end -lt 0) { [void]$regex.Append('\\[') }
+                else {
+                    $class = $pattern.Substring($index + 1, $end - $index - 1)
+                    if ($class.StartsWith('!')) { $class = '^' + $class.Substring(1) }
+                    [void]$regex.Append('[').Append($class).Append(']'); $index = $end
+                }
+            }
+            default { [void]$regex.Append([regex]::Escape([string]$character)) }
+        }
+    }
+
+    return '^' + $regex.ToString() + '$'
+}
+
+function __sushi_fs_glob {
+    param([string]$pattern, [string]$cwd = $null)
+    $base = if ([string]::IsNullOrWhiteSpace($cwd)) { (Get-Location).Path } else { (Resolve-Path -LiteralPath $cwd -ErrorAction Stop).Path }
+    if (-not (Test-Path -LiteralPath $base -PathType Container)) { throw "std.fs.glob: directory not found: $cwd" }
+    $absolute = [System.IO.Path]::IsPathRooted($pattern)
+    $matcher = [regex]::new((__sushi_glob_regex $pattern), [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @(Get-ChildItem -LiteralPath $base -Force -Recurse -ErrorAction Stop)) {
+        $full = $item.FullName.Replace('\\', '/')
+        $relative = $item.FullName.Substring($base.Length).TrimStart([char]92, [char]47).Replace('\\', '/')
+        if ($matcher.IsMatch($(if ($absolute) { $full } else { $relative }))) { $result.Add($relative) }
+    }
+    $ordered = [string[]]$result.ToArray(); [System.Array]::Sort($ordered, [System.StringComparer]::Ordinal)
+    return ,$ordered
+}
+""");
+    }
+
+    private void EmitImportedStdlibHelpers(IrProgram program)
+    {
+        var modules = program.Statements.OfType<IrStandardLibraryImportStatement>()
+            .Select(import => import.Module)
+            .ToHashSet(StringComparer.Ordinal);
+        var allowed = new HashSet<string>(StringComparer.Ordinal);
+        if (modules.Any(module => module is "std.process" or "std.process.run") &&
+            (EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessRun) ||
+             EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessPipeline) ||
+             EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessFail) ||
+             EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessRequireSuccess)))
+            allowed.UnionWith(new[] { "__sushi_member", "__sushi_to_array", "__sushi_to_map", "__sushi_process_run", "__sushi_process_pipeline", "__sushi_process_fail", "__sushi_process_require_success" });
+        if (modules.Any(module => module is "std.http" or "std.http.get" or "std.http.post"))
+            allowed.UnionWith(new[] { "__sushi_to_map", "__sushi_http_request", "__sushi_http_get", "__sushi_http_post" });
+        if (modules.Any(module => module is "std.json" or "std.json.parse" or "std.json.stringify"))
+            allowed.UnionWith(new[] { "__sushi_json_parse", "__sushi_json_sort_value", "__sushi_json_stringify" });
+        if (allowed.Count == 0) return;
+        var start = _builder.Length;
+        EmitStdlibHelperDefinitions();
+        var text = _builder.ToString(start, _builder.Length - start);
+        _builder.Remove(start, _builder.Length - start);
+        _builder.Append(FilterStdlibHelpers(text, allowed));
     }
 
     private static IEnumerable<IrClassDeclarationStatement> CollectClasses(IEnumerable<IrStatement> statements)
@@ -368,7 +436,10 @@ public sealed class PowerShellEmitter : IBackendEmitter
         _ => name
     };
 
-    private void EmitRuntimeHelpers()
+    // Legacy helper definitions are retained as a source catalog only. They
+    // are never emitted wholesale; EmitImportedStdlibHelpers selects the
+    // definitions required by explicit stdlib imports.
+    private void EmitStdlibHelperDefinitions()
     {
         _builder.AppendLine(
 """
@@ -1083,7 +1154,7 @@ function __sushi_call_method {
 """);
     }
 
-    private static string FilterRuntimeBlock(string text, HashSet<string> allowed)
+    private static string FilterStdlibHelpers(string text, HashSet<string> allowed)
     {
         var output = new StringBuilder();
         foreach (Match match in Regex.Matches(text, @"(?ms)^function\s+(__sushi_[A-Za-z0-9_]+)\s*\{.*?(?=^function\s+__sushi_|\z)"))

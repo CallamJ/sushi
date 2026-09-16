@@ -181,15 +181,18 @@ public sealed class IrTypeRef
     public string? Name { get; }
     /// <summary>Stable semantic identity for named declarations, when available.</summary>
     public string? DeclarationId { get; }
+    /// <summary>Element type for native arrays; null for non-array types.</summary>
+    public IrTypeRef? ElementType { get; }
     public List<IrStructuralField> StructuralFields { get; }
 
     public bool IsAnyOrUnknown => Kind is IrTypeKind.Any or IrTypeKind.Unknown;
 
-    private IrTypeRef(IrTypeKind kind, string? name, IEnumerable<IrStructuralField>? structuralFields, string? declarationId = null)
+    private IrTypeRef(IrTypeKind kind, string? name, IEnumerable<IrStructuralField>? structuralFields, string? declarationId = null, IrTypeRef? elementType = null)
     {
         Kind = kind;
         Name = name;
         DeclarationId = declarationId;
+        ElementType = elementType;
         StructuralFields = structuralFields?.ToList() ?? new List<IrStructuralField>();
     }
 
@@ -197,9 +200,9 @@ public sealed class IrTypeRef
     public static IrTypeRef Unknown { get; } = new(IrTypeKind.Unknown, null, null);
     public static IrTypeRef Void { get; } = new(IrTypeKind.Primitive, "void", null);
 
-    public static IrTypeRef Primitive(string name, string? declarationId = null)
+    public static IrTypeRef Primitive(string name, string? declarationId = null, IrTypeRef? elementType = null)
     {
-        return new IrTypeRef(IrTypeKind.Primitive, name, null, declarationId);
+        return new IrTypeRef(IrTypeKind.Primitive, name, null, declarationId, elementType);
     }
 
     public static IrTypeRef Structural(IEnumerable<IrStructuralField> fields)

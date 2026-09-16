@@ -39,6 +39,7 @@ public sealed class AstToIrLowerer
     private const string InvalidOperatorTypeCode = "SUSHI1054";
     private const string UnknownValueTypeCode = "SUSHI1058";
     private const string InvalidSliceTargetCode = "SUSHI1059";
+    private const string InvalidIndexTargetCode = "SUSHI1060";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -771,6 +772,16 @@ public sealed class AstToIrLowerer
 
     private IrExpression IndexWithOrigin(IndexExpressionNode node)
     {
+        var targetType = InferAstExpressionType(node.Array, _knownVariableTypes);
+        if (targetType.IsAnyOrUnknown ||
+            (targetType.Kind == IrTypeKind.Primitive && targetType.Name is not ("string" or "array")))
+        {
+            AddDiagnostic(
+                InvalidIndexTargetCode,
+                $"Index expressions require a statically known string or array target, but received '{DescribeType(targetType)}'. Cast the value first.",
+                node.Array.Line,
+                node.Array.Column);
+        }
         var expression = new IrIndexExpression(LowerExpression(node.Array), LowerExpression(node.Index));
         expression.Origin = new IrSourceOrigin(node.Line, node.Column);
         return expression;
@@ -830,6 +841,15 @@ public sealed class AstToIrLowerer
             }
         }
         var target = LowerExpression(member.Object);
+        var inferredTargetType = InferAstExpressionType(member.Object, _knownVariableTypes);
+        if (inferredTargetType.IsAnyOrUnknown)
+        {
+            AddDiagnostic(
+                UnknownMemberCode,
+                $"Member access '.{member.MemberName}' requires a statically known object type; cast the value first.",
+                member.Line,
+                member.Column);
+        }
         if (TryInferStaticType(target, out var targetType) && targetType.Kind == IrTypeKind.Structural)
         {
             var field = targetType.StructuralFields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
@@ -1039,7 +1059,12 @@ public sealed class AstToIrLowerer
             AddDiagnostic(UnknownValueTypeCode, $"Operator '{op}' requires an operand with a known numeric type.", line, column);
             return;
         }
-        if (type.Kind == IrTypeKind.Any) return;
+        if (type.Kind == IrTypeKind.Any)
+        {
+            AddDiagnostic(UnknownValueTypeCode,
+                $"Operator '{op}' requires a concrete numeric type; cast the any value first.", line, column);
+            return;
+        }
         if (type.Kind == IrTypeKind.Primitive && type.Name is "int" or "float" or "number" or "double" or "decimal") return;
         AddDiagnostic(InvalidOperatorTypeCode,
             $"Operator '{op}' requires numeric operands, but received '{DescribeType(type)}'.", line, column);
@@ -1673,7 +1698,16 @@ public sealed class AstToIrLowerer
         {
             case LiteralExpressionNode literal: return InferLiteralType(literal.Value);
             case InterpolatedStringExpressionNode: return IrTypeRef.Primitive("string");
-            case ArrayLiteralExpressionNode: return IrTypeRef.Primitive("array");
+            case ArrayLiteralExpressionNode array:
+            {
+                var elementTypes = array.Elements
+                    .Select(element => InferAstExpressionType(element, locals))
+                    .ToList();
+                var elementType = elementTypes.Count == 0
+                    ? IrTypeRef.Any
+                    : MergeReturnTypes(elementTypes).Type;
+                return IrTypeRef.Primitive("array", elementType: elementType);
+            }
             case ObjectLiteralExpressionNode: return IrTypeRef.Primitive("object");
             case ParenthesizedExpressionNode parenthesized: return InferAstExpressionType(parenthesized.Expression, locals);
             case IdentifierExpressionNode identifier when locals.TryGetValue(identifier.Name, out var type): return type;
@@ -2917,10 +2951,12 @@ public sealed class AstToIrLowerer
         }
 
         // Preserve C-style array annotations in the AST while lowering them
-        // to Sushi's single native array representation in the IR.
+        // to a native array representation while retaining the element type.
         if (normalized.EndsWith("[]", StringComparison.Ordinal))
         {
-            return IrTypeRef.Primitive("array");
+            var elementName = normalized[..^2].Trim();
+            var elementType = LowerDeclaredType(elementName, line, column, context);
+            return IrTypeRef.Primitive("array", elementType: elementType);
         }
 
         var primitive = normalized.ToLowerInvariant() switch
@@ -3134,6 +3170,16 @@ public sealed class AstToIrLowerer
             return;
         }
 
+        if (actualType.Kind == IrTypeKind.Any)
+        {
+            AddDiagnostic(
+                UnknownValueTypeCode,
+                $"{context} requires a concrete type; cast the any value to '{DescribeType(expectedType)}' first.",
+                line,
+                column);
+            return;
+        }
+
         if (!IsTypeAssignable(expectedType, actualType))
         {
             AddDiagnostic(
@@ -3243,9 +3289,14 @@ public sealed class AstToIrLowerer
                 type = InferLiteralType(literal.Value);
                 return !type.IsAnyOrUnknown;
 
-            case IrArrayLiteralExpression:
-                type = IrTypeRef.Primitive("array");
+            case IrArrayLiteralExpression array:
+            {
+                var elementTypes = array.Elements
+                    .Select(element => TryInferStaticType(element, out var elementType) ? elementType : IrTypeRef.Unknown)
+                    .ToList();
+                type = IrTypeRef.Primitive("array", elementType: elementTypes.Count == 0 ? IrTypeRef.Any : MergeReturnTypes(elementTypes).Type);
                 return true;
+            }
 
             case IrObjectLiteralExpression:
                 type = IrTypeRef.Primitive("object");
@@ -3277,7 +3328,9 @@ public sealed class AstToIrLowerer
                     (string.Equals(sliceType.Name, "string", StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(sliceType.Name, "array", StringComparison.OrdinalIgnoreCase)))
                 {
-                    type = sliceType;
+                    type = string.Equals(sliceType.Name, "array", StringComparison.OrdinalIgnoreCase)
+                        ? sliceType
+                        : IrTypeRef.Primitive("string");
                     return true;
                 }
                 type = IrTypeRef.Unknown;
@@ -3297,6 +3350,14 @@ public sealed class AstToIrLowerer
                     type = IrTypeRef.Primitive("string");
                     return true;
                 }
+                if (TryInferStaticType(index.Target, out indexedType) &&
+                    indexedType.Kind == IrTypeKind.Primitive &&
+                    string.Equals(indexedType.Name, "array", StringComparison.OrdinalIgnoreCase) &&
+                    indexedType.ElementType != null && !indexedType.ElementType.IsAnyOrUnknown)
+                {
+                    type = indexedType.ElementType;
+                    return true;
+                }
                 type = IrTypeRef.Unknown;
                 return false;
 
@@ -3314,7 +3375,7 @@ public sealed class AstToIrLowerer
 
             case IrIdentifierExpression identifier when _knownVariableTypes.TryGetValue(identifier.Name, out var variableType):
                 type = variableType;
-                return !type.IsAnyOrUnknown;
+                return type.Kind != IrTypeKind.Unknown;
 
             case IrIdentifierExpression { Name: "this" } when _currentFunctionName is { } functionName &&
                 _functionOwnerTypes.TryGetValue(functionName, out var ownerType):
@@ -3461,6 +3522,11 @@ public sealed class AstToIrLowerer
 
         if (string.Equals(expected.Name, actual.Name, StringComparison.Ordinal))
         {
+            if (string.Equals(expected.Name, "array", StringComparison.Ordinal) &&
+                expected.ElementType != null && actual.ElementType != null)
+            {
+                return IsTypeAssignable(expected.ElementType, actual.ElementType);
+            }
             return true;
         }
 
@@ -3485,8 +3551,14 @@ public sealed class AstToIrLowerer
         if (type.Kind == IrTypeKind.Structural)
         {
             var fields = type.StructuralFields
-                .Select(field => $"{field.Type.Name ?? "any"}{(field.Optional ? "?" : "")} {field.Name}");
+                .Select(field => $"{DescribeType(field.Type)}{(field.Optional ? "?" : "")} {field.Name}");
             return $"object {{ {string.Join(", ", fields)} }}";
+        }
+
+        if (type.Kind == IrTypeKind.Primitive &&
+            string.Equals(type.Name, "array", StringComparison.Ordinal))
+        {
+            return $"{DescribeType(type.ElementType ?? IrTypeRef.Any)}[]";
         }
 
         return type.Kind switch
