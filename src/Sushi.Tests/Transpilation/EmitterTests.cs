@@ -581,7 +581,7 @@ public class EmitterTests
         var emitter = new PowerShellEmitter();
         var script = emitter.Emit(program, new EmitContext("contracts.sushi", diagnostics));
 
-        Assert.Contains("param([pscustomobject]$user, [int]$count)", script);
+        Assert.Contains("param([pscustomobject]$user, [long]$count)", script);
         Assert.Contains("return $count", script);
         Assert.DoesNotContain("$__sushi_return_value", script);
         Assert.DoesNotContain("function __sushi_", script);

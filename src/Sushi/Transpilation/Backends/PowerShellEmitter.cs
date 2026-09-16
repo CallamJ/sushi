@@ -351,7 +351,9 @@ public sealed class PowerShellEmitter : IBackendEmitter
     private static string NativeMethodName(string name) => name.ToLowerInvariant() switch
     {
         "string" => "ToString",
-        "int" => "ToInt32",
+        // Sushi `int` is a 64-bit integer across targets. Keep index casts below
+        // as [int] where the PowerShell API specifically requires Int32 indices.
+        "int" => "ToInt64",
         "float" => "ToDouble",
         "bool" => "ToBoolean",
         "array" => "ToArray",
@@ -1900,7 +1902,7 @@ function __sushi_call_method {
             IrTypeKind.Primitive when type.Name is not null && _nativeEnumNames.TryGetValue(type.Name, out var enumName) => $"[{enumName}]",
             IrTypeKind.Primitive => type.Name?.ToLowerInvariant() switch
             {
-                "int" => "[int]",
+                "int" => "[long]",
                 "float" => "[double]",
                 "bool" => "[bool]",
                 "string" => "[string]",
