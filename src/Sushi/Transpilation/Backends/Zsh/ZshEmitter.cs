@@ -1,6 +1,8 @@
-namespace Sushi.Transpilation.Backends;
-
+using Sushi.Transpilation.Backends;
+using Sushi.Transpilation.Backends.Bash;
 using Sushi.Transpilation.IR;
+
+namespace Sushi.Transpilation.Backends.Zsh;
 
 public sealed class ZshEmitter : IBackendEmitter
 {
