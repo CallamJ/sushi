@@ -170,6 +170,7 @@ public sealed partial class PowerShellEmitter
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
             IrConversionExpression conversion => EmitConversionExpression(conversion),
             IrMemberAccessExpression member => EmitMemberAccess(member),
+            IrIndexExpression index when IsStringExpression(index.Target) => EmitNativeStringIndex(index),
             IrIndexExpression index => $"({EmitValueExpression(index.Target)})[{EmitValueExpression(index.Index)}]",
             IrCollectionLengthExpression length => $"@({EmitValueExpression(length.Target)}).Count",
             IrSliceExpression slice => EmitNativeSlice(slice),
@@ -305,12 +306,22 @@ public sealed partial class PowerShellEmitter
             var arrayEnd = EmitValueExpression(endExpression);
             return "@(" + target + ")[([int]" + start + ")..([int](" + arrayEnd + ") - 1)]";
         }
-        if (endExpression == null)
-            return $"({target}).Substring({start})";
+        return EmitNativeStringSlice(targetExpression, startExpression, endExpression);
+    }
 
-        var end = EmitSliceIndex(endExpression);
-        var length = start == "0" ? end : $"({end} - {start})";
-        return $"({target}).Substring({start}, {length})";
+    private string EmitNativeStringIndex(IrIndexExpression index)
+    {
+        var target = EmitValueExpression(index.Target);
+        var position = EmitValueExpression(index.Index);
+        return $"(& {{ param([string]$text, [int]$index) if ($index -lt 0) {{ $index += $text.Length }}; if ($index -lt 0 -or $index -ge $text.Length) {{ throw 'Sushi: string index out of range' }}; $text[$index] }} {target} {position})";
+    }
+
+    private string EmitNativeStringSlice(IrExpression targetExpression, IrExpression? startExpression, IrExpression? endExpression)
+    {
+        var target = EmitValueExpression(targetExpression);
+        var start = startExpression == null ? "$null" : EmitValueExpression(startExpression);
+        var end = endExpression == null ? "$null" : EmitValueExpression(endExpression);
+        return $"(& {{ param([string]$text, $start, $end) if ($null -eq $start) {{ $start = 0 }} else {{ $start = [int]$start }}; if ($null -eq $end) {{ $end = $text.Length }} else {{ $end = [int]$end }}; if ($start -lt 0) {{ $start += $text.Length }}; if ($end -lt 0) {{ $end += $text.Length }}; $start = [Math]::Min($text.Length, [Math]::Max(0, $start)); $end = [Math]::Min($text.Length, [Math]::Max(0, $end)); if ($end -lt $start) {{ $end = $start }}; $text.Substring($start, $end - $start) }} {target} {start} {end})";
     }
 
     private string EmitSliceIndex(IrExpression? expression)
@@ -318,6 +329,15 @@ public sealed partial class PowerShellEmitter
         if (expression is null or IrLiteralExpression { Value: 0 }) return "0";
         return $"[int]({EmitValueExpression(expression)})";
     }
+
+    private static bool IsStringExpression(IrExpression expression) => expression switch
+    {
+        IrIdentifierExpression identifier => identifier.StaticType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true,
+        IrLiteralExpression { Value: string } => true,
+        IrMemberAccessExpression member => member.ValueType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true,
+        IrIntrinsicCallExpression intrinsic => intrinsic.ReturnType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true,
+        _ => false
+    };
 
     private string EmitIdentifier(IrIdentifierExpression identifier)
     {

@@ -94,6 +94,8 @@ public sealed partial class PosixEmitter
                     ? SanitizeVariableName(targetIdentifier.Name)
                     : DeclareTemp(PrepareValue(slice.Target, inFunction), inFunction);
                 var isArray = _nativeArrayVariables.ContainsKey(targetName);
+                if (!isArray)
+                    return PrepareNativeStringSlice(targetName, slice, inFunction);
                 var targetReference = isArray ? $"{targetName}[@]" : targetName;
                 var startText = slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start);
                 if (slice.End == null)
@@ -102,6 +104,9 @@ public sealed partial class PosixEmitter
                 var lengthText = startText == "0" ? endText : $"({endText} - {startText})";
                 return $"\"${{{targetReference}:{startText}:{lengthText}}}\"";
             }
+
+            case IrIndexExpression index when IsStringExpression(index.Target):
+                return PrepareNativeStringIndex(index, inFunction);
 
             case IrIndexExpression index when index.Target is IrIdentifierExpression identifier &&
                                              _nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var arrayName):
@@ -1022,6 +1027,11 @@ public sealed partial class PosixEmitter
             ? SanitizeVariableName(identifier.Name)
             : null;
         var isArray = targetName != null && _nativeArrayVariables.ContainsKey(targetName);
+        if (!isArray)
+        {
+            var stringTarget = targetName ?? DeclareTemp(EmitValueExpression(slice.Target), _currentFunctionName != null);
+            return PrepareNativeStringSlice(stringTarget, slice, _currentFunctionName != null);
+        }
         var targetReference = isArray ? $"{targetName}[@]" : target;
         var start = slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start);
         if (slice.End == null)
@@ -1048,23 +1058,39 @@ public sealed partial class PosixEmitter
         }
 
         if (IsStringExpression(index.Target))
-        {
-            var target = index.Target is IrIdentifierExpression stringIdentifier
-                ? SanitizeVariableName(stringIdentifier.Name)
-                : DeclareTemp(EmitValueExpression(index.Target), _currentFunctionName != null);
-            var subscript = index.Index switch
-            {
-                IrLiteralExpression literal => Convert.ToString(literal.Value, CultureInfo.InvariantCulture) ?? "0",
-                IrIdentifierExpression id => SanitizeVariableName(id.Name),
-                _ => EmitArithmeticExpression(index.Index)
-            };
-            return $"\"${{{target}:{subscript}:1}}\"";
-        }
+            return PrepareNativeStringIndex(index, _currentFunctionName != null);
 
         _context.Error(AmbiguousShapeCode,
             "Indexing requires a statically known native array or string",
             index.Origin?.Line ?? 1, index.Origin?.Column ?? 1);
         return "''";
+    }
+
+    private string PrepareNativeStringIndex(IrIndexExpression index, bool inFunction)
+    {
+        var target = index.Target is IrIdentifierExpression identifier
+            ? SanitizeVariableName(identifier.Name)
+            : DeclareTemp(PrepareValue(index.Target, inFunction), inFunction);
+        var position = DeclareTemp(EmitNativeSliceBound(index.Index), inFunction);
+        var targetLength = "${#" + target + "}";
+        WriteLine($"if (( {position} < 0 )); then {position}=$(( {targetLength} + {position} )); fi");
+        var failure = inFunction ? "return 2" : "exit 2";
+        WriteLine($"if (( {position} < 0 || {position} >= {targetLength} )); then printf 'Sushi: string index out of range\\n' >&2; {failure}; fi");
+        return $"\"${{{target}:{position}:1}}\"";
+    }
+
+    private string PrepareNativeStringSlice(string target, IrSliceExpression slice, bool inFunction)
+    {
+        var start = DeclareTemp(slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start), inFunction);
+        var end = DeclareTemp(slice.End == null ? $"${{#{target}}}" : EmitNativeSliceBound(slice.End), inFunction);
+        var length = $"${{#{target}}}";
+        WriteLine($"if (( {start} < 0 )); then {start}=$(( {length} + {start} )); fi");
+        WriteLine($"if (( {end} < 0 )); then {end}=$(( {length} + {end} )); fi");
+        WriteLine($"if (( {start} < 0 )); then {start}=0; elif (( {start} > {length} )); then {start}={length}; fi");
+        WriteLine($"if (( {end} < 0 )); then {end}=0; elif (( {end} > {length} )); then {end}={length}; fi");
+        WriteLine($"if (( {end} < {start} )); then {end}={start}; fi");
+        var sliceLength = DeclareTemp($"$(( {end} - {start} ))", inFunction);
+        return $"\"${{{target}:{start}:{sliceLength}}}\"";
     }
 
     private static bool IsStringExpression(IrExpression expression) => expression switch

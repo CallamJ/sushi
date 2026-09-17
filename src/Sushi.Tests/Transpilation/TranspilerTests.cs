@@ -424,6 +424,67 @@ public class TranspilerTests
     }
 
     [Fact]
+    public void Transpile_StringLiteralOutOfRangeIndex_ReportsSourceDiagnostic()
+    {
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = "println(\"abc\"[-4])",
+            SourcePath = "string-index-range.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        var diagnostic = Assert.Single(result.Diagnostics, item => item.Code == "SUSHI1062");
+        Assert.Equal(1, diagnostic.Span.Line);
+        Assert.Equal(16, diagnostic.Span.Column);
+    }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash, "bash", ".sh")]
+    [InlineData(TargetLanguage.Zsh, "zsh", ".zsh")]
+    [InlineData(TargetLanguage.Powershell51, "pwsh", ".ps1")]
+    public void Transpile_StringNegativeIndexesAndSlices_UseSharedSemantics(TargetLanguage target, string shell, string extension)
+    {
+        const string source = """
+            string text = "sushi"
+            println(text[-1])
+            println(text[-3:-1])
+            println(text[:-1])
+            println(text[-99:])
+            """;
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "negative-string-index.sushi",
+            TargetLanguage = target
+        });
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+
+        var path = Path.Combine(Path.GetTempPath(), $"sushi-negative-index-{Guid.NewGuid():N}{extension}");
+        try
+        {
+            File.WriteAllText(path, result.EmittedCode);
+            var startInfo = target == TargetLanguage.Powershell51
+                ? new ProcessStartInfo(shell, $"-NoProfile -File \"{path}\"")
+                : new ProcessStartInfo(shell, path);
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            startInfo.UseShellExecute = false;
+            using var process = Process.Start(startInfo);
+            Assert.NotNull(process);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 0, error);
+            Assert.Equal("i\nsh\nsush\nsushi", output.Replace("\r\n", "\n").Trim());
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Transpile_UserFunction_MissingRequiredArgument_Fails()
     {
         const string source = """

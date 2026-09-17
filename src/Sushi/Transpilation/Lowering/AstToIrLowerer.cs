@@ -41,6 +41,7 @@ public sealed class AstToIrLowerer
     private const string InvalidSliceTargetCode = "SUSHI1059";
     private const string InvalidIndexTargetCode = "SUSHI1060";
     private const string DuplicateSwitchLabelCode = "SUSHI1061";
+    private const string StringIndexOutOfRangeCode = "SUSHI1062";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -819,9 +820,36 @@ public sealed class AstToIrLowerer
                 node.Array.Line,
                 node.Array.Column);
         }
+        else if (targetType.Name == "string" && node.Array is LiteralExpressionNode { Value: string text } &&
+                 TryGetStaticInteger(node.Index, out var index) && (index < -text.Length || index >= text.Length))
+        {
+            AddDiagnostic(
+                StringIndexOutOfRangeCode,
+                $"String index {index} is out of range for a string of length {text.Length}.",
+                node.Index.Line,
+                node.Index.Column);
+        }
         var expression = new IrIndexExpression(LowerExpression(node.Array), LowerExpression(node.Index));
         expression.Origin = new IrSourceOrigin(node.Line, node.Column);
         return expression;
+    }
+
+    private static bool TryGetStaticInteger(ExpressionNode expression, out long value)
+    {
+        switch (expression)
+        {
+            case LiteralExpressionNode { Value: sbyte number }: value = number; return true;
+            case LiteralExpressionNode { Value: byte number }: value = number; return true;
+            case LiteralExpressionNode { Value: short number }: value = number; return true;
+            case LiteralExpressionNode { Value: ushort number }: value = number; return true;
+            case LiteralExpressionNode { Value: int number }: value = number; return true;
+            case LiteralExpressionNode { Value: uint number }: value = number; return true;
+            case LiteralExpressionNode { Value: long number }: value = number; return true;
+            case LiteralExpressionNode { Value: ulong number } when number <= long.MaxValue: value = (long)number; return true;
+            case UnaryExpressionNode { Operator: "-", Operand: var operand } when TryGetStaticInteger(operand, out var positive): value = -positive; return true;
+            case UnaryExpressionNode { Operator: "+", Operand: var operand } when TryGetStaticInteger(operand, out value): return true;
+            default: value = 0; return false;
+        }
     }
 
     private IrExpression LowerMemberAccess(MemberAccessExpressionNode member)
