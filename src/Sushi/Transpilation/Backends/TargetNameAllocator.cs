@@ -49,8 +49,6 @@ internal sealed class TargetNameAllocator
     public string Generated(TargetNameKind kind, string preferredName) =>
         Allocate(kind, Normalize(preferredName, "tmp"));
 
-    public string Helper(string preferredName) => Generated(TargetNameKind.Function, "_s_" + preferredName);
-
     private string Allocate(TargetNameKind kind, string preferred)
     {
         if (!_used.TryGetValue(kind, out var used))

@@ -277,6 +277,8 @@ public class TranspilerTests
     public void Transpile_ShellCollections_UseNativeStorageAndPortableGlobRuntime(TargetLanguage target)
     {
         const string source = """
+            use std.fs
+            use std.process
             var parsed = { name: "sushi", count: 2 }
             var files = std.fs.glob("src/**/*.cs")
             var stages = [{ command: "printf", args: ["hello"] }]

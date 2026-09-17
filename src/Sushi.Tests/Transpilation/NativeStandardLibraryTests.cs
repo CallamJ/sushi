@@ -71,7 +71,7 @@ public sealed class NativeStandardLibraryTests
     [Fact]
     public void PowerShellOutput_UsesPowerShell51CompatibleRuntimeApis()
     {
-        const string source = "var files = std.fs.glob(\"**/*.txt\", \"tmp\")\nvar result = std.process.run(\"tool\", [], timeoutMs: 1, allowFailure: true)\nvar response = std.http.get(\"https://example.test\")";
+        const string source = "use std.fs\nuse std.process\nuse std.http\nvar files = std.fs.glob(\"**/*.txt\", \"tmp\")\nvar result = std.process.run(\"tool\", [], timeoutMs: 1, allowFailure: true)\nvar response = std.http.get(\"https://example.test\")";
         var result = Transpile(source, TargetLanguage.Powershell51, TargetPlatform.Windows);
 
         Assert.True(result.Success);
@@ -81,6 +81,38 @@ public sealed class NativeStandardLibraryTests
         Assert.Contains("SecurityProtocol", result.EmittedCode);
         Assert.DoesNotContain("GetRelativePath", result.EmittedCode);
         Assert.DoesNotContain("Kill($true)", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_process_", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_http_", result.EmittedCode);
+    }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash, TargetPlatform.Linux)]
+    [InlineData(TargetLanguage.Zsh, TargetPlatform.Linux)]
+    [InlineData(TargetLanguage.Powershell51, TargetPlatform.Windows)]
+    public void GlobHelper_IsEmittedOnlyForAnExplicitUsedImport(TargetLanguage target, TargetPlatform platform)
+    {
+        var withoutImport = Transpile("var files = std.fs.glob(\"*.sushi\")", target, platform);
+        Assert.False(withoutImport.Success);
+        Assert.DoesNotContain("__sushi_fs_glob", withoutImport.EmittedCode);
+
+        var withImport = Transpile("use std.fs.glob\nvar files = glob(\"*.sushi\")", target, platform);
+        Assert.True(withImport.Success);
+        Assert.Contains("__sushi_fs_glob", withImport.EmittedCode);
+        Assert.DoesNotContain("__sushi_process_", withImport.EmittedCode);
+        Assert.DoesNotContain("__sushi_http_", withImport.EmittedCode);
+    }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash, TargetPlatform.Linux)]
+    [InlineData(TargetLanguage.Zsh, TargetPlatform.Linux)]
+    [InlineData(TargetLanguage.Powershell51, TargetPlatform.Windows)]
+    public void UnsupportedAggregateIntrinsicShape_IsDiagnosedInsteadOfCallingALegacyHelper(TargetLanguage target, TargetPlatform platform)
+    {
+        var result = Transpile("use std.process\nprintln(process.run(\"printf\", [\"ok\"], allowFailure: true))", target, platform);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1030");
+        Assert.DoesNotContain("__sushi_process_", result.EmittedCode);
     }
 
     [Fact]

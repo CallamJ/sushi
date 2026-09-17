@@ -356,7 +356,14 @@ public sealed partial class PowerShellEmitter
         {
             case IntrinsicId.FsGlob:
             {
-                WriteLine($"${name} = @({EmitFsGlob(intrinsic.Arguments)})");
+                if (!_nativeGlobHelper)
+                {
+                    _context.Error(AmbiguousShapeCode,
+                        "std.fs.glob requires an explicit std.fs.glob import before it can be emitted.",
+                        intrinsic.Origin?.Line ?? 1, intrinsic.Origin?.Column ?? 1);
+                    return false;
+                }
+                WriteLine($"${name} = @({EmitExplicitFsGlob(intrinsic.Arguments)})");
                 return true;
             }
 

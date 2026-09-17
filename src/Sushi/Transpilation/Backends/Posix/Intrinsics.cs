@@ -35,19 +35,17 @@ public sealed partial class PosixEmitter
             IntrinsicId.ProcessSleep => EmitProcessSleep(call.Arguments),
             IntrinsicId.ConsoleError => EmitConsoleError(call.Arguments),
             IntrinsicId.OsChdir => $"cd -- {Arg(call.Arguments, 0)}",
-            IntrinsicId.ProcessRun => $"{EmitProcessRunInvocation(call.Arguments)} >/dev/null",
-            IntrinsicId.ProcessPipeline => $"{EmitProcessPipelineInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.ProcessRun or IntrinsicId.ProcessPipeline => EmitAggregateIntrinsicFallback(call),
             IntrinsicId.ProcessFail => $"{EmitProcessFailInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.ProcessRequireSuccess => $"{EmitProcessRequireSuccessInvocation(call.Arguments)} >/dev/null",
-            IntrinsicId.FsGlob => $"{EmitFsGlobInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.FsGlob => EmitAggregateIntrinsicFallback(call),
             IntrinsicId.FsCreateDirectory => EmitFsCreateDirectory(call.Arguments),
             IntrinsicId.FsRemove => EmitFsRemove(call.Arguments),
             IntrinsicId.FsCopy => EmitFsCopy(call.Arguments),
             IntrinsicId.FsMove => EmitFsMove(call.Arguments),
             IntrinsicId.ArchiveZip => EmitArchiveZip(call.Arguments),
             IntrinsicId.ArchiveUnzip => EmitArchiveUnzip(call.Arguments),
-            IntrinsicId.HttpGet => $"{EmitHttpGetInvocation(call.Arguments)} >/dev/null",
-            IntrinsicId.HttpPost => $"{EmitHttpPostInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.HttpGet or IntrinsicId.HttpPost => EmitAggregateIntrinsicFallback(call),
             IntrinsicId.HttpDownload => EmitHttpDownload(call.Arguments),
             _ => _context.ErrorAndReturn(UnsupportedEmitCode, $"Intrinsic '{call.CanonicalName}' cannot be emitted as a statement in Bash")
         };
@@ -93,19 +91,17 @@ public sealed partial class PosixEmitter
             IntrinsicId.ProcessSleep => $"$({EmitProcessSleep(call.Arguments)})",
             IntrinsicId.ConsoleError => $"$({EmitConsoleError(call.Arguments)})",
             IntrinsicId.OsChdir => $"$(cd -- {Arg(call.Arguments, 0)})",
-            IntrinsicId.ProcessRun => $"\"$({EmitProcessRunInvocation(call.Arguments)})\"",
-            IntrinsicId.ProcessPipeline => $"\"$({EmitProcessPipelineInvocation(call.Arguments)})\"",
+            IntrinsicId.ProcessRun or IntrinsicId.ProcessPipeline => EmitAggregateIntrinsicFallback(call),
             IntrinsicId.ProcessFail => $"\"$({EmitProcessFailInvocation(call.Arguments)})\"",
             IntrinsicId.ProcessRequireSuccess => $"\"$({EmitProcessRequireSuccessInvocation(call.Arguments)})\"",
-            IntrinsicId.FsGlob => $"\"$({EmitFsGlobInvocation(call.Arguments)})\"",
+            IntrinsicId.FsGlob => EmitAggregateIntrinsicFallback(call),
             IntrinsicId.FsCreateDirectory => $"$({EmitFsCreateDirectory(call.Arguments)})",
             IntrinsicId.FsRemove => $"$({EmitFsRemove(call.Arguments)})",
             IntrinsicId.FsCopy => $"$({EmitFsCopy(call.Arguments)})",
             IntrinsicId.FsMove => $"$({EmitFsMove(call.Arguments)})",
             IntrinsicId.ArchiveZip => $"$({EmitArchiveZip(call.Arguments)})",
             IntrinsicId.ArchiveUnzip => $"$({EmitArchiveUnzip(call.Arguments)})",
-            IntrinsicId.HttpGet => $"\"$({EmitHttpGetInvocation(call.Arguments)})\"",
-            IntrinsicId.HttpPost => $"\"$({EmitHttpPostInvocation(call.Arguments)})\"",
+            IntrinsicId.HttpGet or IntrinsicId.HttpPost => EmitAggregateIntrinsicFallback(call),
             IntrinsicId.HttpDownload => $"$({EmitHttpDownload(call.Arguments)})",
             _ => _context.ErrorAndReturn(UnsupportedEmitCode, $"Unsupported intrinsic expression in Bash: {call.CanonicalName}")
         };
@@ -119,20 +115,14 @@ public sealed partial class PosixEmitter
             : $"printf '%s' {value}";
     }
 
-    private string EmitStringTrimInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"__sushi_string_trim {Arg(arguments, 0)}";
-    }
+    private string EmitStringTrimInvocation(IReadOnlyList<IrExpression> arguments) =>
+        $"printf '%s' {Arg(arguments, 0)} | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'";
 
-    private string EmitStringLowerInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"__sushi_string_lower {Arg(arguments, 0)}";
-    }
+    private string EmitStringLowerInvocation(IReadOnlyList<IrExpression> arguments) =>
+        $"printf '%s' {Arg(arguments, 0)} | tr '[:upper:]' '[:lower:]'";
 
-    private string EmitStringUpperInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"__sushi_string_upper {Arg(arguments, 0)}";
-    }
+    private string EmitStringUpperInvocation(IReadOnlyList<IrExpression> arguments) =>
+        $"printf '%s' {Arg(arguments, 0)} | tr '[:lower:]' '[:upper:]'";
 
     private string EmitStringLengthInvocation(IReadOnlyList<IrExpression> arguments)
     {
@@ -148,37 +138,40 @@ public sealed partial class PosixEmitter
 
     private string EmitStringSplitInvocation(IReadOnlyList<IrExpression> arguments)
     {
-        return $"__sushi_string_split {Arg(arguments, 0)} {Arg(arguments, 1)} {Arg(arguments, 2)}";
+        return _context.ErrorAndReturn(AmbiguousShapeCode,
+            "String split results must be assigned to a variable before use on Bash/Zsh targets.");
     }
 
     private string EmitStringContainsInvocation(IReadOnlyList<IrExpression> arguments)
     {
-        return $"__sushi_string_contains {Arg(arguments, 0)} {Arg(arguments, 1)}";
+        return $"[[ {Arg(arguments, 0)} == *{Arg(arguments, 1)}* ]] && printf true || printf false";
     }
 
     private string EmitStringStartsWithInvocation(IReadOnlyList<IrExpression> arguments)
     {
-        return $"__sushi_string_starts_with {Arg(arguments, 0)} {Arg(arguments, 1)}";
+        return $"[[ {Arg(arguments, 0)} == {Arg(arguments, 1)}* ]] && printf true || printf false";
     }
 
     private string EmitStringEndsWithInvocation(IReadOnlyList<IrExpression> arguments)
     {
-        return $"__sushi_string_ends_with {Arg(arguments, 0)} {Arg(arguments, 1)}";
+        return $"[[ {Arg(arguments, 0)} == *{Arg(arguments, 1)} ]] && printf true || printf false";
     }
 
     private string EmitStringReplaceInvocation(IReadOnlyList<IrExpression> arguments)
     {
-        return $"__sushi_string_replace {Arg(arguments, 0)} {Arg(arguments, 1)} {Arg(arguments, 2)}";
+        return _context.ErrorAndReturn(AmbiguousShapeCode,
+            "String replacement must be assigned to a variable before use on Bash/Zsh targets.");
     }
 
     private string EmitStringIsMatchInvocation(IReadOnlyList<IrExpression> arguments)
     {
-        return $"__sushi_string_is_match {Arg(arguments, 0)} {Arg(arguments, 1)}";
+        return $"[[ {Arg(arguments, 0)} =~ {Arg(arguments, 1)} ]] && printf true || printf false";
     }
 
     private string EmitStringMatchInvocation(IReadOnlyList<IrExpression> arguments)
     {
-        return $"__sushi_string_match {Arg(arguments, 0)} {Arg(arguments, 1)}";
+        return _context.ErrorAndReturn(AmbiguousShapeCode,
+            "String match results must be assigned to a variable before use on Bash/Zsh targets.");
     }
 
     private string EmitIoWriteText(IReadOnlyList<IrExpression> arguments)
@@ -279,31 +272,6 @@ public sealed partial class PosixEmitter
                "if printenv \"$__sushi_env_name\" >/dev/null 2>&1; then printf '%s' \"$__sushi_env_value\"; else printf '%s' " + fallback + "; fi)";
     }
 
-    private string EmitProcessRunInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return "__sushi_process_run " +
-               $"{Arg(arguments, 0)} " +
-               $"{Arg(arguments, 1)} " +
-               $"{Arg(arguments, 2)} " +
-               $"{Arg(arguments, 3)} " +
-               $"{Arg(arguments, 4)} " +
-               $"{Arg(arguments, 5)} " +
-               $"{Arg(arguments, 6)} " +
-               $"{Arg(arguments, 7)}";
-    }
-
-    private string EmitProcessPipelineInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return "__sushi_process_pipeline " +
-               $"{Arg(arguments, 0)} " +
-               $"{Arg(arguments, 1)} " +
-               $"{Arg(arguments, 2)} " +
-               $"{Arg(arguments, 3)} " +
-               $"{Arg(arguments, 4)} " +
-               $"{Arg(arguments, 5)} " +
-               $"{Arg(arguments, 6)}";
-    }
-
     private string EmitProcessFailInvocation(IReadOnlyList<IrExpression> arguments)
     {
         if (arguments.FirstOrDefault() is IrIdentifierExpression identifier)
@@ -311,7 +279,8 @@ public sealed partial class PosixEmitter
             var name = SanitizeVariableName(identifier.Name);
             return $"if [[ \"${{{name}_ok-}}\" != true ]]; then exit \"${{{name}_code:-1}}\"; fi";
         }
-        return $"__sushi_process_fail {Arg(arguments, 0)}";
+        return _context.ErrorAndReturn(AmbiguousShapeCode,
+            "Process result must be assigned to a variable before calling fail on Bash/Zsh targets.");
     }
 
     private string EmitProcessRequireSuccessInvocation(IReadOnlyList<IrExpression> arguments)
@@ -321,23 +290,14 @@ public sealed partial class PosixEmitter
             var name = SanitizeVariableName(identifier.Name);
             return $"if [[ \"${{{name}_ok-}}\" != true ]]; then exit \"${{{name}_code:-1}}\"; fi";
         }
-        return $"__sushi_process_require_success {Arg(arguments, 0)}";
+        return _context.ErrorAndReturn(AmbiguousShapeCode,
+            "Process result must be assigned to a variable before calling requireSuccess on Bash/Zsh targets.");
     }
 
-    private string EmitFsGlobInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"__sushi_fs_glob {Arg(arguments, 0)} {Arg(arguments, 1)}";
-    }
-
-    private string EmitHttpGetInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"__sushi_http_get {Arg(arguments, 0)} {Arg(arguments, 1)}";
-    }
-
-    private string EmitHttpPostInvocation(IReadOnlyList<IrExpression> arguments)
-    {
-        return $"__sushi_http_post {Arg(arguments, 0)} {Arg(arguments, 1)} {Arg(arguments, 2)} {Arg(arguments, 3)}";
-    }
+    private string EmitAggregateIntrinsicFallback(IrIntrinsicCallExpression call) =>
+        _context.ErrorAndReturn(AmbiguousShapeCode,
+            $"{call.CanonicalName} must be assigned to a variable before use on Bash/Zsh targets.",
+            "''", call.Origin?.Line ?? 1, call.Origin?.Column ?? 1);
 
     private string EmitHttpDownload(IReadOnlyList<IrExpression> arguments) =>
         $"curl -fsSL -o {Arg(arguments, 1)} -- {Arg(arguments, 0)}";

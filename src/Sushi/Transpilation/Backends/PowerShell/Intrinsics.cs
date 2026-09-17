@@ -228,43 +228,38 @@ public sealed partial class PowerShellEmitter
 
     private string EmitProcessRun(IReadOnlyList<IrExpression> arguments)
     {
-        return "(__sushi_process_run " +
-               "-command ([string](" + Arg(arguments, 0) + ")) " +
-               "-argValues " + Arg(arguments, 1) + " " +
-               "-cwd " + Arg(arguments, 2) + " " +
-               "-envMap " + Arg(arguments, 3) + " " +
-               "-inputText " + Arg(arguments, 4) + " " +
-               "-timeoutMs ([int](" + Arg(arguments, 5) + ")) " +
-               "-allowFailure ([bool](" + Arg(arguments, 6) + ")) " +
-               "-stream ([bool](" + Arg(arguments, 7) + ")))";
+        return EmitAggregateIntrinsicFallback(IntrinsicId.ProcessRun);
     }
 
     private string EmitProcessPipeline(IReadOnlyList<IrExpression> arguments)
     {
-        return "(__sushi_process_pipeline " +
-               "-stages " + Arg(arguments, 0) + " " +
-               "-cwd " + Arg(arguments, 1) + " " +
-               "-envMap " + Arg(arguments, 2) + " " +
-               "-inputText " + Arg(arguments, 3) + " " +
-               "-timeoutMs ([int](" + Arg(arguments, 4) + ")) " +
-               "-allowFailure ([bool](" + Arg(arguments, 5) + ")) " +
-               "-stream ([bool](" + Arg(arguments, 6) + ")))";
+        return EmitAggregateIntrinsicFallback(IntrinsicId.ProcessPipeline);
     }
 
     private string EmitProcessFail(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_process_fail -result {Arg(arguments, 0)})";
+        if (arguments.FirstOrDefault() is IrIdentifierExpression identifier)
+            return $"(-not [bool]${SanitizeName(identifier.Name)}.ok)";
+        return EmitAggregateIntrinsicFallback(IntrinsicId.ProcessFail);
     }
 
     private string EmitProcessRequireSuccess(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_process_require_success -result {Arg(arguments, 0)})";
+        if (arguments.FirstOrDefault() is IrIdentifierExpression identifier)
+        {
+            var name = SanitizeName(identifier.Name);
+            return $"$(if (-not [bool]${name}.ok) {{ exit [int]${name}.code }}; ${name})";
+        }
+        return EmitAggregateIntrinsicFallback(IntrinsicId.ProcessRequireSuccess);
     }
 
     private string EmitFsGlob(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_fs_glob -pattern ([string]({Arg(arguments, 0)})) -cwd {Arg(arguments, 1)})";
+        return EmitAggregateIntrinsicFallback(IntrinsicId.FsGlob);
     }
+
+    private string EmitExplicitFsGlob(IReadOnlyList<IrExpression> arguments) =>
+        $"(__sushi_fs_glob -pattern ([string]({Arg(arguments, 0)})) -cwd {Arg(arguments, 1)})";
 
     private string EmitFsSize(IReadOnlyList<IrExpression> arguments) =>
         $"([int64]$(if ((Get-Item -LiteralPath {Arg(arguments, 0)}).PSIsContainer) {{ throw 'std.fs.size: regular file required' }} else {{ (Get-Item -LiteralPath {Arg(arguments, 0)}).Length }}))";
@@ -289,20 +284,20 @@ public sealed partial class PowerShellEmitter
 
     private string EmitHttpGet(IReadOnlyList<IrExpression> arguments)
     {
-        return $"(__sushi_http_get -url ([string]({Arg(arguments, 0)})) -headers {Arg(arguments, 1)})";
+        return EmitAggregateIntrinsicFallback(IntrinsicId.HttpGet);
     }
 
     private string EmitHttpPost(IReadOnlyList<IrExpression> arguments)
     {
-        return "(__sushi_http_post " +
-               "-url ([string](" + Arg(arguments, 0) + ")) " +
-               "-body " + Arg(arguments, 1) + " " +
-               "-headers " + Arg(arguments, 2) + " " +
-               "-contentType ([string](" + Arg(arguments, 3) + ")))";
+        return EmitAggregateIntrinsicFallback(IntrinsicId.HttpPost);
     }
 
     private string EmitHttpDownload(IReadOnlyList<IrExpression> arguments) =>
         $"(Invoke-WebRequest -UseBasicParsing -Uri {Arg(arguments, 0)} -OutFile {Arg(arguments, 1)})";
+
+    private string EmitAggregateIntrinsicFallback(IntrinsicId id) =>
+        _context.ErrorAndReturn(AmbiguousShapeCode,
+            $"std.{id} must be assigned to a variable before use on PowerShell targets.", "$null");
 
     private string Arg(IReadOnlyList<IrExpression> arguments, int index)
     {

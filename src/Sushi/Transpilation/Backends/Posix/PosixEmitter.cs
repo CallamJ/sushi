@@ -38,7 +38,6 @@ public sealed partial class PosixEmitter : IBackendEmitter
     private Dictionary<string, string> _generatedFunctionNames = new(StringComparer.Ordinal);
     private bool _currentFunctionReturnsValue;
     private string _currentOutputName = "";
-    private bool _needsDynamicMethodMetadata;
     private HashSet<string> _commentedTypes = new(StringComparer.Ordinal);
     private HashSet<string> _classTypeNames = new(StringComparer.Ordinal);
     private HashSet<string> _enumTypeNames = new(StringComparer.Ordinal);
@@ -67,7 +66,6 @@ public sealed partial class PosixEmitter : IBackendEmitter
         _functions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .ToDictionary(function => function.Name, StringComparer.Ordinal);
-        _needsDynamicMethodMetadata = program.Statements.Any(ContainsDynamicMethodDispatch);
         _integerArrayVariables.Clear();
         _zshObjectParameterNames.Clear();
         _zshReadOnlyObjectParameters.Clear();
@@ -77,7 +75,7 @@ public sealed partial class PosixEmitter : IBackendEmitter
         _enumTypeNames = CollectEnumTypeNames(program.Statements);
         _emittedTopLevelSection = false;
         _positionalParameterReferences.Clear();
-        _nativeGlobHelper = HasFsGlobImport(program);
+        _nativeGlobHelper = ExplicitStdlibHelpers.RequiresFsGlob(program);
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -113,7 +111,7 @@ public sealed partial class PosixEmitter : IBackendEmitter
             if (!string.IsNullOrWhiteSpace(import.Alias)) importText += $" as {import.Alias}";
             WriteLine($"# use {importText}");
         }
-        if (EmissionCapabilityAnalyzer.UsesFsGlob(program) && HasFsGlobImport(program))
+        if (_nativeGlobHelper)
         {
             EmitNativeGlobHelper();
         }
@@ -123,13 +121,6 @@ public sealed partial class PosixEmitter : IBackendEmitter
         }
 
         return _document.ToString();
-    }
-
-    private static bool HasFsGlobImport(IrProgram program)
-    {
-        var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
-        return imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
-            (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
     }
 
     private void EmitNativeGlobHelper()

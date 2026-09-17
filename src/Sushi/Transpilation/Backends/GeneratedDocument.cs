@@ -11,7 +11,6 @@ internal sealed class GeneratedDocument
     private readonly StringBuilder _content = new();
 
     public int Indent { get; set; }
-    public int Length => _content.Length;
 
     public void Clear()
     {
@@ -65,14 +64,6 @@ internal sealed class GeneratedDocument
             var normalized = line.Length >= margin ? line[margin..] : line;
             Line(normalized);
         }
-    }
-
-    public string SliceFrom(int start) => _content.ToString(start, _content.Length - start);
-
-    public void ReplaceFrom(int start, string value)
-    {
-        _content.Remove(start, _content.Length - start);
-        Template(value);
     }
 
     public override string ToString() => _content.ToString();

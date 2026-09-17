@@ -365,13 +365,14 @@ public sealed partial class PosixEmitter
                 var cwd = intrinsic.Arguments.Count > 1 ? intrinsic.Arguments[1] : new IrLiteralExpression(null);
                 var root = PrepareValue(cwd, inFunction);
                 WriteLine($"{arrayDeclaration}-a {name}=()");
-                if (_nativeGlobHelper)
-                    WriteLine($"__sushi_fs_glob_into {name} {pattern} {root}");
-                else
+                if (!_nativeGlobHelper)
                 {
-                    WriteLine($"__sushi_fs_glob_into {pattern} {root}");
-                    WriteLine($"while IFS= read -r __sushi_path; do {name}+=(\"$__sushi_path\"); done < <(__sushi_array_each_raw \"${{__sushi_result-}}\")");
+                    _context.Error(AmbiguousShapeCode,
+                        "std.fs.glob requires an explicit std.fs.glob import before it can be emitted.",
+                        intrinsic.Origin?.Line ?? 1, intrinsic.Origin?.Column ?? 1);
+                    return false;
                 }
+                WriteLine($"__sushi_fs_glob_into {name} {pattern} {root}");
                 _nativeArrayVariables[name] = name;
                 _arrayInitializers.Remove(name);
                 return true;

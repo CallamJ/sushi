@@ -35,6 +35,7 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
     private Dictionary<string, string> _richEnumVariableTypes = new(StringComparer.Ordinal);
     private string? _currentRichEnumReceiver;
     private string? _fallbackReceiverName;
+    private bool _nativeGlobHelper;
 
     public string Emit(IrProgram program, EmitContext context)
     {
@@ -51,6 +52,7 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
         _richEnumVariableTypes.Clear();
         _currentRichEnumReceiver = null;
         _fallbackReceiverName = null;
+        _nativeGlobHelper = ExplicitStdlibHelpers.RequiresFsGlob(program);
         _context = context;
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
@@ -81,11 +83,10 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
             if (!string.IsNullOrWhiteSpace(import.Alias)) importText += $" as {import.Alias}";
             WriteLine($"# use {importText}");
         }
-        if (EmissionCapabilityAnalyzer.UsesFsGlob(program) && HasFsGlobImport(program))
+        if (_nativeGlobHelper)
         {
             EmitFsGlobHelpers();
         }
-        EmitImportedStdlibHelpers(program);
         var classes = CollectClasses(program.Statements).ToList();
         foreach (var declaration in classes)
         {
@@ -120,13 +121,6 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
         }
 
         return _document.ToString();
-    }
-
-    private static bool HasFsGlobImport(IrProgram program)
-    {
-        var imports = program.Statements.OfType<IrStandardLibraryImportStatement>().ToList();
-        return imports.Any(import => (import.Module.Equals("std.fs", StringComparison.Ordinal) || import.Module.Equals("std.fs.glob", StringComparison.Ordinal)) &&
-            (import.Members.Count == 0 || import.Members.Contains("glob", StringComparer.Ordinal)));
     }
 
     // Glob is an explicitly imported stdlib feature. Emit only the two
@@ -185,26 +179,4 @@ function __sushi_fs_glob {
 """);
     }
 
-    private void EmitImportedStdlibHelpers(IrProgram program)
-    {
-        var modules = program.Statements.OfType<IrStandardLibraryImportStatement>()
-            .Select(import => import.Module)
-            .ToHashSet(StringComparer.Ordinal);
-        var allowed = new HashSet<string>(StringComparer.Ordinal);
-        if (modules.Any(module => module is "std.process" or "std.process.run") &&
-            (EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessRun) ||
-             EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessPipeline) ||
-             EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessFail) ||
-             EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.ProcessRequireSuccess)))
-            allowed.UnionWith(new[] { "__sushi_member", "__sushi_to_array", "__sushi_to_map", "__sushi_process_run", "__sushi_process_pipeline", "__sushi_process_fail", "__sushi_process_require_success" });
-        if (modules.Any(module => module is "std.http" or "std.http.get" or "std.http.post") &&
-            (EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.HttpGet) ||
-             EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.HttpPost)))
-            allowed.UnionWith(new[] { "__sushi_to_map", "__sushi_http_request", "__sushi_http_get", "__sushi_http_post" });
-        if (allowed.Count == 0) return;
-        var start = _document.Length;
-        EmitStdlibHelperDefinitions();
-        var text = _document.SliceFrom(start);
-        _document.ReplaceFrom(start, FilterStdlibHelpers(text, allowed));
-    }
 }

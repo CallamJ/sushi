@@ -617,29 +617,6 @@ public sealed partial class PowerShellEmitter
         return false;
     }
 
-    private static string EncodeRuntimeType(IrTypeRef type)
-    {
-        if (type.Kind == IrTypeKind.Structural)
-        {
-            return "object";
-        }
-
-        return type.Name ?? "any";
-    }
-
-    private static string EncodeStructuralSpec(IrTypeRef type)
-    {
-        if (type.Kind != IrTypeKind.Structural || type.StructuralFields.Count == 0)
-        {
-            return "";
-        }
-
-        return string.Join(
-            ",",
-            type.StructuralFields.Select(field =>
-                $"{field.Name}:{EncodeRuntimeType(field.Type)}:{(field.Optional ? "opt" : "req")}"));
-    }
-
     private static string MapBinaryOperator(string op)
     {
         return op switch

@@ -214,14 +214,8 @@ public sealed partial class PosixEmitter
                 _context.Error(AmbiguousShapeCode, "Constructed objects must be assigned to a variable before use on Bash/Zsh targets.");
                 return "''";
 
-            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.FsGlob:
-                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_fs_glob_into", 2);
-
-            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.ProcessRun:
-                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_process_run_into", 8);
-
-            case IrIntrinsicCallExpression intrinsic when intrinsic.Id == IntrinsicId.ProcessPipeline:
-                return PrepareIntrinsicInto(intrinsic, inFunction, "__sushi_process_pipeline_into", 7);
+            case IrIntrinsicCallExpression intrinsic when intrinsic.Id is IntrinsicId.FsGlob or IntrinsicId.ProcessRun or IntrinsicId.ProcessPipeline or IntrinsicId.HttpGet or IntrinsicId.HttpPost:
+                return EmitAggregateIntrinsicFallback(intrinsic);
 
             case IrIntrinsicCallExpression intrinsic when intrinsic.Id is IntrinsicId.IoWriteText or IntrinsicId.EnvSet or IntrinsicId.ProcessExit or IntrinsicId.OsChdir:
             {
@@ -316,51 +310,7 @@ public sealed partial class PosixEmitter
     }
 
     private IReadOnlyList<IrObjectProperty> MetadataProperties(IReadOnlyList<IrObjectProperty> properties)
-    {
-        if (_needsDynamicMethodMetadata) return properties;
-        return properties.Where(property => !property.Name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal)).ToList();
-    }
-
-    private static bool ContainsDynamicMethodDispatch(IrStatement statement) => statement switch
-    {
-        IrBlockStatement block => block.Statements.Any(ContainsDynamicMethodDispatch),
-        IrExpressionStatement expression => ContainsDynamicMethodDispatch(expression.Expression),
-        IrVariableDeclarationStatement variable => variable.Initializer != null && ContainsDynamicMethodDispatch(variable.Initializer),
-        IrIfStatement conditional => ContainsDynamicMethodDispatch(conditional.Condition) ||
-                                     ContainsDynamicMethodDispatch(conditional.ThenBlock) ||
-                                     (conditional.ElseBlock != null && ContainsDynamicMethodDispatch(conditional.ElseBlock)),
-        IrWhileStatement loop => ContainsDynamicMethodDispatch(loop.Condition) || ContainsDynamicMethodDispatch(loop.Body),
-        IrDoWhileStatement loop => ContainsDynamicMethodDispatch(loop.Condition) || ContainsDynamicMethodDispatch(loop.Body),
-        IrForStatement loop => (loop.Initializer != null && ContainsDynamicMethodDispatch(loop.Initializer)) ||
-                              (loop.Condition != null && ContainsDynamicMethodDispatch(loop.Condition)) ||
-                              (loop.Increment != null && ContainsDynamicMethodDispatch(loop.Increment)) ||
-                              ContainsDynamicMethodDispatch(loop.Body),
-        IrFunctionDeclarationStatement function => ContainsDynamicMethodDispatch(function.Body),
-        IrReturnStatement result => result.Expression != null && ContainsDynamicMethodDispatch(result.Expression),
-        _ => false
-    };
-
-    private static bool ContainsDynamicMethodDispatch(IrExpression expression) => expression switch
-    {
-        IrMethodCallExpression => true,
-        IrCallExpression call => call.Arguments.Any(argument => ContainsDynamicMethodDispatch(argument.Value)),
-        IrResolvedMethodCallExpression call => ContainsDynamicMethodDispatch(call.Target) ||
-                                               call.Arguments.Any(argument => ContainsDynamicMethodDispatch(argument.Value)),
-        IrAdapterCallExpression call => ContainsDynamicMethodDispatch(call.Value),
-        IrAssignmentExpression assignment => ContainsDynamicMethodDispatch(assignment.Value),
-        IrMemberAssignmentExpression assignment => ContainsDynamicMethodDispatch(assignment.Target) || ContainsDynamicMethodDispatch(assignment.Value),
-        IrBinaryExpression binary => ContainsDynamicMethodDispatch(binary.Left) || ContainsDynamicMethodDispatch(binary.Right),
-        IrUnaryExpression unary => ContainsDynamicMethodDispatch(unary.Operand),
-        IrConditionalExpression conditional => ContainsDynamicMethodDispatch(conditional.Condition) ||
-                                               ContainsDynamicMethodDispatch(conditional.TrueExpression) ||
-                                               ContainsDynamicMethodDispatch(conditional.FalseExpression),
-        IrMemberAccessExpression member => ContainsDynamicMethodDispatch(member.Target),
-        IrIndexExpression index => ContainsDynamicMethodDispatch(index.Target) || ContainsDynamicMethodDispatch(index.Index),
-        IrArrayLiteralExpression array => array.Elements.Any(ContainsDynamicMethodDispatch),
-        IrObjectLiteralExpression obj => obj.Properties.Any(property => ContainsDynamicMethodDispatch(property.Value)),
-        IrTruthinessExpression truthiness => ContainsDynamicMethodDispatch(truthiness.Operand),
-        _ => false
-    };
+        => properties.Where(property => !property.Name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal)).ToList();
 
     private void EmitAssociativeObject(string name, IReadOnlyList<string> entries, string declaration, bool assignmentOnly)
     {
@@ -378,39 +328,6 @@ public sealed partial class PosixEmitter
         foreach (var entry in entries) WriteLine(entry);
         _indent--;
         WriteLine(")");
-    }
-
-    private string PrepareIntrinsicInto(
-        IrIntrinsicCallExpression intrinsic,
-        bool inFunction,
-        string helper,
-        int argumentCount)
-    {
-        var arguments = new List<string>(argumentCount);
-        for (var index = 0; index < argumentCount; index++)
-        {
-            arguments.Add(index < intrinsic.Arguments.Count
-                ? PrepareValue(intrinsic.Arguments[index], inFunction)
-                : "''");
-        }
-
-        WriteLine($"{helper} {string.Join(" ", arguments)}");
-        var result = DeclareTemp("\"${__sushi_result-}\"", inFunction);
-        return $"\"${{{result}-}}\"";
-    }
-
-    private static string? GetKnownJsonKind(IrExpression expression)
-    {
-        return expression switch
-        {
-            IrLiteralExpression { Value: null } => "null",
-            IrLiteralExpression { Value: string or char } => "string",
-            IrLiteralExpression { Value: bool } => "bool",
-            IrLiteralExpression { Value: sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal } => "number",
-            IrArrayLiteralExpression => "array",
-            IrObjectLiteralExpression => "object",
-            _ => null
-        };
     }
 
     private string PrepareArithmetic(IrBinaryExpression binary, bool inFunction)
@@ -995,8 +912,10 @@ public sealed partial class PosixEmitter
                 $"$(( {unary.Operator}{EmitArithmeticExpression(unary.Operand)} ))",
             IrBinaryExpression binary when binary.Operator == "+" && IsDefinitelyFloat(binary) =>
                 EmitArithmeticExpression(binary),
+            IrBinaryExpression binary when binary.Operator == "+" && IsDefinitelyInteger(binary) =>
+                EmitArithmeticExpression(binary),
             IrBinaryExpression binary when binary.Operator is "+" =>
-                $"\"$(__sushi_add {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})\"",
+                $"\"$(printf '%s%s' {EmitValueExpression(binary.Left)} {EmitValueExpression(binary.Right)})\"",
             IrBinaryExpression binary when binary.Operator is "==" or "!=" or "<" or ">" or "<=" or ">=" or "&&" or "||" =>
                 $"\"$(if {EmitConditionCommand(binary)}; then printf '%s' 'true'; else printf '%s' 'false'; fi)\"",
             IrBinaryExpression binary when binary.Operator is "-" or "*" or "/" or "%" =>
@@ -1212,29 +1131,6 @@ public sealed partial class PosixEmitter
     {
         // Type errors that can be proven statically are reported by lowering.
         // Bash and Zsh otherwise use their native value model.
-    }
-
-    private static string EncodeRuntimeType(IrTypeRef type)
-    {
-        if (type.Kind == IrTypeKind.Structural)
-        {
-            return "object";
-        }
-
-        return type.Name ?? "any";
-    }
-
-    private static string EncodeStructuralSpec(IrTypeRef type)
-    {
-        if (type.Kind != IrTypeKind.Structural || type.StructuralFields.Count == 0)
-        {
-            return "";
-        }
-
-        return string.Join(
-            ",",
-            type.StructuralFields.Select(field =>
-                $"{field.Name}:{EncodeRuntimeType(field.Type)}:{(field.Optional ? "opt" : "req")}"));
     }
 
     private string EmitArithmeticExpression(IrExpression expression)
