@@ -4,14 +4,15 @@ The standard library provides file, path, environment, process, operating-system
 console, archive, HTTP, target, and string operations. Import a member directly:
 
 ```sushi
-use std.fs.glob
+use std.fs.query
 ```
 
 Or import a module with an alias:
 
 ```sushi
 use std.fs as fs
-string[] files = fs.glob("**/*.sushi")
+var query = fs.query().recursive().matching("*.sushi")
+string[] files = query.files()
 ```
 
 `print`, `println`, and `string(value)` need no import. String operations also

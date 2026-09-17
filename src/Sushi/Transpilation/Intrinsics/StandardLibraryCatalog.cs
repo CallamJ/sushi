@@ -35,11 +35,17 @@ public sealed class StandardLibraryCatalog
             DisplayType(signature.ReturnType),
             StandardLibraryDocumentation.For(signature.CanonicalName)));
 
-        return new StandardLibraryCatalog(intrinsicFunctions.Append(new StandardLibraryFunction(
-            "string",
-            [new StandardLibraryParameter("object", "value", false, false, null)],
-            "string",
-            StandardLibraryDocumentation.For("string"))));
+        return new StandardLibraryCatalog(intrinsicFunctions
+            .Append(new StandardLibraryFunction(
+                "std.fs.query",
+                [new StandardLibraryParameter("string", "root", false, true, ".")],
+                "FileQuery",
+                StandardLibraryDocumentation.For("std.fs.query")))
+            .Append(new StandardLibraryFunction(
+                "string",
+                [new StandardLibraryParameter("object", "value", false, false, null)],
+                "string",
+                StandardLibraryDocumentation.For("string"))));
     }
 
     private static string DisplayType(IrTypeRef type)

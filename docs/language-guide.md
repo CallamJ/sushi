@@ -154,10 +154,10 @@ package. Frequently used modules include:
 Example:
 
 ```sushi
-use std.fs.{glob}
+use std.fs as fs
 use std.path.basename
 
-var files = glob("src/**/*.cs")
+var files = fs.query("src").recursive().files()
 for (var file : files) {
     println(basename(file))
 }

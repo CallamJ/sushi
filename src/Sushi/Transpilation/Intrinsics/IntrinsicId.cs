@@ -31,7 +31,6 @@ public enum IntrinsicId
     ProcessRequireSuccess,
     OsCwd,
     OsChdir,
-    FsGlob,
     FsSize,
     HttpGet,
     HttpPost,

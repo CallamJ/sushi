@@ -35,7 +35,7 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
     private Dictionary<string, string> _richEnumVariableTypes = new(StringComparer.Ordinal);
     private string? _currentRichEnumReceiver;
     private string? _fallbackReceiverName;
-    private bool _nativeGlobHelper;
+    private int _fileQueryTempId;
 
     public string Emit(IrProgram program, EmitContext context)
     {
@@ -52,7 +52,7 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
         _richEnumVariableTypes.Clear();
         _currentRichEnumReceiver = null;
         _fallbackReceiverName = null;
-        _nativeGlobHelper = ExplicitStdlibHelpers.RequiresFsGlob(program);
+        _fileQueryTempId = 0;
         _context = context;
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
@@ -82,10 +82,6 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
                 : $"{import.Module}.{{{string.Join(", ", import.Members)}}}";
             if (!string.IsNullOrWhiteSpace(import.Alias)) importText += $" as {import.Alias}";
             WriteLine($"# use {importText}");
-        }
-        if (_nativeGlobHelper)
-        {
-            EmitFsGlobHelpers();
         }
         var classes = CollectClasses(program.Statements).ToList();
         foreach (var declaration in classes)
@@ -121,62 +117,6 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
         }
 
         return _document.ToString();
-    }
-
-    // Glob is an explicitly imported stdlib feature. Emit only the two
-    // functions required to implement it; the rest of the former runtime
-    // bundle must never be pulled into an otherwise native program.
-    private void EmitFsGlobHelpers()
-    {
-        _document.Template(
-"""
-function __sushi_glob_regex {
-    param([string]$pattern)
-    $pattern = $pattern.Replace('\\', '/')
-    $regex = [System.Text.StringBuilder]::new()
-    for ($index = 0; $index -lt $pattern.Length; $index++) {
-        $character = $pattern[$index]
-        switch ($character) {
-            '*' {
-                if ($index + 1 -lt $pattern.Length -and $pattern[$index + 1] -eq '*') {
-                    if ($index + 2 -lt $pattern.Length -and $pattern[$index + 2] -eq '/') {
-                        [void]$regex.Append('([^/]*/)*'); $index += 2
-                    } else { [void]$regex.Append('.*'); $index++ }
-                } else { [void]$regex.Append('[^/]*') }
-            }
-            '?' { [void]$regex.Append('[^/]') }
-            '[' {
-                $end = $pattern.IndexOf(']', $index + 1)
-                if ($end -lt 0) { [void]$regex.Append('\\[') }
-                else {
-                    $class = $pattern.Substring($index + 1, $end - $index - 1)
-                    if ($class.StartsWith('!')) { $class = '^' + $class.Substring(1) }
-                    [void]$regex.Append('[').Append($class).Append(']'); $index = $end
-                }
-                }
-            default { [void]$regex.Append([regex]::Escape([string]$character)) }
-        }
-    }
-
-    return '^' + $regex.ToString() + '$'
-}
-
-function __sushi_fs_glob {
-    param([string]$pattern, [string]$cwd = $null)
-    $base = if ([string]::IsNullOrWhiteSpace($cwd)) { (Get-Location).Path } else { (Resolve-Path -LiteralPath $cwd -ErrorAction Stop).Path }
-    if (-not (Test-Path -LiteralPath $base -PathType Container)) { throw "std.fs.glob: directory not found: $cwd" }
-    $absolute = [System.IO.Path]::IsPathRooted($pattern)
-    $matcher = [regex]::new((__sushi_glob_regex $pattern), [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
-    $result = [System.Collections.Generic.List[string]]::new()
-    foreach ($item in @(Get-ChildItem -LiteralPath $base -Force -Recurse -ErrorAction Stop)) {
-        $full = $item.FullName.Replace('\\', '/')
-        $relative = $item.FullName.Substring($base.Length).TrimStart([char]92, [char]47).Replace('\\', '/')
-        if ($matcher.IsMatch($(if ($absolute) { $full } else { $relative }))) { $result.Add($relative) }
-    }
-    $ordered = [string[]]$result.ToArray(); [System.Array]::Sort($ordered, [System.StringComparer]::Ordinal)
-    return ,$ordered
-}
-""");
     }
 
 }

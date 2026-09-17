@@ -359,25 +359,6 @@ public sealed partial class PosixEmitter
         var arrayDeclaration = inFunction ? "local " : "declare ";
         switch (intrinsic.Id)
         {
-            case IntrinsicId.FsGlob:
-            {
-                var pattern = PrepareValue(intrinsic.Arguments[0], inFunction);
-                var cwd = intrinsic.Arguments.Count > 1 ? intrinsic.Arguments[1] : new IrLiteralExpression(null);
-                var root = PrepareValue(cwd, inFunction);
-                WriteLine($"{arrayDeclaration}-a {name}=()");
-                if (!_nativeGlobHelper)
-                {
-                    _context.Error(AmbiguousShapeCode,
-                        "std.fs.glob requires an explicit std.fs.glob import before it can be emitted.",
-                        intrinsic.Origin?.Line ?? 1, intrinsic.Origin?.Column ?? 1);
-                    return false;
-                }
-                WriteLine($"__sushi_fs_glob_into {name} {pattern} {root}");
-                _nativeArrayVariables[name] = name;
-                _arrayInitializers.Remove(name);
-                return true;
-            }
-
             case IntrinsicId.ProcessArgs:
                 WriteLine($"{arrayDeclaration}-a {name}=(\"$@\")");
                 _nativeArrayVariables[name] = name;

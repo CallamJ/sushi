@@ -542,6 +542,19 @@ internal sealed class SushiLanguageServer
                 yield return new CompletionItem($"{name}({parameters})", 2, detail, null, null, CallableInsertText(name, count), count > 0 ? 2 : null);
             }
         }
+        if (string.Equals(type, "FileQuery", StringComparison.Ordinal))
+        {
+            var docs = StandardLibrary.TryGetFunction("std.fs.query", out var find) ? find.Documentation : null;
+            foreach (var (label, name, detail, count) in new[]
+            {
+                ("recursive()", "recursive", "FileQuery", 0), ("matching(string pattern)", "matching", "FileQuery", 1),
+                ("excluding(string pattern)", "excluding", "FileQuery", 1), ("includingHidden()", "includingHidden", "FileQuery", 0),
+                ("hidden()", "hidden", "FileQuery", 0), ("files()", "files", "string[]", 0),
+                ("directories()", "directories", "string[]", 0), ("entries()", "entries", "string[]", 0)
+            })
+                yield return new CompletionItem(label, 2, detail, docs, null,
+                    CallableInsertText(name, count), count > 0 ? 2 : null);
+        }
     }
 
     private static string? InferredCallableReturnType(SushiSemanticModel model, SushiSymbol callable)

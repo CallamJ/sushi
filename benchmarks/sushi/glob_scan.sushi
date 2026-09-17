@@ -1,4 +1,4 @@
-use std.fs.{glob}
+use std.fs as fs
 
-var files = std.fs.glob("src/**/*.cs")
+var files = fs.query("src").recursive().matching("*.cs").files()
 println("glob_done")

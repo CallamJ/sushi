@@ -114,7 +114,7 @@ public sealed class StandardLibraryEndToEndTests
         Case("std.fs.writeText", "use std.fs.writeText\nwriteText(\"written.txt\", \"sushi\")", verify: (root, _, _) => Assert.Equal("sushi", File.ReadAllText(Path.Combine(root, "written.txt")))),
         Case("std.fs.readText", "use std.fs.readText\nprintln(readText(\"read.txt\"))", output: "sushi\n", setup: root => File.WriteAllText(Path.Combine(root, "read.txt"), "sushi")),
         Case("std.fs.exists", "use std.fs.exists\nprintln(exists(\"present.txt\"))", output: "true\n", setup: root => File.WriteAllText(Path.Combine(root, "present.txt"), "")),
-        Case("std.fs.glob", "use std.fs.glob\nstring[] files = glob(\"**/*.sushi\", \"glob\")\nfor (string file : files) { println(file) }", output: "nested/two.sushi\none.sushi\n", setup: root =>
+        Case("std.fs.query", "use std.fs as fs\nvar root = \"glob\"\nvar pattern = \"*.sushi\"\nvar baseQuery = fs.query(root).recursive()\nvar query = baseQuery.matching(pattern)\nstring[] files = query.files()\nfor (string file : files) { println(file) }", output: "one.sushi\nnested/two.sushi\n", setup: root =>
         {
             Directory.CreateDirectory(Path.Combine(root, "glob", "nested"));
             File.WriteAllText(Path.Combine(root, "glob", "one.sushi"), "");

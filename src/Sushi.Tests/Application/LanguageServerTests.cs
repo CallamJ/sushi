@@ -142,7 +142,7 @@ public sealed class LanguageServerTests
     [Fact]
     public async Task Server_ShowsFullMarkdownForImportedStandardLibraryMember()
     {
-        const string source = "use std.fs as fs\nvar files = fs.glob(\"*.sushi\")";
+        const string source = "use std.fs as fs\nvar query = fs.query()";
         var input = new MemoryStream(Encoding.UTF8.GetBytes(
             Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/glob-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"id\":59,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/glob-docs.sushi\"},\"position\":{\"line\":1,\"character\":15}}}") +
@@ -152,8 +152,8 @@ public sealed class LanguageServerTests
         await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
 
         var wire = Encoding.UTF8.GetString(output.ToArray());
-        Assert.Contains("string[] std.fs.glob(string pattern, string cwd = null)", wire);
-        Assert.Contains("Returns a sorted", wire);
+        Assert.Contains("FileQuery std.fs.query(string root = \\u0022.\\u0022)", wire);
+        Assert.Contains("reusable", wire);
         Assert.Contains("## Errors and portability", wire);
     }
 

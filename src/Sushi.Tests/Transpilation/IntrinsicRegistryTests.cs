@@ -44,15 +44,13 @@ public class IntrinsicRegistryTests
 
         Assert.True(registry.TryResolve("std.process.run", out var processRun));
         Assert.False(registry.TryResolve("std.json.parse", out _));
-        Assert.True(registry.TryResolve("std.fs.glob", out var fsGlob));
+        Assert.False(registry.TryResolve("std.fs.glob", out _));
         Assert.True(registry.TryResolve("std.fs.size", out var fsSize));
         Assert.True(registry.TryResolve("std.http.get", out var httpGet));
 
         Assert.Equal(IntrinsicId.ProcessRun, processRun.Id);
-        Assert.Equal(IntrinsicId.FsGlob, fsGlob.Id);
         Assert.Equal(IntrinsicId.FsSize, fsSize.Id);
         Assert.Equal("int", fsSize.ReturnType.Name);
-        Assert.Equal("string", fsGlob.ReturnType.ElementType?.Name);
         Assert.Equal(IntrinsicId.HttpGet, httpGet.Id);
     }
 
@@ -94,9 +92,10 @@ public class IntrinsicRegistryTests
     {
         var catalog = StandardLibraryCatalog.CreateDefault();
 
-        Assert.True(catalog.TryGetFunction("std.fs.glob", out var glob));
-        Assert.Equal("string[]", glob.ReturnType);
-        Assert.Equal("string", glob.Parameters[1].TypeName);
+        Assert.True(catalog.TryGetFunction("std.fs.query", out var query));
+        Assert.Equal("FileQuery", query.ReturnType);
+        Assert.Equal("string", query.Parameters[0].TypeName);
+        Assert.True(query.Parameters[0].HasDefaultValue);
     }
 
     [Theory]

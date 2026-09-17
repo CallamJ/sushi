@@ -43,7 +43,6 @@ public sealed partial class PosixEmitter : IBackendEmitter
     private HashSet<string> _enumTypeNames = new(StringComparer.Ordinal);
     private bool _emittedTopLevelSection;
     private Dictionary<string, int> _positionalParameterReferences = new(StringComparer.Ordinal);
-    private bool _nativeGlobHelper;
 
     public PosixEmitter(PosixDialect? dialect = null) => _dialect = dialect ?? PosixDialect.Bash;
 
@@ -75,7 +74,6 @@ public sealed partial class PosixEmitter : IBackendEmitter
         _enumTypeNames = CollectEnumTypeNames(program.Statements);
         _emittedTopLevelSection = false;
         _positionalParameterReferences.Clear();
-        _nativeGlobHelper = ExplicitStdlibHelpers.RequiresFsGlob(program);
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&
@@ -111,10 +109,6 @@ public sealed partial class PosixEmitter : IBackendEmitter
             if (!string.IsNullOrWhiteSpace(import.Alias)) importText += $" as {import.Alias}";
             WriteLine($"# use {importText}");
         }
-        if (_nativeGlobHelper)
-        {
-            EmitNativeGlobHelper();
-        }
         foreach (var statement in program.Statements)
         {
             EmitStatement(statement, inFunction: false);
@@ -123,47 +117,4 @@ public sealed partial class PosixEmitter : IBackendEmitter
         return _document.ToString();
     }
 
-    private void EmitNativeGlobHelper()
-    {
-        if (_dialect.IsZsh)
-        {
-            AppendStdlibHelperBlock("""
-__sushi_fs_glob_into() {
-  local out_name="${1-}" pattern="${2-}" cwd="${3-}" base="${PWD}" candidate
-  typeset -n output="$out_name"
-  output=()
-  [[ -n "$cwd" && "$cwd" != 'null' ]] && base="$(cd -- "$cwd" && pwd -P)" || true
-  [[ -d "$base" ]] || { print -u2 "std.fs.glob: directory not found: $cwd"; return 1; }
-  local -a matches
-  matches=( ${(N)~base/$pattern} )
-  local item
-  local -a ordered
-  ordered=( "${matches[@]#$base/}" )
-  output=( ${(on)ordered} )
-}
-""");
-            return;
-        }
-        AppendStdlibHelperBlock("""
-__sushi_fs_glob_into() {
-  local out_name="${1-}" pattern="${2-}" cwd="${3-}" base="${PWD}" candidate
-  local -n output="$out_name"
-  output=()
-  [[ -n "$cwd" && "$cwd" != 'null' ]] && base="$(cd -- "$cwd" && pwd -P)" || true
-  [[ -d "$base" ]] || { printf 'std.fs.glob: directory not found: %s\n' "$cwd" >&2; return 1; }
-  shopt -s globstar nullglob
-  local -a matches=( "$base"/$pattern )
-  for candidate in "${matches[@]}"; do
-    [[ -e "$candidate" ]] || continue
-    output+=("${candidate#$base/}")
-  done
-  IFS=$'\n' output=( $(printf '%s\n' "${output[@]}" | LC_ALL=C sort) )
-}
-""");
-    }
-
-    private void AppendStdlibHelperBlock(string text)
-    {
-        _document.Template(text);
-    }
 }

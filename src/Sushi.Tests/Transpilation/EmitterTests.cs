@@ -510,12 +510,11 @@ public class EmitterTests
     }
 
     [Fact]
-    public void PosixEmitter_LowersHttpAndGlobDirectly()
+    public void PosixEmitter_LowersHttpDirectly()
     {
         var program = new IrProgram(new IrStatement[]
         {
             new IrStandardLibraryImportStatement("std.http", null, Array.Empty<string>()),
-            new IrStandardLibraryImportStatement("std.fs", null, new[] { "glob" }),
             new IrVariableDeclarationStatement("response", new IrIntrinsicCallExpression(
                 "std.http.get",
                 IntrinsicId.HttpGet,
@@ -524,14 +523,6 @@ public class EmitterTests
                     new IrLiteralExpression("https://example.com"),
                     new IrLiteralExpression(null)
                 })),
-            new IrVariableDeclarationStatement("files", new IrIntrinsicCallExpression(
-                "std.fs.glob",
-                IntrinsicId.FsGlob,
-                new IrExpression[]
-                {
-                    new IrLiteralExpression("*.sushi"),
-                    new IrLiteralExpression(null)
-                }))
         });
 
         var diagnostics = new List<Diagnostic>();
@@ -539,8 +530,7 @@ public class EmitterTests
         var script = emitter.Emit(program, new EmitContext("test.sushi", diagnostics));
 
         Assert.Contains("curl -sS", script);
-        Assert.Contains("__sushi_fs_glob_into", script);
-        Assert.DoesNotContain("__sushi_glob_regex_into", script);
+        Assert.DoesNotContain("__sushi_fs_glob", script);
         Assert.Empty(diagnostics);
     }
 

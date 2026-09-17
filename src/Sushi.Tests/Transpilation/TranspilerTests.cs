@@ -230,7 +230,8 @@ public class TranspilerTests
             use std.fs
             use std.http
             use std.process
-            var files = std.fs.glob("*.sushi")
+            var query = std.fs.query()
+            var files = query.files()
             var response = std.http.get("https://example.com")
             var result = std.process.run("pwsh", ["-NoProfile", "-Command", "Write-Output hi"], allowFailure: true)
             println(result.code)
@@ -248,7 +249,8 @@ public class TranspilerTests
         Assert.NotNull(result.EmittedCode);
         Assert.Contains("Invoke-WebRequest", result.EmittedCode);
         Assert.Contains("Start-Process", result.EmittedCode);
-        Assert.Contains("function __sushi_fs_glob", result.EmittedCode);
+        Assert.Contains("Get-ChildItem", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_fs_glob", result.EmittedCode);
     }
 
     [Fact]
@@ -280,7 +282,7 @@ public class TranspilerTests
             use std.fs
             use std.process
             var parsed = { name: "sushi", count: 2 }
-            var files = std.fs.glob("src/**/*.cs")
+            var files = std.fs.query("src").recursive().files()
             var stages = [{ command: "printf", args: ["hello"] }]
             var result = std.process.pipeline(stages, allowFailure: true)
             println(parsed.name)
@@ -296,7 +298,7 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.NotNull(result.EmittedCode);
-        Assert.Contains("__sushi_fs_glob", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_fs_glob", result.EmittedCode);
     }
 
     [Fact]

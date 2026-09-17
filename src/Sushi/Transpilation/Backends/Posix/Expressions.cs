@@ -214,7 +214,7 @@ public sealed partial class PosixEmitter
                 _context.Error(AmbiguousShapeCode, "Constructed objects must be assigned to a variable before use on Bash/Zsh targets.");
                 return "''";
 
-            case IrIntrinsicCallExpression intrinsic when intrinsic.Id is IntrinsicId.FsGlob or IntrinsicId.ProcessRun or IntrinsicId.ProcessPipeline or IntrinsicId.HttpGet or IntrinsicId.HttpPost:
+            case IrIntrinsicCallExpression intrinsic when intrinsic.Id is IntrinsicId.ProcessRun or IntrinsicId.ProcessPipeline or IntrinsicId.HttpGet or IntrinsicId.HttpPost:
                 return EmitAggregateIntrinsicFallback(intrinsic);
 
             case IrIntrinsicCallExpression intrinsic when intrinsic.Id is IntrinsicId.IoWriteText or IntrinsicId.EnvSet or IntrinsicId.ProcessExit or IntrinsicId.OsChdir:

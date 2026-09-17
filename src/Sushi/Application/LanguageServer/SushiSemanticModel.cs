@@ -119,6 +119,9 @@ internal sealed class SushiSemanticModel
             {
                 var equals = symbol.DeclarationIndex + 1 < Tokens.Count && Tokens[symbol.DeclarationIndex + 1].IsOperator("=")
                     ? symbol.DeclarationIndex + 2 : -1;
+                if (equals >= 0 && Tokens.Skip(equals).TakeWhile(candidate => candidate.Kind is not ClassifiedTokenKind.Semicolon && candidate.Line == Tokens[equals].Line)
+                    .Any(candidate => candidate.Kind == ClassifiedTokenKind.Identifier && candidate.Text == "query"))
+                    return "FileQuery";
                 if (equals >= 0 && equals < Tokens.Count) return TypeOf(Tokens[equals]);
             }
             return null;

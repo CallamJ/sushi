@@ -727,6 +727,46 @@ public sealed class IrObjectLiteralExpression : IrExpression
     }
 }
 
+/// <summary>
+/// A reusable standard-library filesystem query.  It is deliberately an IR
+/// value rather than a call to a generated glob runtime: emitters store its
+/// configuration in their normal native-object representation and materialize
+/// it only when a terminal operation is invoked.
+/// </summary>
+public sealed class IrFileQueryExpression : IrExpression
+{
+    public IrExpression Root { get; }
+    public IrExpression Recursive { get; }
+    public IrExpression MatchPattern { get; }
+    public IrExpression ExcludePattern { get; }
+    /// <summary>visible, all, or hidden.</summary>
+    public IrExpression Visibility { get; }
+
+    public IrFileQueryExpression(IrExpression root, IrExpression recursive, IrExpression matchPattern,
+        IrExpression excludePattern, IrExpression visibility)
+    {
+        Root = root;
+        Recursive = recursive;
+        MatchPattern = matchPattern;
+        ExcludePattern = excludePattern;
+        Visibility = visibility;
+    }
+}
+
+public enum IrFileQueryEntryKind { Files, Directories, Entries }
+
+public sealed class IrFileQueryExecutionExpression : IrExpression
+{
+    public IrExpression Query { get; }
+    public IrFileQueryEntryKind EntryKind { get; }
+
+    public IrFileQueryExecutionExpression(IrExpression query, IrFileQueryEntryKind entryKind)
+    {
+        Query = query;
+        EntryKind = entryKind;
+    }
+}
+
 public sealed class IrMemberAccessExpression : IrExpression
 {
     public IrExpression Target { get; }

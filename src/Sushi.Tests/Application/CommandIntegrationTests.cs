@@ -75,8 +75,8 @@ public sealed class CommandIntegrationTests
             Assert.Contains("### greet", markdown);
             Assert.Contains("Say hello.", markdown);
             Assert.Contains("Who to greet.", markdown);
-            Assert.Contains("### std.fs.glob", markdown);
-            Assert.Contains("Returns a sorted `string[]`", markdown);
+            Assert.Contains("### std.fs.query", markdown);
+            Assert.Contains("reusable `FileQuery`", markdown);
         }
         finally
         {

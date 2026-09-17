@@ -183,10 +183,15 @@ public sealed class AstToIrLowerer
     {
         foreach (var use in program.Declarations.OfType<UseDeclarationNode>().Where(item => item.IsStandardLibrary))
         {
+            if (use.ImportPath == "std.fs.glob")
+            {
+                AddDiagnostic("SUSHI1056", "Unknown standard-library member 'std.fs.glob'.", use.Line, use.Column);
+                continue;
+            }
             var alias = use.Alias ?? use.ImportPath[(use.ImportPath.LastIndexOf('.') + 1)..];
             if (use.Members.Count == 0)
             {
-                if (_intrinsicRegistry.TryResolve(use.ImportPath, out _))
+                if (_intrinsicRegistry.TryResolve(use.ImportPath, out _) || use.ImportPath == "std.fs.query")
                 {
                     var member = use.ImportPath[(use.ImportPath.LastIndexOf('.') + 1)..];
                     if (!_standardImportNames.TryAdd(member, use.ImportPath))
@@ -202,7 +207,8 @@ public sealed class AstToIrLowerer
 
             foreach (var member in use.Members)
             {
-                if (!_intrinsicRegistry.TryResolve($"{use.ImportPath}.{member}", out _))
+                if (!_intrinsicRegistry.TryResolve($"{use.ImportPath}.{member}", out _) &&
+                    $"{use.ImportPath}.{member}" != "std.fs.query")
                 {
                     AddDiagnostic("SUSHI1056", $"Unknown standard-library member '{use.ImportPath}.{member}'.", use.Line, use.Column);
                     continue;
@@ -1163,6 +1169,10 @@ public sealed class AstToIrLowerer
                 AddDiagnostic("SUSHI1057", $"Standard-library API '{calleePath}' must be explicitly imported with a 'use' declaration.", node.Line, node.Column);
             }
             calleePath = ResolveStandardImport(calleePath);
+            if (calleePath == "std.fs.query")
+            {
+                return LowerFileQuery(loweredArguments, node.Line, node.Column);
+            }
             if (node.Callee is IdentifierExpressionNode &&
                 loweredArguments.Count == 1 &&
                 TryResolveExpressionObjectType(node.Arguments[0].Value, out var adaptedType))
@@ -1280,6 +1290,12 @@ public sealed class AstToIrLowerer
 
         if (node.Callee is MemberAccessExpressionNode memberCallee)
         {
+            var queryTarget = LowerExpression(memberCallee.Object);
+            if (IsFileQuery(queryTarget))
+            {
+                return LowerFileQueryMember(queryTarget, memberCallee.MemberName, loweredArguments,
+                    node.Line, node.Column);
+            }
             if (TryResolveExpressionObjectType(memberCallee.Object, out var objectType))
             {
                 var typeDeclarationMethods = _classes.TryGetValue(objectType, out var classDeclaration)
@@ -1439,6 +1455,92 @@ public sealed class AstToIrLowerer
         }
 
         return new IrCallExpression(resolvedCallee, loweredArguments);
+    }
+
+    private static readonly IrTypeRef FileQueryType = IrTypeRef.Primitive("FileQuery");
+
+    private static bool IsFileQuery(IrExpression expression) =>
+        expression is IrFileQueryExpression ||
+        expression is IrIdentifierExpression { StaticType: { Name: "FileQuery" } } ||
+        expression is IrMemberAccessExpression { ValueType: { Name: "FileQuery" } };
+
+    private IrExpression LowerFileQuery(IReadOnlyList<IrCallArgument> arguments, int line, int column)
+    {
+        if (arguments.Count > 1 || arguments.Any(argument => argument.Name != null))
+        {
+            AddDiagnostic("SUSHI1064", "std.fs.query accepts zero or one positional root argument.", line, column);
+            return new IrLiteralExpression(null);
+        }
+        var root = arguments.Count == 0 ? new IrLiteralExpression(".") : arguments[0].Value;
+        ValidateExpressionAgainstType(root, IrTypeRef.Primitive("string"), line, column,
+            "root for std.fs.query", InferredTypeConflictCode);
+        return new IrFileQueryExpression(root, new IrLiteralExpression(false),
+            new IrLiteralExpression(null), new IrLiteralExpression(null), new IrLiteralExpression("visible"));
+    }
+
+    private IrExpression LowerFileQueryMember(IrExpression target, string memberName,
+        IReadOnlyList<IrCallArgument> arguments, int line, int column)
+    {
+        var (root, recursive, match, exclude, visibility) = FileQueryFields(target);
+        IrFileQueryExpression Configure(IrExpression configuredRoot, IrExpression configuredRecursive,
+            IrExpression configuredMatch, IrExpression configuredExclude, IrExpression configuredVisibility) =>
+            new(configuredRoot, configuredRecursive, configuredMatch, configuredExclude, configuredVisibility);
+
+        switch (memberName)
+        {
+            case "recursive":
+                RequireFileQueryArguments(memberName, arguments, 0, line, column);
+                return Configure(root, new IrLiteralExpression(true), match, exclude, visibility);
+            case "matching":
+                RequireFileQueryArguments(memberName, arguments, 1, line, column);
+                if (arguments.Count == 1)
+                    ValidateExpressionAgainstType(arguments[0].Value, IrTypeRef.Primitive("string"), line, column,
+                        "pattern for FileQuery.matching", InferredTypeConflictCode);
+                return Configure(root, recursive, arguments.Count == 1 ? arguments[0].Value : match, exclude, visibility);
+            case "excluding":
+                RequireFileQueryArguments(memberName, arguments, 1, line, column);
+                if (arguments.Count == 1)
+                    ValidateExpressionAgainstType(arguments[0].Value, IrTypeRef.Primitive("string"), line, column,
+                        "pattern for FileQuery.excluding", InferredTypeConflictCode);
+                return Configure(root, recursive, match, arguments.Count == 1 ? arguments[0].Value : exclude, visibility);
+            case "includingHidden":
+                RequireFileQueryArguments(memberName, arguments, 0, line, column);
+                return Configure(root, recursive, match, exclude, new IrLiteralExpression("all"));
+            case "hidden":
+                RequireFileQueryArguments(memberName, arguments, 0, line, column);
+                return Configure(root, recursive, match, exclude, new IrLiteralExpression("hidden"));
+            case "files":
+                RequireFileQueryArguments(memberName, arguments, 0, line, column);
+                return new IrFileQueryExecutionExpression(target, IrFileQueryEntryKind.Files);
+            case "directories":
+                RequireFileQueryArguments(memberName, arguments, 0, line, column);
+                return new IrFileQueryExecutionExpression(target, IrFileQueryEntryKind.Directories);
+            case "entries":
+                RequireFileQueryArguments(memberName, arguments, 0, line, column);
+                return new IrFileQueryExecutionExpression(target, IrFileQueryEntryKind.Entries);
+            default:
+                AddDiagnostic(UnknownMemberCode, $"FileQuery has no method '{memberName}'.", line, column);
+                return new IrLiteralExpression(null);
+        }
+    }
+
+    private void RequireFileQueryArguments(string method, IReadOnlyList<IrCallArgument> arguments, int count, int line, int column)
+    {
+        if (arguments.Count == count && arguments.All(argument => argument.Name == null)) return;
+        AddDiagnostic("SUSHI1064", $"FileQuery.{method} requires exactly {count} positional argument{(count == 1 ? "" : "s")}.", line, column);
+    }
+
+    private static (IrExpression Root, IrExpression Recursive, IrExpression Match, IrExpression Exclude, IrExpression Visibility)
+        FileQueryFields(IrExpression target)
+    {
+        if (target is IrFileQueryExpression query)
+            return (query.Root, query.Recursive, query.MatchPattern, query.ExcludePattern, query.Visibility);
+        return (
+            new IrMemberAccessExpression(target, "_fs_root", IrTypeRef.Primitive("string")),
+            new IrMemberAccessExpression(target, "_fs_recursive", IrTypeRef.Primitive("bool")),
+            new IrMemberAccessExpression(target, "_fs_match", IrTypeRef.Primitive("string")),
+            new IrMemberAccessExpression(target, "_fs_exclude", IrTypeRef.Primitive("string")),
+            new IrMemberAccessExpression(target, "_fs_visibility", IrTypeRef.Primitive("string")));
     }
 
     private IrExpression LowerNewExpression(NewExpressionNode node)
@@ -1865,6 +1967,21 @@ public sealed class AstToIrLowerer
             case CallExpressionNode call when TryGetCalleePath(call.Callee, out var callee) &&
                                               TryGetConversionType(callee, out var conversionType):
                 return conversionType;
+            case CallExpressionNode call when TryGetCalleePath(call.Callee, out var callee) &&
+                                              ResolveStandardImport(callee) == "std.fs.query":
+                return FileQueryType;
+            case CallExpressionNode { Callee: MemberAccessExpressionNode { MemberName: "recursive" or "matching" or "excluding" or "includingHidden" or "hidden" } receiver }:
+            {
+                var receiverType = InferAstExpressionType(receiver.Object, locals);
+                return receiverType.Name == "FileQuery" ? FileQueryType : IrTypeRef.Unknown;
+            }
+            case CallExpressionNode { Callee: MemberAccessExpressionNode { MemberName: "files" or "directories" or "entries" } receiver }:
+            {
+                var receiverType = InferAstExpressionType(receiver.Object, locals);
+                return receiverType.Name == "FileQuery"
+                    ? IrTypeRef.Primitive("array", elementType: IrTypeRef.Primitive("string"))
+                    : IrTypeRef.Unknown;
+            }
             case CallExpressionNode call when TryGetCalleePath(call.Callee, out var callee):
                 if (_intrinsicRegistry.TryResolve(callee, out var intrinsic)) return intrinsic.ReturnType;
                 return _functionSignatures.TryGetValue(ResolveCallable(callee), out var callable) ? callable.ReturnType : IrTypeRef.Unknown;
@@ -3105,6 +3222,7 @@ public sealed class AstToIrLowerer
             "object" or "map" or "dictionary" or "dict" => IrTypeRef.Primitive("object"),
             "any" or "var" => IrTypeRef.Any,
             "void" => IrTypeRef.Void,
+            "filequery" => FileQueryType,
             _ => null
         };
         if (primitive != null) return primitive;
@@ -3436,6 +3554,14 @@ public sealed class AstToIrLowerer
 
             case IrObjectLiteralExpression:
                 type = IrTypeRef.Primitive("object");
+                return true;
+
+            case IrFileQueryExpression:
+                type = FileQueryType;
+                return true;
+
+            case IrFileQueryExecutionExpression:
+                type = IrTypeRef.Primitive("array", elementType: IrTypeRef.Primitive("string"));
                 return true;
 
             case IrConstructionExpression construction:

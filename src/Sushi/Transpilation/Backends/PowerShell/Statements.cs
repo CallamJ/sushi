@@ -46,6 +46,16 @@ public sealed partial class PowerShellEmitter
                 {
                     _arrayInitializers.Remove(variableName);
                 }
+                if (initializer is IrFileQueryExpression query)
+                {
+                    EmitFileQueryDeclaration(variableName, query);
+                    break;
+                }
+                if (initializer is IrFileQueryExecutionExpression queryExecution)
+                {
+                    EmitFileQueryExecutionDeclaration(variableName, queryExecution);
+                    break;
+                }
                 if (initializer is IrIntrinsicCallExpression intrinsic &&
                     EmitNativeIntrinsicDeclaration(variableName, intrinsic))
                 {
@@ -129,6 +139,13 @@ public sealed partial class PowerShellEmitter
             case IrReturnStatement returnStatement:
                 if (returnStatement.Expression != null)
                 {
+                    if (returnStatement.Expression is IrFileQueryExecutionExpression queryExecution)
+                    {
+                        var resultName = $"__sushi_query_return_{++_fileQueryTempId}";
+                        EmitFileQueryExecutionDeclaration(resultName, queryExecution);
+                        WriteLine($"return ${resultName}");
+                        break;
+                    }
                     var value = EmitValueExpression(returnStatement.Expression);
                     if (_currentFunctionReturnType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true)
                         value = $"[double]({value})";
@@ -354,19 +371,6 @@ public sealed partial class PowerShellEmitter
     {
         switch (intrinsic.Id)
         {
-            case IntrinsicId.FsGlob:
-            {
-                if (!_nativeGlobHelper)
-                {
-                    _context.Error(AmbiguousShapeCode,
-                        "std.fs.glob requires an explicit std.fs.glob import before it can be emitted.",
-                        intrinsic.Origin?.Line ?? 1, intrinsic.Origin?.Column ?? 1);
-                    return false;
-                }
-                WriteLine($"${name} = @({EmitExplicitFsGlob(intrinsic.Arguments)})");
-                return true;
-            }
-
             case IntrinsicId.ProcessArgs:
                 WriteLine($"${name} = @($args)");
                 return true;

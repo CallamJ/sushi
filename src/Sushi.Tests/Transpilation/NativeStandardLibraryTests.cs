@@ -71,7 +71,7 @@ public sealed class NativeStandardLibraryTests
     [Fact]
     public void PowerShellOutput_UsesPowerShell51CompatibleRuntimeApis()
     {
-        const string source = "use std.fs\nuse std.process\nuse std.http\nvar files = std.fs.glob(\"**/*.txt\", \"tmp\")\nvar result = std.process.run(\"tool\", [], timeoutMs: 1, allowFailure: true)\nvar response = std.http.get(\"https://example.test\")";
+        const string source = "use std.fs\nuse std.process\nuse std.http\nvar files = std.fs.query(\"tmp\").recursive().matching(\"*.txt\").files()\nvar result = std.process.run(\"tool\", [], timeoutMs: 1, allowFailure: true)\nvar response = std.http.get(\"https://example.test\")";
         var result = Transpile(source, TargetLanguage.Powershell51, TargetPlatform.Windows);
 
         Assert.True(result.Success);
@@ -89,17 +89,15 @@ public sealed class NativeStandardLibraryTests
     [InlineData(TargetLanguage.Bash, TargetPlatform.Linux)]
     [InlineData(TargetLanguage.Zsh, TargetPlatform.Linux)]
     [InlineData(TargetLanguage.Powershell51, TargetPlatform.Windows)]
-    public void GlobHelper_IsEmittedOnlyForAnExplicitUsedImport(TargetLanguage target, TargetPlatform platform)
+    public void FileQuery_IsLoweredWithoutGlobHelpers(TargetLanguage target, TargetPlatform platform)
     {
         var withoutImport = Transpile("var files = std.fs.glob(\"*.sushi\")", target, platform);
         Assert.False(withoutImport.Success);
         Assert.DoesNotContain("__sushi_fs_glob", withoutImport.EmittedCode);
 
-        var withImport = Transpile("use std.fs.glob\nvar files = glob(\"*.sushi\")", target, platform);
-        Assert.True(withImport.Success);
-        Assert.Contains("__sushi_fs_glob", withImport.EmittedCode);
-        Assert.DoesNotContain("__sushi_process_", withImport.EmittedCode);
-        Assert.DoesNotContain("__sushi_http_", withImport.EmittedCode);
+        var query = Transpile("use std.fs as fs\nvar files = fs.query().files()", target, platform);
+        Assert.True(query.Success);
+        Assert.DoesNotContain("__sushi_fs_glob", query.EmittedCode);
     }
 
     [Theory]

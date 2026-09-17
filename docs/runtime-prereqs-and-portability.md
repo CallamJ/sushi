@@ -62,22 +62,20 @@ JSON parsing and serialization are not built into Sushi. Calls under
 `std.json.*` are rejected as unknown intrinsics (`SUSHI1301`). JSON support is
 planned as an optional program dependency.
 
-### 2.4 `std.fs.glob(pattern, cwd?)`
+### 2.4 `std.fs.query(root?)`
 
-Import the API explicitly with `use std.fs.{glob}`. The Bash and Zsh emitters
-lower the result directly into a native shell array; no array runtime or JSON
-runtime is required.
+`fs.query(root?)` creates a reusable query. Omit `root` to use the process
+working directory. Configure it with `recursive()`,
+`matching(pattern)`, `excluding(pattern)`, `includingHidden()`, or `hidden()`,
+then call `files()`, `directories()`, or `entries()`. Queries lower directly
+to native target enumeration at each terminal call; no Sushi glob helper is emitted.
 
-- Supports recursive `**` patterns.
-- Supports `*`, `?`, character classes such as `[abc]`, and `**`; `**/`
-  matches zero or more directory segments.
-- Returns an array of files and directories, including dotfiles.
-- Results are relative to `cwd`, or to the process working directory when
-  `cwd` is omitted, and always use `/` separators.
-- Results use deterministic ordinal lexical ordering.
-- Returns an empty array on no match.
-- A missing or non-directory `cwd` is a runtime error.
-- Does not traverse directory symlinks and does not support brace expansion.
+- Roots and patterns accept normal runtime string expressions.
+- Filters apply to entry names; recursion is explicit.
+- Hidden entries are excluded by default.
+- Results are root-relative with `/` separators and target-native ordering.
+- A missing or non-directory root is a runtime error.
+- Directory symlinks are not traversed.
 
 ### 2.5 `std.fs.size(path)`
 

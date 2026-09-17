@@ -39,7 +39,6 @@ public sealed partial class PowerShellEmitter
             IntrinsicId.ProcessPipeline => $"$null = {EmitProcessPipeline(call.Arguments)}",
             IntrinsicId.ProcessFail => $"$null = {EmitProcessFail(call.Arguments)}",
             IntrinsicId.ProcessRequireSuccess => $"$null = {EmitProcessRequireSuccess(call.Arguments)}",
-            IntrinsicId.FsGlob => $"$null = {EmitFsGlob(call.Arguments)}",
             IntrinsicId.FsCreateDirectory => $"$null = {EmitFsCreateDirectory(call.Arguments)}",
             IntrinsicId.FsRemove => $"$null = {EmitFsRemove(call.Arguments)}",
             IntrinsicId.FsCopy => $"$null = {EmitFsCopy(call.Arguments)}",
@@ -97,7 +96,6 @@ public sealed partial class PowerShellEmitter
             IntrinsicId.ProcessPipeline => EmitProcessPipeline(call.Arguments),
             IntrinsicId.ProcessFail => EmitProcessFail(call.Arguments),
             IntrinsicId.ProcessRequireSuccess => EmitProcessRequireSuccess(call.Arguments),
-            IntrinsicId.FsGlob => EmitFsGlob(call.Arguments),
             IntrinsicId.FsCreateDirectory => EmitFsCreateDirectory(call.Arguments),
             IntrinsicId.FsRemove => EmitFsRemove(call.Arguments),
             IntrinsicId.FsCopy => EmitFsCopy(call.Arguments),
@@ -252,14 +250,6 @@ public sealed partial class PowerShellEmitter
         }
         return EmitAggregateIntrinsicFallback(IntrinsicId.ProcessRequireSuccess);
     }
-
-    private string EmitFsGlob(IReadOnlyList<IrExpression> arguments)
-    {
-        return EmitAggregateIntrinsicFallback(IntrinsicId.FsGlob);
-    }
-
-    private string EmitExplicitFsGlob(IReadOnlyList<IrExpression> arguments) =>
-        $"(__sushi_fs_glob -pattern ([string]({Arg(arguments, 0)})) -cwd {Arg(arguments, 1)})";
 
     private string EmitFsSize(IReadOnlyList<IrExpression> arguments) =>
         $"([int64]$(if ((Get-Item -LiteralPath {Arg(arguments, 0)}).PSIsContainer) {{ throw 'std.fs.size: regular file required' }} else {{ (Get-Item -LiteralPath {Arg(arguments, 0)}).Length }}))";

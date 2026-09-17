@@ -26,11 +26,11 @@ public sealed class SemanticWorkspaceTests
     [Fact]
     public void ResolvesQualifiedNamesFromTheSameDocumentSnapshot()
     {
-        const string source = "use std.fs as fs;\nfs.glob(\"*\");\n";
+        const string source = "use std.fs as fs;\nfs.query();\n";
         var workspace = new SemanticWorkspace();
         var model = workspace.Analyze("file:///semantic.sushi", source);
-        var token = model.Tokens.Single(token => token.Text == "glob");
+        var token = model.Tokens.Single(token => token.Text == "query");
 
-        Assert.Equal("std.fs.glob", model.QualifiedNameAt(token));
+        Assert.Equal("std.fs.query", model.QualifiedNameAt(token));
     }
 }

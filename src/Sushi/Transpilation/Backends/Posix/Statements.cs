@@ -88,6 +88,16 @@ public sealed partial class PosixEmitter
                     _nativeObjectVariables.Add(name);
                     break;
                 }
+                if (initializer is IrFileQueryExpression query)
+                {
+                    EmitFileQueryDeclaration(name, query, inFunction);
+                    break;
+                }
+                if (initializer is IrFileQueryExecutionExpression queryExecution)
+                {
+                    EmitFileQueryExecutionDeclaration(name, queryExecution, inFunction);
+                    break;
+                }
                 if (TryGetObjectReturningCall(initializer, out var objectCall, out var objectFunction))
                 {
                     WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
@@ -97,7 +107,13 @@ public sealed partial class PosixEmitter
                 }
                 if (TryGetReturningCall(initializer, out var valueCall, out var valueFunction))
                 {
-                    if (inFunction) WriteLine($"local {name}");
+                    var returnsArray = valueFunction.ReturnType.Name == "array";
+                    if (returnsArray)
+                    {
+                        WriteLine($"{(inFunction ? "local " : "declare ")}-a {name}=()");
+                        _nativeArrayVariables[name] = name;
+                    }
+                    else if (inFunction) WriteLine($"local {name}");
                     EmitCallInto(name, valueCall, valueFunction, inFunction);
                     SetKnownInteger(name, declaredInt || valueFunction.ReturnType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true);
                     SetKnownFloat(name, declaredFloat || valueFunction.ReturnType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true);
@@ -792,6 +808,12 @@ public sealed partial class PosixEmitter
         }
         if (statement.Expression != null)
         {
+            if (inFunction && statement.Expression is IrFileQueryExecutionExpression queryExecution)
+            {
+                EmitFileQueryExecutionDeclaration(_currentOutputName, queryExecution, inFunction, outputAlreadyDeclared: true);
+                WriteLine("return 0");
+                return;
+            }
             if (inFunction && IsBooleanValueExpression(statement.Expression))
             {
                 EmitBooleanOutput(statement.Expression);

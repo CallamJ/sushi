@@ -6,7 +6,6 @@ using Sushi.Transpilation.Intrinsics;
 internal static class EmissionCapabilityAnalyzer
 {
     public static bool UsesArrays(IrProgram program) => program.Statements.Any(UsesArrays);
-    public static bool UsesFsGlob(IrProgram program) => program.Statements.Any(UsesFsGlob);
     public static bool UsesIntrinsic(IrProgram program, IntrinsicId id) => program.Statements.Any(statement => UsesIntrinsic(statement, id));
 
     private static bool UsesIntrinsic(IrStatement statement, IntrinsicId id) => statement switch
@@ -48,48 +47,6 @@ internal static class EmissionCapabilityAnalyzer
         _ => false
     };
 
-    private static bool UsesFsGlob(IrStatement statement) => statement switch
-    {
-        IrBlockStatement block => block.Statements.Any(UsesFsGlob),
-        IrVariableDeclarationStatement variable => variable.Initializer != null && UsesFsGlob(variable.Initializer),
-        IrExpressionStatement expression => UsesFsGlob(expression.Expression),
-        IrIfStatement conditional => UsesFsGlob(conditional.Condition) || UsesFsGlob(conditional.ThenBlock) || (conditional.ElseBlock != null && UsesFsGlob(conditional.ElseBlock)),
-        IrSwitchStatement selection => UsesFsGlob(selection.Value) || selection.Cases.Any(@case => @case.Matches.Any(UsesFsGlob) || UsesFsGlob(@case.Body)) || (selection.DefaultBody != null && UsesFsGlob(selection.DefaultBody)),
-        IrWhileStatement loop => UsesFsGlob(loop.Condition) || UsesFsGlob(loop.Body),
-        IrForStatement loop => (loop.Initializer != null && UsesFsGlob(loop.Initializer)) || (loop.Condition != null && UsesFsGlob(loop.Condition)) || (loop.Increment != null && UsesFsGlob(loop.Increment)) || UsesFsGlob(loop.Body),
-        IrForEachStatement loop => UsesFsGlob(loop.Collection) || UsesFsGlob(loop.Body),
-        IrDoWhileStatement loop => UsesFsGlob(loop.Body) || UsesFsGlob(loop.Condition),
-        IrFunctionDeclarationStatement function => UsesFsGlob(function.Body),
-        IrReturnStatement returned => returned.Expression != null && UsesFsGlob(returned.Expression),
-        _ => false
-    };
-
-    private static bool UsesFsGlob(IrExpression expression) => expression switch
-    {
-        IrIntrinsicCallExpression { Id: IntrinsicId.FsGlob } => true,
-        IrArrayLiteralExpression array => array.Elements.Any(UsesFsGlob),
-        IrIndexExpression index => UsesFsGlob(index.Target) || UsesFsGlob(index.Index),
-        IrCollectionLengthExpression length => UsesFsGlob(length.Target),
-        IrSliceExpression slice => UsesFsGlob(slice.Target) ||
-                                   (slice.Start != null && UsesFsGlob(slice.Start)) ||
-                                   (slice.End != null && UsesFsGlob(slice.End)),
-        IrMethodCallExpression method => UsesFsGlob(method.Target) || method.Arguments.Any(argument => UsesFsGlob(argument.Value)),
-        IrIntrinsicCallExpression intrinsic => intrinsic.Arguments.Any(UsesFsGlob),
-        IrAssignmentExpression assignment => UsesFsGlob(assignment.Value),
-        IrObjectLiteralExpression obj => obj.Properties.Any(property => UsesFsGlob(property.Value)),
-        IrMemberAccessExpression member => UsesFsGlob(member.Target),
-        IrConversionExpression conversion => UsesFsGlob(conversion.Value),
-        IrCallExpression call => call.Arguments.Any(argument => UsesFsGlob(argument.Value)),
-        IrConstructionExpression construction => construction.Arguments.Any(argument => UsesFsGlob(argument.Value)),
-        IrResolvedMethodCallExpression method => UsesFsGlob(method.Target) || method.Arguments.Any(argument => UsesFsGlob(argument.Value)),
-        IrAdapterCallExpression adapter => UsesFsGlob(adapter.Value),
-        IrTruthinessExpression truthiness => UsesFsGlob(truthiness.Operand),
-        IrUnaryExpression unary => UsesFsGlob(unary.Operand),
-        IrBinaryExpression binary => UsesFsGlob(binary.Left) || UsesFsGlob(binary.Right),
-        IrConditionalExpression conditional => UsesFsGlob(conditional.Condition) || UsesFsGlob(conditional.TrueExpression) || UsesFsGlob(conditional.FalseExpression),
-        _ => false
-    };
-
     private static bool UsesArrays(IrStatement statement) => statement switch
     {
         IrBlockStatement block => block.Statements.Any(UsesArrays),
@@ -120,7 +77,7 @@ internal static class EmissionCapabilityAnalyzer
                                    (slice.End != null && UsesArrays(slice.End)),
         IrMethodCallExpression method => method.MethodName is "push" or "map" or "filter" or "reduce" or "length" ||
                                          UsesArrays(method.Target) || method.Arguments.Any(argument => UsesArrays(argument.Value)),
-        IrIntrinsicCallExpression intrinsic => intrinsic.Id is IntrinsicId.StringSplit or IntrinsicId.ProcessArgs or IntrinsicId.FsGlob ||
+        IrIntrinsicCallExpression intrinsic => intrinsic.Id is IntrinsicId.StringSplit or IntrinsicId.ProcessArgs ||
                                                intrinsic.Arguments.Any(UsesArrays),
         IrAssignmentExpression assignment => UsesArrays(assignment.Value),
         IrObjectLiteralExpression obj => obj.Properties.Any(property => UsesArrays(property.Value)),

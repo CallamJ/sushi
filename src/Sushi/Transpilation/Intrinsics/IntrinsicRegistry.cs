@@ -232,14 +232,6 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.ConsoleReadLine,
                 Array.Empty<IntrinsicParameter>()),
             new IntrinsicSignature(
-                "std.fs.glob",
-                IntrinsicId.FsGlob,
-                new[]
-                {
-                    new IntrinsicParameter("pattern"),
-                    new IntrinsicParameter("cwd", hasDefaultValue: true, defaultValue: null)
-                }),
-            new IntrinsicSignature(
                 "std.fs.size",
                 IntrinsicId.FsSize,
                 new[] { new IntrinsicParameter("path", typeName: "string") }),
