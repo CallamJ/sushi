@@ -66,14 +66,16 @@ public sealed class IntrinsicSignature
         IntrinsicId.FsCopy or IntrinsicId.FsMove or IntrinsicId.ArchiveZip or
         IntrinsicId.ArchiveUnzip or IntrinsicId.HttpDownload => IrTypeRef.Primitive("void"),
         IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or
-        IntrinsicId.StringIsMatch or IntrinsicId.IoExists or IntrinsicId.EnvHas => IrTypeRef.Primitive("bool"),
+        IntrinsicId.StringIsMatch or IntrinsicId.IoExists or IntrinsicId.EnvHas or
+        IntrinsicId.FsIsFile or IntrinsicId.FsIsDirectory => IrTypeRef.Primitive("bool"),
         IntrinsicId.StringLength or IntrinsicId.FsSize => IrTypeRef.Primitive("int"),
         IntrinsicId.StringSplit or IntrinsicId.ProcessArgs =>
             IrTypeRef.Primitive("array", elementType: IrTypeRef.Primitive("string")),
         IntrinsicId.TargetShell or IntrinsicId.TargetPlatform or IntrinsicId.StringTrim or IntrinsicId.StringLower or
         IntrinsicId.StringUpper or IntrinsicId.StringReplace or IntrinsicId.IoReadText or IntrinsicId.PathJoin or
         IntrinsicId.PathDirname or IntrinsicId.PathBasename or IntrinsicId.PathExtension or IntrinsicId.PathStem or
-        IntrinsicId.EnvGet or IntrinsicId.ProcessWhich => IrTypeRef.Primitive("string"),
+        IntrinsicId.EnvGet or IntrinsicId.ProcessWhich or IntrinsicId.OsCwd or
+        IntrinsicId.ConsoleReadLine => IrTypeRef.Primitive("string"),
         IntrinsicId.ProcessRun or IntrinsicId.ProcessPipeline or IntrinsicId.ProcessRequireSuccess => IrTypeRef.Structural(new[]
         {
             new IrStructuralField("code", IrTypeRef.Primitive("int"), false),

@@ -99,6 +99,19 @@ public class IntrinsicRegistryTests
     }
 
     [Theory]
+    [InlineData("std.fs.isFile")]
+    [InlineData("std.fs.isDirectory")]
+    [InlineData("std.os.cwd")]
+    [InlineData("std.console.readLine")]
+    public void Resolve_FileSystemPredicates_HasBooleanReturnType(string name)
+    {
+        var registry = IntrinsicRegistry.CreateDefault();
+
+        Assert.True(registry.TryResolve(name, out var signature));
+        Assert.Equal("bool", signature.ReturnType.Name);
+    }
+
+    [Theory]
     [InlineData("print")]
     [InlineData("println")]
     [InlineData("std.fs.writeText")]
