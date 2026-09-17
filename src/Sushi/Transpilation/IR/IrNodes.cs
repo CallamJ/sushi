@@ -141,6 +141,25 @@ public sealed class IrForStatement : IrStatement
     }
 }
 
+/// <summary>Typed collection iteration retained until the target can select native loop syntax.</summary>
+public sealed class IrForEachStatement : IrStatement
+{
+    public string ItemName { get; }
+    public IrTypeRef ItemType { get; }
+    public string? IndexName { get; }
+    public IrExpression Collection { get; }
+    public IrBlockStatement Body { get; }
+
+    public IrForEachStatement(string itemName, IrTypeRef itemType, string? indexName, IrExpression collection, IrBlockStatement body)
+    {
+        ItemName = itemName;
+        ItemType = itemType;
+        IndexName = indexName;
+        Collection = collection;
+        Body = body;
+    }
+}
+
 public sealed class IrDoWhileStatement : IrStatement
 {
     public IrBlockStatement Body { get; }
@@ -459,6 +478,19 @@ public sealed class IrUnaryExpression : IrExpression
         Operator = op;
         Operand = operand;
         IsPrefix = isPrefix;
+    }
+}
+
+/// <summary>Explicit source-level conversion such as <c>int(value)</c>.</summary>
+public sealed class IrConversionExpression : IrExpression
+{
+    public IrExpression Value { get; }
+    public IrTypeRef TargetType { get; }
+
+    public IrConversionExpression(IrExpression value, IrTypeRef targetType)
+    {
+        Value = value;
+        TargetType = targetType;
     }
 }
 

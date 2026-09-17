@@ -2,7 +2,6 @@ namespace Sushi.Transpilation.Backends.PowerShell;
 
 using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using Sushi.Application;
 using Sushi.Transpilation.Backends;
@@ -14,9 +13,9 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
     private const string UnsupportedEmitCode = "SUSHI1200";
     private const string AmbiguousShapeCode = "SUSHI1030";
 
-    private readonly StringBuilder _builder = new();
+    private readonly GeneratedDocument _document = new();
     private EmitContext _context = null!;
-    private int _indent;
+    private int _indent { get => _document.Indent; set => _document.Indent = value; }
     private string? _currentFunctionName;
     private IrTypeRef _currentFunctionReturnType = IrTypeRef.Any;
     private HashSet<string> _knownIntegerVariables = new(StringComparer.Ordinal);
@@ -39,7 +38,7 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
 
     public string Emit(IrProgram program, EmitContext context)
     {
-        _builder.Clear();
+        _document.Clear();
         _names = new TargetNameAllocator(TargetLanguage.Powershell51);
         _generatedFunctionNames.Clear();
         _nativeClassNames.Clear();
@@ -53,7 +52,6 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
         _currentRichEnumReceiver = null;
         _fallbackReceiverName = null;
         _context = context;
-        _indent = 0;
         _currentFunctionName = null;
         _currentFunctionReturnType = IrTypeRef.Any;
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
@@ -99,45 +97,29 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
         }
         var enums = CollectEnums(program.Statements).ToList();
         foreach (var declaration in enums)
-            _nativeEnumNames[declaration.Name] = _names.Source(TargetNameKind.Type, declaration.Name);
-        foreach (var declaration in enums)
         {
+            _nativeEnumNames[declaration.Name] = _names.Source(TargetNameKind.Type, declaration.Name);
             var enumName = _nativeEnumNames[declaration.Name];
-            WriteLine($"enum {enumName} {{");
-            _indent++;
             foreach (var value in declaration.Values)
-            {
-                var valueName = SanitizeMemberName(value.Name);
-                WriteLine($"{valueName} = {value.Value}");
-                _nativeEnumValues[$"{declaration.Name}_{value.Name}"] = (enumName, valueName, value.Ordinal);
-            }
-            _indent--;
-            WriteLine("}");
-            WriteLine("");
+                _nativeEnumValues[$"{declaration.Name}_{value.Name}"] =
+                    (enumName, SanitizeMemberName(value.Name), value.Ordinal);
         }
         var richEnums = CollectRichEnums(program.Statements).ToList();
         foreach (var declaration in richEnums)
         {
             _nativeClassNames[declaration.Name] = _names.Source(TargetNameKind.Type, declaration.Name);
+            foreach (var value in declaration.Values)
+                _richEnumValues[$"{declaration.Name}_{value.Name}"] =
+                    (_nativeClassNames[declaration.Name], SanitizeMemberName(value.Name));
             foreach (var method in declaration.Methods.Concat(declaration.Adapters))
                 _nativeMethods[method.LegacyName] = method;
-        }
-        foreach (var declaration in richEnums)
-        {
-            EmitRichEnum(declaration);
-            WriteLine("");
-        }
-        foreach (var declaration in OrderClasses(classes))
-        {
-            EmitNativeClass(declaration);
-            WriteLine("");
         }
         foreach (var statement in program.Statements)
         {
             EmitStatement(statement);
         }
 
-        return _builder.ToString();
+        return _document.ToString();
     }
 
     private static bool HasFsGlobImport(IrProgram program)
@@ -152,7 +134,7 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
     // bundle must never be pulled into an otherwise native program.
     private void EmitFsGlobHelpers()
     {
-        _builder.AppendLine(
+        _document.Template(
 """
 function __sushi_glob_regex {
     param([string]$pattern)
@@ -177,7 +159,7 @@ function __sushi_glob_regex {
                     if ($class.StartsWith('!')) { $class = '^' + $class.Substring(1) }
                     [void]$regex.Append('[').Append($class).Append(']'); $index = $end
                 }
-}
+                }
             default { [void]$regex.Append([regex]::Escape([string]$character)) }
         }
     }
@@ -220,10 +202,9 @@ function __sushi_fs_glob {
              EmissionCapabilityAnalyzer.UsesIntrinsic(program, IntrinsicId.HttpPost)))
             allowed.UnionWith(new[] { "__sushi_to_map", "__sushi_http_request", "__sushi_http_get", "__sushi_http_post" });
         if (allowed.Count == 0) return;
-        var start = _builder.Length;
+        var start = _document.Length;
         EmitStdlibHelperDefinitions();
-        var text = _builder.ToString(start, _builder.Length - start);
-        _builder.Remove(start, _builder.Length - start);
-        _builder.Append(FilterStdlibHelpers(text, allowed));
+        var text = _document.SliceFrom(start);
+        _document.ReplaceFrom(start, FilterStdlibHelpers(text, allowed));
     }
 }

@@ -24,6 +24,9 @@ public sealed partial class PosixEmitter
             case IrLiteralExpression or IrIdentifierExpression:
                 return EmitValueExpression(expression);
 
+            case IrConversionExpression conversion:
+                return PrepareConversionExpression(conversion, inFunction);
+
             case IrArrayLiteralExpression array:
             {
                 var elements = array.Elements.Select(element => PrepareValue(element, inFunction)).ToList();
@@ -95,7 +98,8 @@ public sealed partial class PosixEmitter
                 var startText = slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start);
                 if (slice.End == null)
                     return $"\"${{{targetReference}:{startText}}}\"";
-                var lengthText = $"({EmitNativeSliceBound(slice.End)} - ({startText}))";
+                var endText = EmitNativeSliceBound(slice.End);
+                var lengthText = startText == "0" ? endText : $"({endText} - {startText})";
                 return $"\"${{{targetReference}:{startText}:{lengthText}}}\"";
             }
 
@@ -522,6 +526,23 @@ public sealed partial class PosixEmitter
 
     private string PrepareCondition(IrExpression expression, bool inFunction)
     {
+        if (expression is IrIntrinsicCallExpression predicate &&
+            predicate.Id is IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or IntrinsicId.StringIsMatch)
+        {
+            var predicateValue = PrepareValue(predicate.Arguments[0], inFunction);
+            var pattern = predicate.Id == IntrinsicId.StringIsMatch
+                ? PrepareRegex(predicate.Arguments[1], inFunction)
+                : PrepareValue(predicate.Arguments[1], inFunction);
+            return predicate.Id switch
+            {
+                IntrinsicId.StringContains => $"[[ {predicateValue} == *{pattern}* ]]",
+                IntrinsicId.StringStartsWith => $"[[ {predicateValue} == {pattern}* ]]",
+                IntrinsicId.StringEndsWith => $"[[ {predicateValue} == *{pattern} ]]",
+                IntrinsicId.StringIsMatch => $"[[ {predicateValue} =~ {pattern} ]]",
+                _ => throw new InvalidOperationException()
+            };
+        }
+
         if (expression is IrTruthinessExpression truthiness)
             return PrepareTruthinessCondition(truthiness, inFunction);
 
@@ -625,6 +646,8 @@ public sealed partial class PosixEmitter
             IrBinaryExpression { Operator: "&&" } binary => $"{PrepareBooleanCondition(binary.Left, inFunction)} && {PrepareBooleanCondition(binary.Right, inFunction)}",
             IrBinaryExpression { Operator: "||" } binary => $"{PrepareBooleanCondition(binary.Left, inFunction)} || {PrepareBooleanCondition(binary.Right, inFunction)}",
             IrBinaryExpression binary when binary.Operator is "==" or "!=" or "<" or ">" or "<=" or ">=" => PrepareCondition(binary, inFunction),
+            IrIntrinsicCallExpression predicate when predicate.Id is IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or IntrinsicId.StringIsMatch =>
+                PrepareCondition(predicate, inFunction),
             IrTruthinessExpression truthiness => PrepareTruthinessCondition(truthiness, inFunction),
             _ => $"[[ {PrepareValue(expression, inFunction)} == 'true' ]]"
         };
@@ -727,6 +750,7 @@ public sealed partial class PosixEmitter
             IrIndexExpression { Target: IrIdentifierExpression identifier } =>
                 _integerArrayVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrCollectionLengthExpression => true,
+            IrConversionExpression conversion => conversion.TargetType.Name == "int",
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
                 IsDefinitelyInteger(binary.Left) && IsDefinitelyInteger(binary.Right),
@@ -744,6 +768,7 @@ public sealed partial class PosixEmitter
         {
             IrIdentifierExpression identifier when identifier.StaticType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true => true,
             IrLiteralExpression literal => literal.Value is float or double or decimal,
+            IrConversionExpression conversion => conversion.TargetType.Name == "float",
             IrIdentifierExpression identifier => _knownFloatVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyFloat(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
@@ -954,6 +979,7 @@ public sealed partial class PosixEmitter
             IrIdentifierExpression identifier => EmitVariableValue(identifier.Name),
             IrArrayLiteralExpression array => EmitArrayLiteral(array),
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
+            IrConversionExpression conversion => PrepareConversionExpression(conversion, _currentFunctionName != null),
             IrMemberAccessExpression member => EmitMemberValueExpression(member),
             IrCollectionLengthExpression length when length.Target is IrIdentifierExpression identifier &&
                                                      _nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var lengthArrayName) =>
@@ -1000,7 +1026,8 @@ public sealed partial class PosixEmitter
         var start = slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start);
         if (slice.End == null)
             return $"\"${{{targetReference}:{start}}}\"";
-        var length = $"({EmitNativeSliceBound(slice.End)} - ({start}))";
+        var end = EmitNativeSliceBound(slice.End);
+        var length = start == "0" ? end : $"({end} - {start})";
         return $"\"${{{targetReference}:{start}:{length}}}\"";
     }
 
@@ -1192,22 +1219,17 @@ public sealed partial class PosixEmitter
         {
             IrLiteralExpression literal when literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong
                 => Convert.ToString(literal.Value, CultureInfo.InvariantCulture) ?? "0",
-            IrLiteralExpression literal => EmitCheckedInteger(EmitLiteral(literal.Value), "arithmetic literal"),
-            IrIdentifierExpression identifier => EmitCheckedInteger(
-                $"\"${{{SanitizeVariableName(identifier.Name)}:-}}\"",
-                $"variable '{identifier.Name}'"),
+            IrLiteralExpression literal => EmitLiteral(literal.Value),
+            IrIdentifierExpression identifier => SanitizeVariableName(identifier.Name),
             IrMemberAccessExpression { Target: IrIdentifierExpression target } member
                 when _nativeObjectVariables.Contains(SanitizeVariableName(target.Name)) =>
-                member.ValueType.Name == "int"
-                    ? $"${{{ResolveNativeObjectName(SanitizeVariableName(target.Name))}[{EmitObjectSubscript(member.MemberName)}]:-0}}"
-                    : EmitCheckedInteger(
-                        $"\"${{{ResolveNativeObjectName(SanitizeVariableName(target.Name))}[{EmitObjectSubscript(member.MemberName)}]-}}\"",
-                        $"member '{member.MemberName}'"),
+                $"${{{ResolveNativeObjectName(SanitizeVariableName(target.Name))}[{EmitObjectSubscript(member.MemberName)}]:-0}}",
+            IrConversionExpression conversion => PrepareConversionExpression(conversion, _currentFunctionName != null),
             IrUnaryExpression unary when unary.Operator is "+" or "-" =>
                 $"{unary.Operator}{EmitArithmeticExpression(unary.Operand)}",
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
                 $"({EmitArithmeticExpression(binary.Left)} {binary.Operator} {EmitArithmeticExpression(binary.Right)})",
-            _ => EmitCheckedInteger(EmitValueExpression(expression), "arithmetic operand")
+            _ => EmitValueExpression(expression)
         };
     }
 
@@ -1246,9 +1268,16 @@ public sealed partial class PosixEmitter
         return EmitArithmeticExpression(expression);
     }
 
-    private string EmitCheckedInteger(string valueExpression, string context)
+    private string PrepareConversionExpression(IrConversionExpression conversion, bool inFunction)
     {
-        return $"$(__sushi_require_integer {valueExpression} {Escape.PosixSingleQuoted(context)})";
+        var value = PrepareValue(conversion.Value, inFunction);
+        return conversion.TargetType.Name switch
+        {
+            "string" => value,
+            "int" => $"$(LC_ALL=C awk -v value={value} 'BEGIN {{ if (value !~ /^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$/) {{ print \"Sushi: cannot convert value to int\" > \"/dev/stderr\"; exit 2 }} result = value < 0 ? -int(-value) : int(value); printf \"%.0f\", result }}')",
+            "float" => $"$(LC_ALL=C awk -v value={value} 'BEGIN {{ if (value !~ /^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$/) {{ print \"Sushi: cannot convert value to float\" > \"/dev/stderr\"; exit 2 }} printf \"%.17g\", value + 0 }}')",
+            _ => value
+        };
     }
 
     private string EmitLiteral(object? value)
@@ -1266,79 +1295,19 @@ public sealed partial class PosixEmitter
 
     private void WriteLine(string text)
     {
-        if (string.IsNullOrEmpty(text))
-        {
-            _builder.Append('\n');
-            return;
-        }
-
-        _builder.Append(' ', _indent * 4);
-        _builder.Append(text);
-        _builder.Append('\n');
-    }
-
-    private static string PrettyPrintPosix(string source)
-    {
-        var output = new StringBuilder(source.Length + 256);
-        foreach (var line in source.Replace("\r\n", "\n").Split('\n'))
-        {
-            if (TryExpandInlineIf(line, output) ||
-                TryExpandInlineLoop(line, output) ||
-                TryExpandInlineGuard(line, output))
-            {
-                continue;
-            }
-
-            output.AppendLine(line);
-        }
-
-        return output.ToString();
-    }
-
-    private static bool TryExpandInlineIf(string line, StringBuilder output)
-    {
-        var match = Regex.Match(line, @"^(?<indent>\s*)if (?<condition>.+?); then (?<true>.+?);(?: else (?<false>.+?);)? fi$");
-        if (!match.Success) return false;
-
-        var indent = match.Groups["indent"].Value;
-        output.AppendLine($"{indent}if {match.Groups["condition"].Value}; then");
-        output.AppendLine($"{indent}    {match.Groups["true"].Value}");
-        if (match.Groups["false"].Success)
-        {
-            output.AppendLine($"{indent}else");
-            output.AppendLine($"{indent}    {match.Groups["false"].Value}");
-        }
-        output.AppendLine($"{indent}fi");
-        return true;
-    }
-
-    private static bool TryExpandInlineLoop(string line, StringBuilder output)
-    {
-        var match = Regex.Match(line, @"^(?<indent>\s*)(?<kind>for|while) (?<header>.+?); do (?<body>.+?); done$");
-        if (!match.Success) return false;
-
-        var indent = match.Groups["indent"].Value;
-        output.AppendLine($"{indent}{match.Groups["kind"].Value} {match.Groups["header"].Value}; do");
-        output.AppendLine($"{indent}    {match.Groups["body"].Value}");
-        output.AppendLine($"{indent}done");
-        return true;
-    }
-
-    private static bool TryExpandInlineGuard(string line, StringBuilder output)
-    {
-        var match = Regex.Match(line, @"^(?<indent>\s*)(?<command>.+?) \|\| \{ (?<status>[^;]+); (?<failure>.+); \}$");
-        if (!match.Success || match.Groups["command"].Value.Contains("||", StringComparison.Ordinal)) return false;
-
-        var indent = match.Groups["indent"].Value;
-        output.AppendLine($"{indent}{match.Groups["command"].Value} || {{");
-        output.AppendLine($"{indent}    {match.Groups["status"].Value};");
-        output.AppendLine($"{indent}    {match.Groups["failure"].Value};");
-        output.AppendLine($"{indent}}}");
-        return true;
+        _document.Line(text);
     }
 
     private string SanitizeFunctionName(string name)
     {
+        if (name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal))
+        {
+            if (_generatedFunctionNames.TryGetValue(name, out var existingMethodName)) return existingMethodName;
+            var readableName = name[NativeObjectMetadata.MethodPrefix.Length..];
+            var allocatedMethodName = _names.Generated(TargetNameKind.Function, readableName);
+            _generatedFunctionNames[name] = allocatedMethodName;
+            return allocatedMethodName;
+        }
         if (!name.StartsWith("__sushi_", StringComparison.Ordinal))
             return _names.Source(TargetNameKind.Function, name);
 

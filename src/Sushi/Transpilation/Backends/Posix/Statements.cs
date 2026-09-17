@@ -73,6 +73,13 @@ public sealed partial class PosixEmitter
                                     variable.DeclaredType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true;
                 if (declaredInt) SetKnownInteger(name, true);
                 if (declaredFloat) SetKnownFloat(name, true);
+                if (initializer is IrConditionalExpression { IsSwitchExpression: true } switchExpression)
+                {
+                    EmitSwitchExpressionInto(name, switchExpression, inFunction);
+                    SetKnownInteger(name, declaredInt);
+                    SetKnownFloat(name, declaredFloat);
+                    break;
+                }
                 if (initializer is IrConstructionExpression constructor)
                 {
                     WriteLine($"{(inFunction ? "local " : "declare ")}-A {name}=()");
@@ -221,16 +228,17 @@ public sealed partial class PosixEmitter
                 EmitForStatement(forStatement, inFunction);
                 break;
 
+            case IrForEachStatement forEach:
+                EmitForEachStatement(forEach, inFunction);
+                break;
+
             case IrDoWhileStatement doWhileStatement:
                 EmitDoWhileStatement(doWhileStatement, inFunction);
                 break;
 
             case IrFunctionDeclarationStatement function:
                 EmitGeneratedFunctionComment(function);
-                var typeMemberIndent = function.Role is IrFunctionRole.Method or IrFunctionRole.Constructor or IrFunctionRole.Adapter;
-                if (typeMemberIndent) _indent++;
                 EmitFunctionDeclaration(function);
-                if (typeMemberIndent) _indent--;
                 break;
 
             case IrReturnStatement returnStatement:
@@ -349,6 +357,35 @@ public sealed partial class PosixEmitter
             EmitExpressionStatement(statement.Increment, inFunction);
         }
 
+        _indent--;
+        WriteLine("done");
+    }
+
+    private void EmitForEachStatement(IrForEachStatement statement, bool inFunction)
+    {
+        if (statement.Collection is not IrIdentifierExpression collection ||
+            !_nativeArrayVariables.TryGetValue(SanitizeVariableName(collection.Name), out var arrayName))
+        {
+            _context.Error(AmbiguousShapeCode, "foreach requires a statically known native array.");
+            return;
+        }
+
+        var item = SanitizeVariableName(statement.ItemName);
+        if (statement.IndexName == null)
+        {
+            WriteLine($"for {item} in \"${{{arrayName}[@]}}\"; do");
+            _indent++;
+            EmitStatement(statement.Body, inFunction);
+            _indent--;
+            WriteLine("done");
+            return;
+        }
+
+        var index = SanitizeVariableName(statement.IndexName);
+        WriteLine($"for {index} in \"${{!{arrayName}[@]}}\"; do");
+        _indent++;
+        WriteLine($"{item}=\"${{{arrayName}[{index}]-}}\"");
+        EmitStatement(statement.Body, inFunction);
         _indent--;
         WriteLine("done");
     }
@@ -544,19 +581,27 @@ public sealed partial class PosixEmitter
             .Where(parameter => parameter.Name != "this" &&
                                 !parameter.Name.StartsWith("__sushi_enum_field_", StringComparison.Ordinal))
             .Select(parameter => parameter.IsVarargs ? $"{parameter.Name}..." : parameter.Name));
-        var signature = $"{name}({parameters})";
+        var ownerType = function.OwnerTypeId?.StartsWith("type:", StringComparison.Ordinal) == true
+            ? function.OwnerTypeId["type:".Length..]
+            : null;
+        var displayName = function.Role switch
+        {
+            IrFunctionRole.Method when ownerType != null && name.StartsWith(NativeObjectMetadata.MethodPrefix + ownerType + "_", StringComparison.Ordinal) =>
+                name[(NativeObjectMetadata.MethodPrefix.Length + ownerType.Length + 1)..],
+            IrFunctionRole.Constructor when name.StartsWith("__sushi_new_", StringComparison.Ordinal) => ownerType ?? name["__sushi_new_".Length..],
+            _ => name
+        };
+        var signature = $"{displayName}({parameters})";
         var label = function.Role switch
         {
-            IrFunctionRole.Method => $"method: {name}({parameters})",
-            IrFunctionRole.Constructor => $"constructor: {name}({parameters})",
-            IrFunctionRole.Adapter => $"adapter: {name}({parameters})",
+            IrFunctionRole.Method => $"method: {displayName}({parameters})",
+            IrFunctionRole.Constructor => $"constructor: {displayName}({parameters})",
+            IrFunctionRole.Adapter => $"adapter: {displayName}({parameters})",
             _ => $"function: {signature}"
         };
         if (isTypeMember)
         {
-            var type = function.OwnerTypeId?.StartsWith("type:", StringComparison.Ordinal) == true
-                ? function.OwnerTypeId["type:".Length..]
-                : name;
+            var type = ownerType ?? name;
             if (_commentedTypes.Add(type))
             {
                 WriteLine("");
@@ -567,9 +612,7 @@ public sealed partial class PosixEmitter
         WriteLine("");
         if (isTypeMember)
         {
-            _indent++;
             WriteLine($"# {label}");
-            _indent--;
         }
         else
         {
@@ -693,6 +736,7 @@ public sealed partial class PosixEmitter
                 WriteLine("typeset -gA $this_name");
                 WriteLine("set -A $this_name \"${(@kv)this}\"");
             }
+            WriteLine("return 0");
             return;
         }
         if (inFunction) EmitZshObjectParameterWritebacks();
@@ -718,6 +762,7 @@ public sealed partial class PosixEmitter
                     WriteLine($"{_currentOutputName}=()");
                     WriteLine($"for _key in \"${{!{source}[@]}}\"; do {_currentOutputName}[\"$_key\"]=\"${{{source}[$_key]}}\"; done");
                 }
+                WriteLine("return 0");
                 return;
             }
         }
@@ -726,6 +771,7 @@ public sealed partial class PosixEmitter
             if (inFunction && IsBooleanValueExpression(statement.Expression))
             {
                 EmitBooleanOutput(statement.Expression);
+                WriteLine("return 0");
                 return;
             }
                 var value = PrepareValue(statement.Expression, inFunction);
@@ -751,7 +797,8 @@ public sealed partial class PosixEmitter
             if (_currentFunctionReturnsValue) EmitFunctionOutputAssignment("''");
         }
 
-        if (!inFunction) WriteLine("exit 0");
+        if (inFunction) WriteLine("return 0");
+        else WriteLine("exit 0");
     }
 
     private void EmitExpressionStatement(IrExpression expression, bool inFunction)
@@ -810,6 +857,10 @@ public sealed partial class PosixEmitter
 
             case IrAdapterCallExpression adapter:
                 _ = PrepareValue(adapter, inFunction);
+                return;
+
+            case IrConversionExpression conversion:
+                _ = PrepareValue(conversion, inFunction);
                 return;
 
             case IrAssignmentExpression assignment:

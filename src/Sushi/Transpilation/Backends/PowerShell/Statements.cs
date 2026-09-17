@@ -52,6 +52,13 @@ public sealed partial class PowerShellEmitter
                     SetKnownInteger(variableName, false);
                     break;
                 }
+                if (initializer is IrConditionalExpression { IsSwitchExpression: true } switchExpression)
+                {
+                    EmitSwitchExpressionInto($"${variableName}", switchExpression);
+                    SetKnownInteger(variableName, variable.DeclaredType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true);
+                    SetKnownFloat(variableName, variable.DeclaredType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true);
+                    break;
+                }
                 var initializerText = EmitValueExpression(initializer);
                 if (variable.DeclaredType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true &&
                     variable.Initializer != null)
@@ -85,6 +92,10 @@ public sealed partial class PowerShellEmitter
                 EmitForStatement(forStatement);
                 break;
 
+            case IrForEachStatement forEach:
+                EmitForEachStatement(forEach);
+                break;
+
             case IrDoWhileStatement doWhileStatement:
                 EmitDoWhileStatement(doWhileStatement);
                 break;
@@ -100,13 +111,19 @@ public sealed partial class PowerShellEmitter
                     EmitFunction(function);
                 break;
 
-            case IrClassDeclarationStatement:
-                // Emitted in the declaration preamble so classes are available
-                // to all top-level code, including constructors in other files.
+            case IrClassDeclarationStatement declaration:
+                EmitNativeClass(declaration);
+                WriteLine("");
                 break;
 
-            case IrEnumDeclarationStatement:
-            case IrRichEnumDeclarationStatement:
+            case IrEnumDeclarationStatement declaration:
+                EmitNativeEnum(declaration);
+                WriteLine("");
+                break;
+
+            case IrRichEnumDeclarationStatement declaration:
+                EmitRichEnum(declaration);
+                WriteLine("");
                 break;
 
             case IrReturnStatement returnStatement:
@@ -209,6 +226,20 @@ public sealed partial class PowerShellEmitter
             EmitExpressionStatement(statement.Increment);
         }
 
+        _indent--;
+        WriteLine("}");
+    }
+
+    private void EmitForEachStatement(IrForEachStatement statement)
+    {
+        var item = SanitizeName(statement.ItemName);
+        var collection = EmitValueExpression(statement.Collection);
+        var index = statement.IndexName == null ? null : SanitizeName(statement.IndexName);
+        if (index != null) WriteLine($"${index} = 0");
+        WriteLine($"foreach (${item} in {collection}) {{");
+        _indent++;
+        EmitStatement(statement.Body);
+        if (index != null) WriteLine($"${index}++");
         _indent--;
         WriteLine("}");
     }

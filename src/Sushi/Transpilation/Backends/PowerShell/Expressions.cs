@@ -31,7 +31,16 @@ public sealed partial class PowerShellEmitter
                 WriteLine(EmitNativeAdapterCall(adapter));
                 return;
 
+            case IrConversionExpression conversion:
+                WriteLine($"$null = {EmitConversionExpression(conversion)}");
+                return;
+
             case IrAssignmentExpression assignment:
+                if (assignment.Operator == "=" && assignment.Value is IrConditionalExpression { IsSwitchExpression: true } switchExpression)
+                {
+                    EmitSwitchExpressionInto($"${SanitizeName(assignment.Target.Name)}", switchExpression);
+                    return;
+                }
                 if (assignment.Operator == "=" && assignment.Value is IrIntrinsicCallExpression intrinsic &&
                     EmitNativeIntrinsicDeclaration(SanitizeName(assignment.Target.Name), intrinsic))
                 {
@@ -159,6 +168,7 @@ public sealed partial class PowerShellEmitter
             IrIdentifierExpression identifier => EmitIdentifier(identifier),
             IrArrayLiteralExpression array => EmitArrayLiteral(array),
             IrObjectLiteralExpression obj => EmitObjectLiteral(obj),
+            IrConversionExpression conversion => EmitConversionExpression(conversion),
             IrMemberAccessExpression member => EmitMemberAccess(member),
             IrIndexExpression index => $"({EmitValueExpression(index.Target)})[{EmitValueExpression(index.Index)}]",
             IrCollectionLengthExpression length => $"@({EmitValueExpression(length.Target)}).Count",
@@ -192,6 +202,18 @@ public sealed partial class PowerShellEmitter
         };
     }
 
+    private string EmitConversionExpression(IrConversionExpression conversion)
+    {
+        var value = EmitValueExpression(conversion.Value);
+        return conversion.TargetType.Name switch
+        {
+            "string" => $"[string]({value})",
+            "int" => $"[long]({value})",
+            "float" => $"[double]({value})",
+            _ => value
+        };
+    }
+
     private string EmitSwitchExpression(IrConditionalExpression root)
     {
         var arms = new List<(IrExpression Value, IrExpression Result)>();
@@ -217,6 +239,45 @@ public sealed partial class PowerShellEmitter
         return builder.ToString();
     }
 
+    private void EmitSwitchExpressionInto(string destination, IrConditionalExpression root)
+    {
+        var arms = new List<(IrExpression Value, IrExpression Result)>();
+        IrExpression fallback = root;
+        while (fallback is IrConditionalExpression conditional && conditional.IsSwitchExpression &&
+               TryGetSwitchComparison(conditional.Condition, out var comparison) && comparison is not null)
+        {
+            arms.Add((comparison.Right, conditional.TrueExpression));
+            fallback = conditional.FalseExpression;
+        }
+
+        if (arms.Count == 0)
+        {
+            WriteLine($"{destination} = {EmitValueExpression(root)}");
+            return;
+        }
+
+        TryGetSwitchComparison(root.Condition, out var firstComparison);
+        var selector = firstComparison is null ? "$null" : EmitValueExpression(firstComparison.Left);
+        WriteLine($"{destination} = switch ({selector}) {{");
+        _indent++;
+        foreach (var arm in arms)
+        {
+            WriteLine($"{EmitValueExpression(arm.Value)} {{");
+            _indent++;
+            WriteLine(EmitValueExpression(arm.Result));
+            WriteLine("break");
+            _indent--;
+            WriteLine("}");
+        }
+        WriteLine("default {");
+        _indent++;
+        WriteLine(EmitValueExpression(fallback));
+        _indent--;
+        WriteLine("}");
+        _indent--;
+        WriteLine("}");
+    }
+
     private static bool TryGetSwitchComparison(IrExpression condition, out IrBinaryExpression? comparison)
     {
         comparison = condition switch
@@ -234,7 +295,7 @@ public sealed partial class PowerShellEmitter
     private string EmitNativeSlice(IrExpression targetExpression, IrExpression? startExpression, IrExpression? endExpression)
     {
         var target = EmitValueExpression(targetExpression);
-        var start = startExpression == null ? "0" : EmitValueExpression(startExpression);
+        var start = EmitSliceIndex(startExpression);
         var isArray = targetExpression is IrIdentifierExpression identifier &&
                       _arrayInitializers.ContainsKey(SanitizeName(identifier.Name));
         if (isArray)
@@ -245,10 +306,17 @@ public sealed partial class PowerShellEmitter
             return "@(" + target + ")[([int]" + start + ")..([int](" + arrayEnd + ") - 1)]";
         }
         if (endExpression == null)
-            return $"({target}).Substring([int]({start}))";
+            return $"({target}).Substring({start})";
 
-        var end = EmitValueExpression(endExpression);
-        return $"({target}).Substring([int]({start}), [int](({end}) - ({start})))";
+        var end = EmitSliceIndex(endExpression);
+        var length = start == "0" ? end : $"({end} - {start})";
+        return $"({target}).Substring({start}, {length})";
+    }
+
+    private string EmitSliceIndex(IrExpression? expression)
+    {
+        if (expression is null or IrLiteralExpression { Value: 0 }) return "0";
+        return $"[int]({EmitValueExpression(expression)})";
     }
 
     private string EmitIdentifier(IrIdentifierExpression identifier)
@@ -371,6 +439,7 @@ public sealed partial class PowerShellEmitter
         {
             IrIdentifierExpression identifier when identifier.StaticType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true => true,
             IrLiteralExpression literal => literal.Value is float or double or decimal,
+            IrConversionExpression conversion => conversion.TargetType.Name == "float",
             IrIdentifierExpression identifier => _knownFloatVariables.Contains(SanitizeName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyFloat(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
@@ -392,6 +461,7 @@ public sealed partial class PowerShellEmitter
         {
             IrIdentifierExpression identifier when identifier.StaticType.Name?.Equals("int", StringComparison.OrdinalIgnoreCase) == true => true,
             IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
+            IrConversionExpression conversion => conversion.TargetType.Name == "int",
             IrIdentifierExpression identifier => _knownIntegerVariables.Contains(SanitizeName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyInteger(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
@@ -579,14 +649,7 @@ public sealed partial class PowerShellEmitter
 
     private void WriteLine(string text)
     {
-        if (string.IsNullOrEmpty(text))
-        {
-            _builder.AppendLine();
-            return;
-        }
-
-        _builder.Append(' ', _indent * 4);
-        _builder.AppendLine(text);
+        _document.Line(text);
     }
 
     private string SanitizeName(string name) =>
@@ -600,6 +663,14 @@ public sealed partial class PowerShellEmitter
 
     private string SanitizeFunctionName(string name)
     {
+        if (name.StartsWith(NativeObjectMetadata.MethodPrefix, StringComparison.Ordinal))
+        {
+            if (_generatedFunctionNames.TryGetValue(name, out var existingMethodName)) return existingMethodName;
+            var readableName = name[NativeObjectMetadata.MethodPrefix.Length..];
+            var allocatedMethodName = _names.Generated(TargetNameKind.Function, readableName);
+            _generatedFunctionNames[name] = allocatedMethodName;
+            return allocatedMethodName;
+        }
         if (!name.StartsWith("__sushi_", StringComparison.Ordinal))
             return _names.Source(TargetNameKind.Function, name);
 

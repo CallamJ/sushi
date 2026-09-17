@@ -525,42 +525,12 @@ public sealed class AstToIrLowerer
             _definedVariables.Add(node.IndexVariable);
         }
 
-        var collectionTemp = CreateTempName("each_collection");
-        var indexTemp = CreateTempName("each_index");
-        var itemValue = new IrIndexExpression(
-            new IrIdentifierExpression(collectionTemp),
-            new IrIdentifierExpression(indexTemp));
-        itemValue.Origin = new IrSourceOrigin(node.Line, node.Column);
-        var lengthCall = new IrCollectionLengthExpression(new IrIdentifierExpression(collectionTemp));
-
-        var loopBodyStatements = new List<IrStatement>();
-        if (node.IndexVariable != null)
-        {
-            loopBodyStatements.Add(
-                new IrVariableDeclarationStatement(node.IndexVariable, new IrIdentifierExpression(indexTemp)));
-        }
-
-        loopBodyStatements.Add(
-            new IrVariableDeclarationStatement(node.ItemVariable, itemValue, itemType));
-
-        loopBodyStatements.AddRange(LowerLoopBody(node.Body).Statements);
-
-        return new IrBlockStatement(new IrStatement[]
-        {
-            new IrVariableDeclarationStatement(collectionTemp, collectionExpression),
-            new IrVariableDeclarationStatement(indexTemp, new IrLiteralExpression(0)),
-            new IrWhileStatement(
-                new IrBinaryExpression(
-                    new IrIdentifierExpression(indexTemp),
-                    "<",
-                    lengthCall),
-                new IrBlockStatement(loopBodyStatements.Append<IrStatement>(
-                    new IrExpressionStatement(
-                        new IrAssignmentExpression(
-                            new IrIdentifierExpression(indexTemp),
-                            "+=",
-                            new IrLiteralExpression(1))))))
-        });
+        return new IrForEachStatement(
+            node.ItemVariable,
+            itemType,
+            node.IndexVariable,
+            collectionExpression,
+            LowerLoopBody(node.Body));
     }
 
     private IrStatement LowerArrayDestructuringStatement(ArrayDestructuringStatementNode node)
@@ -1115,6 +1085,21 @@ public sealed class AstToIrLowerer
                 }
             }
 
+            if (node.Callee is IdentifierExpressionNode && TryGetConversionType(calleePath, out var conversionType))
+            {
+                if (loweredArguments.Count != 1 || loweredArguments[0].Name != null)
+                {
+                    AddDiagnostic(
+                        "SUSHI1064",
+                        $"Conversion '{calleePath}' requires exactly one positional argument.",
+                        node.Line,
+                        node.Column);
+                    return new IrLiteralExpression(null);
+                }
+
+                return new IrConversionExpression(loweredArguments[0].Value, conversionType);
+            }
+
             if (_intrinsicRegistry.TryResolve(calleePath, out var signature))
             {
                 var binding = IntrinsicCallBinder.Bind(
@@ -1643,14 +1628,14 @@ public sealed class AstToIrLowerer
                 {
                     var typeName = ResolveTopLevel(@class.Name);
                     result.AddRange(@class.Methods.Select(method => new NamedCallable(
-                        $"{NativeObjectMetadata.MethodPrefix}{typeName}_{method.Name}", method, $"{@class.Name}.{method.Name}")));
+                        $"{NativeObjectMetadata.MethodPrefix}{typeName}_{method.Name}", method, $"{@class.Name}.{method.Name}", typeName)));
                     break;
                 }
                 case EnumDeclarationNode @enum:
                 {
                     var typeName = ResolveTopLevel(@enum.Name);
                     result.AddRange(@enum.Methods.Select(method => new NamedCallable(
-                        $"{NativeObjectMetadata.MethodPrefix}{typeName}_{method.Name}", method, $"{@enum.Name}.{method.Name}")));
+                        $"{NativeObjectMetadata.MethodPrefix}{typeName}_{method.Name}", method, $"{@enum.Name}.{method.Name}", typeName)));
                     break;
                 }
             }
@@ -1661,9 +1646,16 @@ public sealed class AstToIrLowerer
     private ReturnInference InferReturnType(NamedCallable callable)
     {
         var locals = new Dictionary<string, IrTypeRef>(StringComparer.Ordinal);
+        if (callable.OwnerType != null && _classes.TryGetValue(callable.OwnerType, out var ownerClass))
+        {
+            foreach (var field in ownerClass.Fields)
+                locals[field.Name] = LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'");
+        }
         if (_functionSignatures.TryGetValue(callable.EmittedName, out var signature))
             foreach (var parameter in signature.Parameters)
                 locals[parameter.Name] = parameter.DeclaredType;
+        if (callable.OwnerType != null)
+            locals["this"] = IrTypeRef.Primitive(callable.OwnerType, $"type:{callable.OwnerType}");
 
         var candidates = new List<IrTypeRef>();
         CollectReturnCandidates(callable.Node.Body, locals, candidates);
@@ -1732,7 +1724,20 @@ public sealed class AstToIrLowerer
             case ObjectLiteralExpressionNode: return IrTypeRef.Primitive("object");
             case ParenthesizedExpressionNode parenthesized: return InferAstExpressionType(parenthesized.Expression, locals);
             case IdentifierExpressionNode identifier when locals.TryGetValue(identifier.Name, out var type): return type;
+            case ThisExpressionNode when locals.TryGetValue("this", out var thisType): return thisType;
             case ThisExpressionNode: return IrTypeRef.Primitive("object");
+            case MemberAccessExpressionNode member:
+            {
+                var targetType = InferAstExpressionType(member.Object, locals);
+                if (targetType.Kind == IrTypeKind.Primitive && targetType.Name != null &&
+                    _classes.TryGetValue(targetType.Name, out var targetClass))
+                {
+                    var field = targetClass.Fields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+                    if (field != null)
+                        return LowerDeclaredType(field.Type, field.Line, field.Column, $"field '{field.Name}'");
+                }
+                return IrTypeRef.Unknown;
+            }
             case NewExpressionNode constructed:
                 return TryResolveDeclaredObjectType(constructed.TypeName, out var objectType) ? IrTypeRef.Primitive(objectType) : IrTypeRef.Unknown;
             case IndexExpressionNode indexed:
@@ -1762,6 +1767,9 @@ public sealed class AstToIrLowerer
                 return InferAstExpressionType(binary.Right, locals);
             case BinaryExpressionNode binary:
                 return InferBinaryType(binary, locals);
+            case CallExpressionNode call when TryGetCalleePath(call.Callee, out var callee) &&
+                                              TryGetConversionType(callee, out var conversionType):
+                return conversionType;
             case CallExpressionNode call when TryGetCalleePath(call.Callee, out var callee):
                 if (_intrinsicRegistry.TryResolve(callee, out var intrinsic)) return intrinsic.ReturnType;
                 return _functionSignatures.TryGetValue(ResolveCallable(callee), out var callable) ? callable.ReturnType : IrTypeRef.Unknown;
@@ -1893,6 +1901,18 @@ public sealed class AstToIrLowerer
     private static bool IsTypeName(string name) => name.ToLowerInvariant() is
         "string" or "str" or "int" or "integer" or "float" or "double" or "decimal" or
         "number" or "bool" or "boolean" or "array" or "list" or "object" or "map";
+
+    private static bool TryGetConversionType(string name, out IrTypeRef type)
+    {
+        type = name.ToLowerInvariant() switch
+        {
+            "string" or "str" or "char" => IrTypeRef.Primitive("string"),
+            "int" or "integer" or "long" or "short" => IrTypeRef.Primitive("int"),
+            "float" or "double" or "decimal" or "number" => IrTypeRef.Primitive("float"),
+            _ => IrTypeRef.Unknown
+        };
+        return !type.IsAnyOrUnknown;
+    }
 
     private static string DisplayTypeName(string resolvedType)
     {
@@ -3327,6 +3347,10 @@ public sealed class AstToIrLowerer
                 type = IrTypeRef.Primitive(construction.TypeName);
                 return true;
 
+            case IrConversionExpression conversion:
+                type = conversion.TargetType;
+                return !type.IsAnyOrUnknown;
+
             case IrAdapterCallExpression adapter:
                 type = LowerDeclaredType(adapter.TargetTypeName, 1, 1, "conversion result");
                 return !type.IsAnyOrUnknown;
@@ -3452,10 +3476,6 @@ public sealed class AstToIrLowerer
             case IrCallExpression call when !call.ReturnType.IsAnyOrUnknown:
                 type = call.ReturnType;
                 return true;
-
-            case IrCallExpression call when call.Callee is "string" or "int" or "float" or "double" or "decimal" or "number":
-                type = LowerDeclaredType(call.Callee, 1, 1, "conversion result");
-                return !type.IsAnyOrUnknown;
 
             case IrResolvedMethodCallExpression methodCall
                 when _functionSignatures.TryGetValue(methodCall.Callee, out var methodSignature) &&
@@ -3648,7 +3668,7 @@ public sealed class AstToIrLowerer
         }
     }
 
-    private sealed record NamedCallable(string EmittedName, FunctionDeclarationNode Node, string DisplayName);
+    private sealed record NamedCallable(string EmittedName, FunctionDeclarationNode Node, string DisplayName, string? OwnerType = null);
 
     private sealed record ReturnInference(IrTypeRef Type, bool Conflict);
 }

@@ -42,8 +42,7 @@ public sealed partial class PosixEmitter
         }
 
         var mathOp = assignment.Operator[0];
-        var checkedCurrent = EmitCheckedInteger($"\"${{{name}:-}}\"", $"variable '{assignment.Target.Name}'");
-        return $"{name}=$(( {checkedCurrent} {mathOp} {EmitArithmeticExpression(assignment.Value)} ))";
+        return $"{name}=$(( ${{{name}:-0}} {mathOp} {EmitArithmeticExpression(assignment.Value)} ))";
     }
 
     private void EmitPreparedAssignment(IrAssignmentExpression assignment, bool inFunction)
@@ -51,6 +50,11 @@ public sealed partial class PosixEmitter
         var name = SanitizeVariableName(assignment.Target.Name);
         if (assignment.Operator == "=")
         {
+            if (assignment.Value is IrConditionalExpression { IsSwitchExpression: true } switchExpression)
+            {
+                EmitSwitchExpressionInto(name, switchExpression, inFunction);
+                return;
+            }
             if (IsBooleanValueExpression(assignment.Value))
             {
                 EmitBooleanAssignment(name, assignment.Value, inFunction);
@@ -146,6 +150,47 @@ public sealed partial class PosixEmitter
             WriteLine($"{name}=$(( {name} {assignment.Operator[0]} {right} ))");
         SetKnownInteger(name, !IsDefinitelyFloat(assignment.Value) && !_knownFloatVariables.Contains(name));
         SetKnownFloat(name, IsDefinitelyFloat(assignment.Value) || _knownFloatVariables.Contains(name));
+    }
+
+    private void EmitSwitchExpressionInto(string destination, IrConditionalExpression root, bool inFunction)
+    {
+        var arms = new List<(IrExpression Match, IrExpression Value)>();
+        IrExpression fallback = root;
+        while (fallback is IrConditionalExpression conditional && conditional.IsSwitchExpression &&
+               TryGetSwitchComparison(conditional.Condition, out var comparison))
+        {
+            arms.Add((comparison.Right, conditional.TrueExpression));
+            fallback = conditional.FalseExpression;
+        }
+
+        if (arms.Count == 0)
+        {
+            WriteLine($"{destination}={PrepareValue(root, inFunction)}");
+            return;
+        }
+
+        TryGetSwitchComparison(root.Condition, out var firstComparison);
+        var selector = firstComparison is null
+            ? PrepareValue(root.Condition, inFunction)
+            : PrepareValue(firstComparison.Left, inFunction);
+        WriteLine($"case {selector} in");
+        _indent++;
+        foreach (var arm in arms)
+            WriteLine($"{EmitValueExpression(arm.Match)}) {destination}={PrepareValue(arm.Value, inFunction)} ;;");
+        WriteLine($"*) {destination}={PrepareValue(fallback, inFunction)} ;;");
+        _indent--;
+        WriteLine("esac");
+    }
+
+    private static bool TryGetSwitchComparison(IrExpression condition, out IrBinaryExpression comparison)
+    {
+        comparison = condition switch
+        {
+            IrBinaryExpression { Operator: "==" } binary => binary,
+            IrTruthinessExpression { Operand: IrBinaryExpression { Operator: "==" } binary } => binary,
+            _ => null!
+        };
+        return comparison != null;
     }
 
     private void EmitMemberAssignment(IrMemberAssignmentExpression assignment, bool inFunction)
@@ -457,9 +502,13 @@ public sealed partial class PosixEmitter
     {
         var pattern = expression is IrLiteralExpression { Value: string literal }
             ? Escape.PosixSingleQuoted(literal
+                .Replace("(?:", "(", StringComparison.Ordinal)
                 .Replace("\\d", "[0-9]", StringComparison.Ordinal)
+                .Replace("\\D", "[^0-9]", StringComparison.Ordinal)
                 .Replace("\\s", "[[:space:]]", StringComparison.Ordinal)
-                .Replace("\\w", "[[:alnum:]_]", StringComparison.Ordinal))
+                .Replace("\\S", "[^[:space:]]", StringComparison.Ordinal)
+                .Replace("\\w", "[[:alnum:]_]", StringComparison.Ordinal)
+                .Replace("\\W", "[^[:alnum:]_]", StringComparison.Ordinal))
             : PrepareValue(expression, inFunction);
         var name = $"__sushi_regex_{++_valueTempId}";
         WriteLine($"{(inFunction ? "local " : "")}{name}={pattern}");

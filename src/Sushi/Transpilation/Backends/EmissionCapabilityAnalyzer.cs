@@ -18,6 +18,7 @@ internal static class EmissionCapabilityAnalyzer
         IrSwitchStatement selection => UsesIntrinsic(selection.Value, id) || selection.Cases.Any(@case => @case.Matches.Any(match => UsesIntrinsic(match, id)) || UsesIntrinsic(@case.Body, id)) || (selection.DefaultBody != null && UsesIntrinsic(selection.DefaultBody, id)),
         IrWhileStatement loop => UsesIntrinsic(loop.Condition, id) || UsesIntrinsic(loop.Body, id),
         IrForStatement loop => (loop.Initializer != null && UsesIntrinsic(loop.Initializer, id)) || (loop.Condition != null && UsesIntrinsic(loop.Condition, id)) || (loop.Increment != null && UsesIntrinsic(loop.Increment, id)) || UsesIntrinsic(loop.Body, id),
+        IrForEachStatement loop => UsesIntrinsic(loop.Collection, id) || UsesIntrinsic(loop.Body, id),
         IrDoWhileStatement loop => UsesIntrinsic(loop.Body, id) || UsesIntrinsic(loop.Condition, id),
         IrFunctionDeclarationStatement function => UsesIntrinsic(function.Body, id),
         IrReturnStatement returned => returned.Expression != null && UsesIntrinsic(returned.Expression, id),
@@ -35,6 +36,7 @@ internal static class EmissionCapabilityAnalyzer
         IrAssignmentExpression assignment => UsesIntrinsic(assignment.Value, id),
         IrObjectLiteralExpression obj => obj.Properties.Any(property => UsesIntrinsic(property.Value, id)),
         IrMemberAccessExpression member => UsesIntrinsic(member.Target, id),
+        IrConversionExpression conversion => UsesIntrinsic(conversion.Value, id),
         IrCallExpression call => call.Arguments.Any(argument => UsesIntrinsic(argument.Value, id)),
         IrConstructionExpression construction => construction.Arguments.Any(argument => UsesIntrinsic(argument.Value, id)),
         IrResolvedMethodCallExpression method => UsesIntrinsic(method.Target, id) || method.Arguments.Any(argument => UsesIntrinsic(argument.Value, id)),
@@ -55,6 +57,7 @@ internal static class EmissionCapabilityAnalyzer
         IrSwitchStatement selection => UsesFsGlob(selection.Value) || selection.Cases.Any(@case => @case.Matches.Any(UsesFsGlob) || UsesFsGlob(@case.Body)) || (selection.DefaultBody != null && UsesFsGlob(selection.DefaultBody)),
         IrWhileStatement loop => UsesFsGlob(loop.Condition) || UsesFsGlob(loop.Body),
         IrForStatement loop => (loop.Initializer != null && UsesFsGlob(loop.Initializer)) || (loop.Condition != null && UsesFsGlob(loop.Condition)) || (loop.Increment != null && UsesFsGlob(loop.Increment)) || UsesFsGlob(loop.Body),
+        IrForEachStatement loop => UsesFsGlob(loop.Collection) || UsesFsGlob(loop.Body),
         IrDoWhileStatement loop => UsesFsGlob(loop.Body) || UsesFsGlob(loop.Condition),
         IrFunctionDeclarationStatement function => UsesFsGlob(function.Body),
         IrReturnStatement returned => returned.Expression != null && UsesFsGlob(returned.Expression),
@@ -75,6 +78,7 @@ internal static class EmissionCapabilityAnalyzer
         IrAssignmentExpression assignment => UsesFsGlob(assignment.Value),
         IrObjectLiteralExpression obj => obj.Properties.Any(property => UsesFsGlob(property.Value)),
         IrMemberAccessExpression member => UsesFsGlob(member.Target),
+        IrConversionExpression conversion => UsesFsGlob(conversion.Value),
         IrCallExpression call => call.Arguments.Any(argument => UsesFsGlob(argument.Value)),
         IrConstructionExpression construction => construction.Arguments.Any(argument => UsesFsGlob(argument.Value)),
         IrResolvedMethodCallExpression method => UsesFsGlob(method.Target) || method.Arguments.Any(argument => UsesFsGlob(argument.Value)),
@@ -97,6 +101,7 @@ internal static class EmissionCapabilityAnalyzer
         IrForStatement loop => (loop.Initializer != null && UsesArrays(loop.Initializer)) ||
                                (loop.Condition != null && UsesArrays(loop.Condition)) ||
                                (loop.Increment != null && UsesArrays(loop.Increment)) || UsesArrays(loop.Body),
+        IrForEachStatement loop => UsesArrays(loop.Collection) || UsesArrays(loop.Body),
         IrDoWhileStatement loop => UsesArrays(loop.Body) || UsesArrays(loop.Condition),
         IrFunctionDeclarationStatement function =>
             function.Parameters.Any(parameter => parameter.IsVarargs || parameter.DeclaredType.Name == "array") ||
@@ -120,6 +125,7 @@ internal static class EmissionCapabilityAnalyzer
         IrAssignmentExpression assignment => UsesArrays(assignment.Value),
         IrObjectLiteralExpression obj => obj.Properties.Any(property => UsesArrays(property.Value)),
         IrMemberAccessExpression member => UsesArrays(member.Target),
+        IrConversionExpression conversion => UsesArrays(conversion.Value),
         IrCallExpression call => call.Arguments.Any(argument => UsesArrays(argument.Value)),
         IrConstructionExpression construction => construction.Arguments.Any(argument => UsesArrays(argument.Value)),
         IrResolvedMethodCallExpression method => UsesArrays(method.Target) || method.Arguments.Any(argument => UsesArrays(argument.Value)),

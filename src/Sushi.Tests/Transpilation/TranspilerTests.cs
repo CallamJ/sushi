@@ -1,5 +1,8 @@
 namespace Sushi.Tests.Transpilation;
 
+using System;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using Sushi.Application;
 using Sushi.Transpilation;
@@ -618,7 +621,7 @@ public class TranspilerTests
         });
 
         Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
-        Assert.Contains(".Count", result.EmittedCode);
+        Assert.Contains("foreach ($value in $values)", result.EmittedCode);
         Assert.DoesNotContain("_s_json_length", result.EmittedCode);
     }
 
@@ -668,5 +671,106 @@ public class TranspilerTests
 
         Assert.True(result.Success);
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code == "SUSHI1001");
+    }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash)]
+    [InlineData(TargetLanguage.Zsh)]
+    public void Transpile_PosixCastAndRegex_UsesTypedNativeEmission(TargetLanguage target)
+    {
+        const string source = """
+            int parse(string text) {
+                if (text.isMatch("^[+-]?\d+(?:\.\d+)?$")) {
+                    return int(text)
+                }
+                return 0
+            }
+            println(parse("1.9"))
+            """;
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "casts-and-regex.sushi",
+            TargetLanguage = target
+        });
+
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        Assert.Contains("awk -v value=", result.EmittedCode);
+        Assert.Contains("[0-9]+", result.EmittedCode);
+        Assert.Contains("\\.", result.EmittedCode);
+        Assert.Contains("return 0", result.EmittedCode);
+        Assert.DoesNotContain("__sushi_require_integer", result.EmittedCode);
+        Assert.DoesNotMatch("(?m)^\\s*int\\s", result.EmittedCode);
+    }
+
+    [Fact]
+    public void Transpile_PowerShellInferredClassMethodReturn_UsesFieldType()
+    {
+        const string source = """
+            class File {
+                string path
+                getPath() { return path }
+            }
+            var file = new File("path")
+            println(file.getPath())
+            """;
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "class-return.sushi",
+            TargetLanguage = TargetLanguage.Powershell51
+        });
+
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        Assert.Contains("[string] getPath()", result.EmittedCode);
+        Assert.DoesNotContain("[object] getPath()", result.EmittedCode);
+    }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash, "bash")]
+    [InlineData(TargetLanguage.Zsh, "zsh")]
+    public void Transpile_PosixExplicitIntCast_TruncatesAndReturnsFromBranch(TargetLanguage target, string shell)
+    {
+        const string source = """
+            int parse(string text) {
+                if (text.isMatch("^[+-]?\d+(?:\.\d+)?$")) {
+                    return int(text)
+                }
+                return 0
+            }
+            println(parse("1.9"))
+            """;
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "cast-runtime.sushi",
+            TargetLanguage = target
+        });
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+
+        var path = Path.Combine(Path.GetTempPath(), $"sushi-cast-{Guid.NewGuid():N}.sh");
+        try
+        {
+            File.WriteAllText(path, result.EmittedCode);
+            using var process = Process.Start(new ProcessStartInfo(shell, path)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            });
+            Assert.NotNull(process);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 0, error);
+            Assert.Equal("1", output.Trim());
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 }

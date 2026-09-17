@@ -301,7 +301,7 @@ public class Lexer
                 if (content[pos] == '\\' && pos < content.Length - 1)
                 {
                     // Handle escape sequences
-                    literalBuilder.Append(UnescapeCharacter(content[pos + 1]));
+                    literalBuilder.Append(UnescapeStringCharacter(content[pos + 1]));
                     pos += 2;
                 }
                 else
@@ -431,7 +431,7 @@ public class Lexer
         {
             if (text[i] == '\\' && i < text.Length - 1)
             {
-                sb.Append(UnescapeCharacter(text[i + 1]));
+                sb.Append(UnescapeStringCharacter(text[i + 1]));
                 i++;
             }
             else
@@ -465,6 +465,15 @@ public class Lexer
             '"' => '"',
             '0' => '\0',
             _ => c
+        };
+    }
+
+    private string UnescapeStringCharacter(char c)
+    {
+        return c switch
+        {
+            'n' or 'r' or 't' or '\\' or '\'' or '"' or '0' => UnescapeCharacter(c).ToString(),
+            _ => $"\\{c}"
         };
     }
 

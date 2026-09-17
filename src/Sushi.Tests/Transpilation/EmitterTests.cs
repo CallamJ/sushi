@@ -52,8 +52,9 @@ public class EmitterTests
         var diagnostics = new List<Diagnostic>();
         var script = new PowerShellEmitter().Emit(program, new EmitContext("switch-expression.sushi", diagnostics));
 
-        Assert.Contains("$(switch ($suffix)", script);
+        Assert.Contains("$mult = switch ($suffix)", script);
         Assert.Contains("'K' {", script);
+        Assert.DoesNotContain("$(switch", script);
         Assert.Empty(diagnostics);
     }
 
@@ -72,6 +73,31 @@ public class EmitterTests
 
         Assert.Contains("if", script);
         Assert.DoesNotContain("switch (", script);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void PosixEmitter_EmitsSwitchExpressionsAndForeachNatively()
+    {
+        var source = new IrIdentifierExpression("suffix");
+        var switchExpression = new IrConditionalExpression(
+            new IrBinaryExpression(source, "==", new IrLiteralExpression("K")),
+            new IrLiteralExpression(1000),
+            new IrLiteralExpression(1),
+            isSwitchExpression: true);
+        var program = new IrProgram(new IrStatement[]
+        {
+            new IrVariableDeclarationStatement("files", new IrArrayLiteralExpression(new IrExpression[] { new IrLiteralExpression("a") })),
+            new IrVariableDeclarationStatement("mult", switchExpression),
+            new IrForEachStatement("file", IrTypeRef.Primitive("string"), null, new IrIdentifierExpression("files"), new IrBlockStatement())
+        });
+        var diagnostics = new List<Diagnostic>();
+        var script = new PosixEmitter().Emit(program, new EmitContext("native-flow.sushi", diagnostics));
+
+        Assert.Contains("case \"${suffix:-}\" in", script);
+        Assert.Contains("esac", script);
+        Assert.Contains("for file in \"${files[@]}\"; do", script);
+        Assert.DoesNotContain("__sushi_switch_", script);
         Assert.Empty(diagnostics);
     }
 

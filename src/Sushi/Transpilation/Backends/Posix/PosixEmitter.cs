@@ -2,7 +2,6 @@ namespace Sushi.Transpilation.Backends.Posix;
 
 using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using Sushi.Application;
 using Sushi.Transpilation.Backends;
@@ -14,10 +13,10 @@ public sealed partial class PosixEmitter : IBackendEmitter
     private const string UnsupportedEmitCode = "SUSHI1100";
     private const string AmbiguousShapeCode = "SUSHI1030";
 
-    private readonly StringBuilder _builder = new();
+    private readonly GeneratedDocument _document = new();
     private readonly PosixDialect _dialect;
     private EmitContext _context = null!;
-    private int _indent;
+    private int _indent { get => _document.Indent; set => _document.Indent = value; }
     private int _valueTempId;
     private string? _currentFunctionName;
     private IrFunctionRole _currentFunctionRole = IrFunctionRole.Function;
@@ -51,11 +50,10 @@ public sealed partial class PosixEmitter : IBackendEmitter
 
     public string Emit(IrProgram program, EmitContext context)
     {
-        _builder.Clear();
+        _document.Clear();
         _names = new TargetNameAllocator(_dialect);
         _generatedFunctionNames.Clear();
         _context = context;
-        _indent = 0;
         _valueTempId = 0;
         _currentFunctionName = null;
         _currentFunctionRole = IrFunctionRole.Function;
@@ -124,7 +122,7 @@ public sealed partial class PosixEmitter : IBackendEmitter
             EmitStatement(statement, inFunction: false);
         }
 
-        return PrettyPrintPosix(_builder.ToString());
+        return _document.ToString();
     }
 
     private static bool HasFsGlobImport(IrProgram program)
@@ -175,10 +173,6 @@ __sushi_fs_glob_into() {
 
     private void AppendStdlibHelperBlock(string text)
     {
-        _builder.Append(text.Replace("\r\n", "\n"));
-        if (!text.EndsWith("\n", StringComparison.Ordinal))
-        {
-            _builder.Append('\n');
-        }
+        _document.Template(text);
     }
 }

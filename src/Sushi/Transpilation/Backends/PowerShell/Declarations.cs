@@ -11,6 +11,21 @@ namespace Sushi.Transpilation.Backends.PowerShell;
 
 public sealed partial class PowerShellEmitter
 {
+    private void EmitNativeEnum(IrEnumDeclarationStatement declaration)
+    {
+        var enumName = _nativeEnumNames[declaration.Name];
+        WriteLine($"enum {enumName} {{");
+        _indent++;
+        foreach (var value in declaration.Values)
+        {
+            var valueName = SanitizeMemberName(value.Name);
+            WriteLine($"{valueName} = {value.Value}");
+            _nativeEnumValues[$"{declaration.Name}_{value.Name}"] = (enumName, valueName, value.Ordinal);
+        }
+        _indent--;
+        WriteLine("}");
+    }
+
     private static IEnumerable<IrClassDeclarationStatement> CollectClasses(IEnumerable<IrStatement> statements)
     {
         foreach (var statement in statements)
@@ -226,7 +241,7 @@ public sealed partial class PowerShellEmitter
     // definitions required by explicit stdlib imports.
     private void EmitStdlibHelperDefinitions()
     {
-        _builder.AppendLine(
+        _document.Template(
 """
 function __sushi_member {
     param($target, [string]$name)
@@ -736,7 +751,7 @@ function __sushi_string_match {
 }
 """);
 
-        _builder.AppendLine(
+        _document.Template(
 """
 function __sushi_detect_type {
     param($value)
@@ -860,7 +875,7 @@ function __sushi_struct_check {
 }
 """);
 
-        _builder.AppendLine(
+        _document.Template(
 """
 function __sushi_array_push {
     param($target, $values)

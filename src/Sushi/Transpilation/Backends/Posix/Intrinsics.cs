@@ -62,7 +62,7 @@ public sealed partial class PosixEmitter
             IntrinsicId.StringTrim => $"\"$({EmitStringTrimInvocation(call.Arguments)})\"",
             IntrinsicId.StringLower => $"\"$({EmitStringLowerInvocation(call.Arguments)})\"",
             IntrinsicId.StringUpper => $"\"$({EmitStringUpperInvocation(call.Arguments)})\"",
-            IntrinsicId.StringLength => $"$({EmitStringLengthInvocation(call.Arguments)})",
+            IntrinsicId.StringLength => EmitStringLengthValue(call.Arguments),
             IntrinsicId.StringSplit => $"\"$({EmitStringSplitInvocation(call.Arguments)})\"",
             IntrinsicId.StringContains => $"\"$({EmitStringContainsInvocation(call.Arguments)})\"",
             IntrinsicId.StringStartsWith => $"\"$({EmitStringStartsWithInvocation(call.Arguments)})\"",
@@ -137,6 +137,13 @@ public sealed partial class PosixEmitter
     private string EmitStringLengthInvocation(IReadOnlyList<IrExpression> arguments)
     {
         return $"printf '%s' {Arg(arguments, 0)} | wc -m";
+    }
+
+    private string EmitStringLengthValue(IReadOnlyList<IrExpression> arguments)
+    {
+        if (arguments.Count > 0 && arguments[0] is IrIdentifierExpression identifier)
+            return $"${{#{SanitizeVariableName(identifier.Name)}}}";
+        return $"$({EmitStringLengthInvocation(arguments)})";
     }
 
     private string EmitStringSplitInvocation(IReadOnlyList<IrExpression> arguments)
