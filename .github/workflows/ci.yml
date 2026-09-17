@@ -86,7 +86,7 @@ jobs:
           cache-dependency-path: |
             **/*.csproj
             **/packages.lock.json
-      - run: bash scripts/build.sh --runtime linux-x64
+      - run: bash scripts/build.sh --runtime linux-x64 --self-contained --single-file --ready-to-run
       - run: |
           test -x dist/Sushi/Release/linux-x64/Sushi
           dist/Sushi/Release/linux-x64/Sushi --help >/dev/null
@@ -218,7 +218,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: 9.0.x }
       - shell: bash
-        run: bash scripts/build.sh --runtime ${{ matrix.rid }}
+        run: bash scripts/build.sh --runtime ${{ matrix.rid }} --self-contained --single-file --ready-to-run
       - uses: actions/upload-artifact@v4
         with:
           name: sushi-${{ matrix.rid }}

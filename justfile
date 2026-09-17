@@ -110,9 +110,9 @@ clean:
 
 # CI-equivalent gate: tests + linux package smoke
 ci: test
-    bash scripts/build.sh linux-x64
-    test -f publish/Sushi-linux_x64-64
-    publish/Sushi-linux_x64-64 --help >/dev/null
+    bash scripts/build.sh --runtime linux-x64 --self-contained --single-file --ready-to-run
+    test -f dist/Sushi/Release/linux-x64/Sushi
+    dist/Sushi/Release/linux-x64/Sushi --help >/dev/null
     mkdir -p tmp
     printf 'println("Sushi package smoke")\n' > tmp/package-smoke.sushi
-    publish/Sushi-linux_x64-64 check tmp/package-smoke.sushi --target bash-linux --format json >/dev/null
+    dist/Sushi/Release/linux-x64/Sushi check tmp/package-smoke.sushi --target bash-linux --format json >/dev/null
