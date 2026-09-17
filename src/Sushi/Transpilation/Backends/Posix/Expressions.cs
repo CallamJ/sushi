@@ -1270,11 +1270,14 @@ public sealed partial class PosixEmitter
 
     private string PrepareConversionExpression(IrConversionExpression conversion, bool inFunction)
     {
+        if (conversion.TargetType.Name == "int" && CanEmitInlineInteger(conversion.Value))
+            return $"$(( {EmitInlineInteger(conversion.Value)} ))";
+
         var value = PrepareValue(conversion.Value, inFunction);
         return conversion.TargetType.Name switch
         {
             "string" => value,
-            "int" => $"$(LC_ALL=C awk -v value={value} 'BEGIN {{ if (value !~ /^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$/) {{ print \"Sushi: cannot convert value to int\" > \"/dev/stderr\"; exit 2 }} result = value < 0 ? -int(-value) : int(value); printf \"%.0f\", result }}')",
+            "int" => $"$(LC_ALL=C awk '/^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$/ {{ printf \"%.0f\", int($0); exit }} {{ exit 2 }}' <<< {value})",
             "float" => $"$(LC_ALL=C awk -v value={value} 'BEGIN {{ if (value !~ /^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$/) {{ print \"Sushi: cannot convert value to float\" > \"/dev/stderr\"; exit 2 }} printf \"%.17g\", value + 0 }}')",
             _ => value
         };

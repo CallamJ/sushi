@@ -696,7 +696,7 @@ public class TranspilerTests
         });
 
         Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
-        Assert.Contains("awk -v value=", result.EmittedCode);
+        Assert.Contains("awk '/^[+-]?", result.EmittedCode);
         Assert.Contains("[0-9]+", result.EmittedCode);
         Assert.Contains("\\.", result.EmittedCode);
         Assert.Contains("return 0", result.EmittedCode);
