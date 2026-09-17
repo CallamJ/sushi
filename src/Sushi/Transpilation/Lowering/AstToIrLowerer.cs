@@ -42,6 +42,8 @@ public sealed class AstToIrLowerer
     private const string InvalidIndexTargetCode = "SUSHI1060";
     private const string DuplicateSwitchLabelCode = "SUSHI1061";
     private const string StringIndexOutOfRangeCode = "SUSHI1062";
+    private const string UseBeforeDeclarationCode = "SUSHI1063";
+    private const string StandaloneIdentifierCode = "SUSHI1065";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -72,6 +74,7 @@ public sealed class AstToIrLowerer
     private readonly IReadOnlyDictionary<string, ClassDeclarationNode> _externalClasses;
     private readonly IReadOnlyDictionary<string, EnumDeclarationNode> _externalEnums;
     private readonly Dictionary<string, string> _topLevelSymbols = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _topLevelVariableLines = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _knownObjectTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _enumValueTypes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _functionOwnerTypes = new(StringComparer.Ordinal);
@@ -129,6 +132,7 @@ public sealed class AstToIrLowerer
         _liftedFunctions.Clear();
         _globalVariables.Clear();
         _topLevelSymbols.Clear();
+        _topLevelVariableLines.Clear();
         _knownObjectTypes.Clear();
         _enumValueTypes.Clear();
         _functionOwnerTypes.Clear();
@@ -356,6 +360,12 @@ public sealed class AstToIrLowerer
                 _bindingIds[declarationName] = bindingId;
                 return new IrVariableDeclarationStatement(declarationName, initializer, declaredType, bindingId);
             }
+
+            case ExpressionStatementNode { Expression: IdentifierExpressionNode identifierExpression }:
+                AddDiagnostic(StandaloneIdentifierCode,
+                    $"Identifier '{identifierExpression.Name}' cannot be used as a standalone statement.",
+                    identifierExpression.Line, identifierExpression.Column);
+                return null;
 
             case ExpressionStatementNode expressionStatement:
                 return new IrExpressionStatement(LowerExpression(expressionStatement.Expression));
@@ -2101,7 +2111,12 @@ public sealed class AstToIrLowerer
                 VariableDeclarationStatementNode variable => variable.Name,
                 _ => null
             };
-            if (name != null) _topLevelSymbols[name] = _symbolPrefix + name;
+            if (name != null)
+            {
+                _topLevelSymbols[name] = _symbolPrefix + name;
+                if (declaration is VariableDeclarationStatementNode variable)
+                    _topLevelVariableLines[name] = variable.Line;
+            }
         }
     }
 
@@ -2498,10 +2513,25 @@ public sealed class AstToIrLowerer
 
     private void ValidateIdentifier(IdentifierExpressionNode identifier)
     {
-        if (!_validateIdentifiers || _definedVariables.Contains(identifier.Name) || _topLevelSymbols.ContainsKey(identifier.Name) || _externalSymbols.ContainsKey(identifier.Name))
+        if (!_validateIdentifiers)
         {
             return;
         }
+
+        if (_topLevelVariableLines.TryGetValue(identifier.Name, out var declarationLine))
+        {
+            if (identifier.Line < declarationLine)
+            {
+                AddDiagnostic(UseBeforeDeclarationCode,
+                    $"Variable '{identifier.Name}' is used before it is declared.", identifier.Line, identifier.Column);
+                return;
+            }
+            return;
+        }
+
+        if (_definedVariables.Contains(identifier.Name) || _externalSymbols.ContainsKey(identifier.Name)) return;
+
+        if (_topLevelSymbols.ContainsKey(identifier.Name)) return;
 
         AddDiagnostic(
             UndefinedIdentifierCode,

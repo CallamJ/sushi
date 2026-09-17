@@ -366,12 +366,20 @@ internal sealed class SushiSemanticModel
 
             // Typed variables and fields use the form "Type name". A class-body
             // declaration is a field; elsewhere it is a variable.
-            if (index + 1 < tokens.Length && tokens[index + 1].Kind == ClassifiedTokenKind.Identifier &&
-                IsTypeName(tokens[index].Text) && IsDeclarationTerminator(tokens, index + 2))
+            var nameIndex = index + 1;
+            var declaredType = tokens[index].Text;
+            if (nameIndex + 1 < tokens.Length && tokens[nameIndex].Kind == ClassifiedTokenKind.LeftBracket &&
+                tokens[nameIndex + 1].Kind == ClassifiedTokenKind.RightBracket)
+            {
+                nameIndex += 2;
+                declaredType += "[]";
+            }
+            if (nameIndex < tokens.Length && tokens[nameIndex].Kind == ClassifiedTokenKind.Identifier &&
+                IsTypeName(tokens[index].Text) && IsDeclarationTerminator(tokens, nameIndex + 1))
             {
                 var kind = IsInClassBody(tokens, index) ? SushiSymbolKind.Field : SushiSymbolKind.Variable;
-                Add(index + 1, kind, declaredType: tokens[index].Text);
-                CollectSharedTypedDeclarations(tokens, index + 2, scopes, kind, tokens[index].Text, Add);
+                Add(nameIndex, kind, declaredType: declaredType);
+                CollectSharedTypedDeclarations(tokens, nameIndex + 1, scopes, kind, declaredType, Add);
             }
         }
 

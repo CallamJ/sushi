@@ -660,11 +660,12 @@ public sealed class LanguageServerTests
     public async Task Server_UsesTerminalAndClassReceiverTypesForMemberCompletion()
     {
         const string uri = "file:///tmp/member-receiver-types.sushi";
-        const string source = "use std.fs as fs\nclass File { string path getPath() { return path } }\nclass FileDifferent { string thing sillyFunc() { return thing } }\nvar filey = new File(\"path\")\nfiley.\nstring[] files = fs.query().directories().";
+        const string source = "use std.fs as fs\nclass File { string path getPath() { return path } }\nclass FileDifferent { string thing sillyFunc() { return thing } }\nvar filey = new File(\"path\")\nfiley.\nstring[] files = fs.query().directories()\nfiles.";
         var input = new MemoryStream(Encoding.UTF8.GetBytes(
             Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
             Frame($"{{\"jsonrpc\":\"2.0\",\"id\":74,\"method\":\"textDocument/completion\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":4,\"character\":6}}}}}}") +
             Frame($"{{\"jsonrpc\":\"2.0\",\"id\":75,\"method\":\"textDocument/completion\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":5,\"character\":43}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":76,\"method\":\"textDocument/completion\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":6,\"character\":6}}}}}}") +
             Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
         var output = new MemoryStream();
 
