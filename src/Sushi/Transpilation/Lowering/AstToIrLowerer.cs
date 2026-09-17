@@ -1072,7 +1072,7 @@ public sealed class AstToIrLowerer
             }
 
             return new IrAssignmentExpression(
-                new IrIdentifierExpression(identifier.Name),
+                CreateBoundIdentifier(identifier.Name),
                 node.Operator,
                 assignmentValue);
         }
@@ -1338,7 +1338,15 @@ public sealed class AstToIrLowerer
                     loweredArguments);
             }
 
+            var receiverType = InferAstExpressionType(memberCallee.Object, _knownVariableTypes);
+            if (memberCallee.MemberName == "length" && receiverType.Kind == IrTypeKind.Primitive &&
+                receiverType.Name == "array" && loweredArguments.Count == 0)
+            {
+                return new IrCollectionLengthExpression(LowerExpression(memberCallee.Object));
+            }
+
             if (StringMethodIntrinsicMap.TryGetValue(memberCallee.MemberName, out var canonicalStringIntrinsic) &&
+                (receiverType.IsAnyOrUnknown || (receiverType.Kind == IrTypeKind.Primitive && receiverType.Name == "string")) &&
                 _intrinsicRegistry.TryResolve(canonicalStringIntrinsic, out var stringSignature))
             {
                 var stringIntrinsicArguments = new List<IntrinsicCallArgument>
@@ -1381,7 +1389,6 @@ public sealed class AstToIrLowerer
                 return new IrLiteralExpression(null);
             }
 
-            var receiverType = InferAstExpressionType(memberCallee.Object, _knownVariableTypes);
             if (receiverType.IsAnyOrUnknown)
             {
                 AddDiagnostic(

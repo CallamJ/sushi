@@ -59,6 +59,9 @@ public sealed partial class PowerShellEmitter : IBackendEmitter
         _knownIntegerVariables = new HashSet<string>(StringComparer.Ordinal);
         _knownFloatVariables = new HashSet<string>(StringComparer.Ordinal);
         _arrayInitializers.Clear();
+        _fileQueries.Clear();
+        _escapingFileQueries.Clear();
+        CollectEscapingFileQueries(program.Statements);
         _integerReturningFunctions = program.Statements
             .OfType<IrFunctionDeclarationStatement>()
             .Where(function => function.ReturnType.Kind == IrTypeKind.Primitive &&

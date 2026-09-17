@@ -51,6 +51,11 @@ public sealed partial class PowerShellEmitter
                     EmitFileQueryDeclaration(variableName, query);
                     break;
                 }
+                if (initializer is IrIdentifierExpression queryAlias &&
+                    EmitFileQueryAliasDeclaration(variableName, queryAlias))
+                {
+                    break;
+                }
                 if (initializer is IrFileQueryExecutionExpression queryExecution)
                 {
                     EmitFileQueryExecutionDeclaration(variableName, queryExecution);

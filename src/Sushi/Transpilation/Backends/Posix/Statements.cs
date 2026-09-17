@@ -93,6 +93,11 @@ public sealed partial class PosixEmitter
                     EmitFileQueryDeclaration(name, query, inFunction);
                     break;
                 }
+                if (initializer is IrIdentifierExpression queryAlias &&
+                    EmitFileQueryAliasDeclaration(name, queryAlias, inFunction))
+                {
+                    break;
+                }
                 if (initializer is IrFileQueryExecutionExpression queryExecution)
                 {
                     EmitFileQueryExecutionDeclaration(name, queryExecution, inFunction);
@@ -854,6 +859,18 @@ public sealed partial class PosixEmitter
             case IrIntrinsicCallExpression intrinsicCall:
                 if (intrinsicCall.Id is IntrinsicId.Print or IntrinsicId.Println)
                 {
+                    if (intrinsicCall.Arguments.FirstOrDefault() is IrBinaryExpression
+                        {
+                            Operator: "+",
+                            Left: IrLiteralExpression { Value: string prefix },
+                            Right: IrCollectionLengthExpression { Target: IrIdentifierExpression lengthIdentifier }
+                        } && _nativeArrayVariables.TryGetValue(SanitizeVariableName(lengthIdentifier.Name), out var arrayName))
+                    {
+                        var suffix = intrinsicCall.Id == IntrinsicId.Println ? "\\n" : string.Empty;
+                        WriteLine($"printf '%s%s{suffix}' {Escape.PosixSingleQuoted(prefix)} \"${{#{arrayName}[@]}}\"");
+                        return;
+                    }
+
                     if (intrinsicCall.Arguments.FirstOrDefault() is IrIntrinsicCallExpression stringPredicate &&
                         stringPredicate.Id is IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or IntrinsicId.StringIsMatch)
                     {
@@ -910,6 +927,7 @@ public sealed partial class PosixEmitter
                 return;
 
             case IrAssignmentExpression assignment:
+                if (EmitFileQueryAssignment(assignment, inFunction)) return;
                 EmitPreparedAssignment(assignment, inFunction);
                 return;
 

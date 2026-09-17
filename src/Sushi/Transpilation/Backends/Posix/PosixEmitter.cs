@@ -69,6 +69,9 @@ public sealed partial class PosixEmitter : IBackendEmitter
         _zshObjectParameterNames.Clear();
         _zshReadOnlyObjectParameters.Clear();
         _nativeObjectAliases.Clear();
+        _fileQueries.Clear();
+        _escapingFileQueries.Clear();
+        CollectEscapingFileQueries(program.Statements);
         _commentedTypes.Clear();
         _classTypeNames = CollectClassTypeNames(program.Statements);
         _enumTypeNames = CollectEnumTypeNames(program.Statements);

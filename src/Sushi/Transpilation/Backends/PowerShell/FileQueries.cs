@@ -4,57 +4,280 @@ namespace Sushi.Transpilation.Backends.PowerShell;
 
 public sealed partial class PowerShellEmitter
 {
+    private sealed record FileQueryPlan(string Root, bool Recursive, string? Match, string? Exclude, string Visibility);
+    private readonly Dictionary<string, FileQueryPlan> _fileQueries = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _escapingFileQueries = new(StringComparer.Ordinal);
+
     private void EmitFileQueryDeclaration(string name, IrFileQueryExpression query)
+    {
+        var plan = BuildFileQueryPlan(query);
+        if (_escapingFileQueries.Contains(name)) EmitEscapingFileQueryPlanDeclaration(name, plan);
+        else _fileQueries[name] = plan;
+    }
+
+    private bool EmitFileQueryAliasDeclaration(string name, IrIdentifierExpression source)
+    {
+        if (!_fileQueries.TryGetValue(SanitizeName(source.Name), out var plan)) return false;
+        if (_escapingFileQueries.Contains(name)) EmitEscapingFileQueryPlanDeclaration(name, plan);
+        else _fileQueries[name] = plan;
+        return true;
+    }
+
+    private bool EmitFileQueryAssignment(IrAssignmentExpression assignment)
+    {
+        if (assignment.Operator != "=") return false;
+        var name = SanitizeName(assignment.Target.Name);
+        if (assignment.Value is IrFileQueryExpression query)
+        {
+            var plan = BuildFileQueryPlan(query);
+            if (_escapingFileQueries.Contains(name)) EmitEscapingFileQueryPlanDeclaration(name, plan);
+            else _fileQueries[name] = plan;
+            return true;
+        }
+        if (assignment.Value is IrIdentifierExpression source)
+            return EmitFileQueryAliasDeclaration(name, source);
+        return false;
+    }
+
+    private void EmitEscapingFileQueryDeclaration(string name, IrFileQueryExpression query)
+    {
+        EmitEscapingFileQueryPlanDeclaration(name, BuildFileQueryPlan(query));
+    }
+
+    private void EmitEscapingFileQueryPlanDeclaration(string name, FileQueryPlan plan)
+    {
+        EmitFileQueryObject(name, plan);
+        _fileQueries[name] = plan;
+    }
+
+    private void EmitFileQueryObject(string name, FileQueryPlan plan)
     {
         WriteLine($"${name} = [pscustomobject]@{{");
         _indent++;
-        WriteLine($"_fs_root = {EmitValueExpression(query.Root)}");
-        WriteLine($"_fs_recursive = {EmitValueExpression(query.Recursive)}");
-        WriteLine($"_fs_match = {EmitValueExpression(query.MatchPattern)}");
-        WriteLine($"_fs_exclude = {EmitValueExpression(query.ExcludePattern)}");
-        WriteLine($"_fs_visibility = {EmitValueExpression(query.Visibility)}");
+        WriteLine($"_fs_root = {plan.Root}");
+        WriteLine($"_fs_recursive = {(plan.Recursive ? "$true" : "$false")}");
+        WriteLine($"_fs_match = {plan.Match ?? "$null"}");
+        WriteLine($"_fs_exclude = {plan.Exclude ?? "$null"}");
+        WriteLine($"_fs_visibility = '{plan.Visibility}'");
         _indent--;
         WriteLine("}");
     }
 
+
+    private void CollectEscapingFileQueries(IEnumerable<IrStatement> statements)
+    {
+        foreach (var statement in statements)
+        {
+            switch (statement)
+            {
+                case IrVariableDeclarationStatement { Initializer: { } initializer }:
+                    CollectEscapingFileQueries(initializer);
+                    break;
+                case IrExpressionStatement expression:
+                    CollectEscapingFileQueries(expression.Expression);
+                    break;
+                case IrReturnStatement { Expression: { } expression }:
+                    CollectEscapingFileQueries(expression);
+                    break;
+                case IrBlockStatement block:
+                    CollectEscapingFileQueries(block.Statements);
+                    break;
+                case IrFunctionDeclarationStatement function:
+                    CollectEscapingFileQueries(function.Body.Statements);
+                    break;
+                case IrIfStatement conditional:
+                    CollectEscapingFileQueries(conditional.Condition);
+                    CollectEscapingFileQueries(conditional.ThenBlock.Statements);
+                    if (conditional.ElseBlock is not null) CollectEscapingFileQueries(conditional.ElseBlock.Statements);
+                    break;
+                case IrForEachStatement each:
+                    CollectEscapingFileQueries(each.Collection);
+                    CollectEscapingFileQueries(each.Body.Statements);
+                    break;
+            }
+        }
+    }
+
+    private void CollectEscapingFileQueries(IrExpression expression)
+    {
+        switch (expression)
+        {
+            case IrCallExpression call:
+                foreach (var argument in call.Arguments)
+                {
+                    if (argument.Value is IrIdentifierExpression identifier && IsFileQuery(identifier))
+                        _escapingFileQueries.Add(SanitizeName(identifier.Name));
+                    CollectEscapingFileQueries(argument.Value);
+                }
+                break;
+            case IrFileQueryExecutionExpression execution:
+                CollectEscapingFileQueries(execution.Query);
+                break;
+            case IrBinaryExpression binary:
+                CollectEscapingFileQueries(binary.Left);
+                CollectEscapingFileQueries(binary.Right);
+                break;
+            case IrIntrinsicCallExpression intrinsic:
+                foreach (var argument in intrinsic.Arguments) CollectEscapingFileQueries(argument);
+                break;
+            case IrMethodCallExpression method:
+                CollectEscapingFileQueries(method.Target);
+                foreach (var argument in method.Arguments) CollectEscapingFileQueries(argument.Value);
+                break;
+        }
+    }
+
+    private static bool IsFileQuery(IrIdentifierExpression identifier) =>
+        identifier.StaticType.Name?.Equals("FileQuery", StringComparison.OrdinalIgnoreCase) == true;
+
     private void EmitFileQueryExecutionDeclaration(string name, IrFileQueryExecutionExpression execution)
+    {
+        if (!TryBuildFileQueryPlan(execution.Query, out var plan))
+        {
+            EmitDynamicFileQueryExecutionDeclaration(name, execution);
+            return;
+        }
+
+        var baseName = $"{name}Base";
+        WriteLine($"${baseName} = (Resolve-Path -LiteralPath {plan.Root} -ErrorAction Stop).Path");
+        var command = BuildGetChildItemCommand(baseName, plan, execution.EntryKind);
+        var filters = BuildPowerShellFilters(plan);
+        WriteLine($"${name} = @(");
+        _indent++;
+        WriteLine(command + " |");
+        if (filters.Count > 0)
+        {
+            _indent++;
+            WriteLine($"Where-Object {{ {string.Join(" -and ", filters)} }} |");
+            WriteLine($"ForEach-Object {{ $_.FullName.Substring(${baseName}.Length).TrimStart([char]92, [char]47).Replace('\\', '/') }}");
+            _indent--;
+        }
+        else
+        {
+            WriteLine($"ForEach-Object {{ $_.FullName.Substring(${baseName}.Length).TrimStart([char]92, [char]47).Replace('\\', '/') }}");
+        }
+        _indent--;
+        WriteLine(")");
+    }
+
+    private static string BuildGetChildItemCommand(string baseName, FileQueryPlan plan, IrFileQueryEntryKind kind)
+    {
+        var parts = new List<string> { $"Get-ChildItem -LiteralPath ${baseName}" };
+        if (kind == IrFileQueryEntryKind.Files) parts.Add("-File");
+        if (kind == IrFileQueryEntryKind.Directories) parts.Add("-Directory");
+        if (plan.Recursive) parts.Add("-Recurse");
+        parts.Add("-Force");
+        if (plan.Match is not null) parts.Add($"-Filter {plan.Match}");
+        parts.Add("-ErrorAction Stop");
+        return string.Join(" ", parts);
+    }
+
+    private static List<string> BuildPowerShellFilters(FileQueryPlan plan)
+    {
+        var filters = new List<string>();
+        if (plan.Visibility == "visible") filters.Add("$_.Name -notlike '.*'");
+        if (plan.Visibility == "hidden") filters.Add("$_.Name -like '.*'");
+        if (plan.Exclude is not null) filters.Add($"$_.Name -notlike {plan.Exclude}");
+        return filters;
+    }
+
+    private FileQueryPlan BuildFileQueryPlan(IrFileQueryExpression query) => new(
+        EmitFileQueryValue(query.Root),
+        ResolveRecursive(query.Recursive),
+        ResolveOptionalValue(query.MatchPattern, "_fs_match"),
+        ResolveOptionalValue(query.ExcludePattern, "_fs_exclude"),
+        ResolveVisibility(query.Visibility));
+
+    private bool TryBuildFileQueryPlan(IrExpression query, out FileQueryPlan plan)
+    {
+        if (query is IrFileQueryExpression literal)
+        {
+            plan = BuildFileQueryPlan(literal);
+            return true;
+        }
+        if (query is IrIdentifierExpression identifier && _fileQueries.TryGetValue(SanitizeName(identifier.Name), out plan!))
+            return true;
+        plan = null!;
+        return false;
+    }
+
+    private string EmitFileQueryValue(IrExpression expression)
+    {
+        if (expression is IrMemberAccessExpression { Target: IrIdentifierExpression identifier, MemberName: var member } &&
+            _fileQueries.TryGetValue(SanitizeName(identifier.Name), out var plan))
+            return member switch
+            {
+                "_fs_root" => plan.Root,
+                "_fs_recursive" => plan.Recursive ? "$true" : "$false",
+                "_fs_match" => plan.Match ?? "$null",
+                "_fs_exclude" => plan.Exclude ?? "$null",
+                "_fs_visibility" => $"'{plan.Visibility}'",
+                _ => EmitValueExpression(expression)
+            };
+        return EmitValueExpression(expression);
+    }
+
+    private bool ResolveRecursive(IrExpression expression)
+    {
+        if (expression is IrLiteralExpression { Value: true }) return true;
+        return expression is IrMemberAccessExpression { Target: IrIdentifierExpression identifier, MemberName: "_fs_recursive" } &&
+               _fileQueries.TryGetValue(SanitizeName(identifier.Name), out var plan) && plan.Recursive;
+    }
+
+    private string? ResolveOptionalValue(IrExpression expression, string member)
+    {
+        if (IsNull(expression)) return null;
+        if (expression is IrMemberAccessExpression { Target: IrIdentifierExpression identifier, MemberName: var memberName } &&
+            memberName == member && _fileQueries.TryGetValue(SanitizeName(identifier.Name), out var plan))
+            return member == "_fs_match" ? plan.Match : plan.Exclude;
+        return EmitFileQueryValue(expression);
+    }
+
+    private string ResolveVisibility(IrExpression expression)
+    {
+        if (expression is IrLiteralExpression { Value: string visibility }) return visibility;
+        if (expression is IrMemberAccessExpression { Target: IrIdentifierExpression identifier, MemberName: "_fs_visibility" } &&
+            _fileQueries.TryGetValue(SanitizeName(identifier.Name), out var plan))
+            return plan.Visibility;
+        return "visible";
+    }
+
+    private static bool IsNull(IrExpression expression) => expression is IrLiteralExpression { Value: null };
+
+    // Function parameters are genuine runtime values. Keep the native object
+    // representation only for that boundary, not for regular source queries.
+    private void EmitDynamicFileQueryExecutionDeclaration(string name, IrFileQueryExecutionExpression execution)
     {
         var id = ++_fileQueryTempId;
         var prefix = $"__sushi_query_{id}";
-        var root = FileQueryField(execution.Query, "_fs_root");
-        var recursive = FileQueryField(execution.Query, "_fs_recursive");
-        var match = FileQueryField(execution.Query, "_fs_match");
-        var exclude = FileQueryField(execution.Query, "_fs_exclude");
-        var visibility = FileQueryField(execution.Query, "_fs_visibility");
-        WriteLine($"${prefix}_root = [string]({root})");
-        WriteLine($"${prefix}_base = (Resolve-Path -LiteralPath ${prefix}_root -ErrorAction Stop).Path");
-        WriteLine($"${prefix}_recursive = [bool]({recursive})");
-        WriteLine($"${prefix}_match = [string]({match})");
-        WriteLine($"${prefix}_exclude = [string]({exclude})");
-        WriteLine($"${prefix}_visibility = [string]({visibility})");
-        WriteLine($"if (-not (Test-Path -LiteralPath ${prefix}_base -PathType Container)) {{ throw \"std.fs.query: directory not found: ${{{prefix}_root}}\" }}");
-        WriteLine($"if (${prefix}_recursive) {{ ${prefix}_items = @(Get-ChildItem -LiteralPath ${prefix}_base -Force -Recurse -ErrorAction Stop) }} else {{ ${prefix}_items = @(Get-ChildItem -LiteralPath ${prefix}_base -Force -ErrorAction Stop) }}");
-        WriteLine($"${name} = @()");
-        WriteLine($"foreach (${prefix}_item in ${prefix}_items) {{");
-        _indent++;
-        switch (execution.EntryKind)
+        var query = execution.Query is IrIdentifierExpression identifier
+            ? SanitizeName(identifier.Name)
+            : throw new InvalidOperationException("Dynamic FileQuery execution requires an identifier value.");
+        var itemKind = execution.EntryKind switch
         {
-            case IrFileQueryEntryKind.Files:
-                WriteLine($"if (${prefix}_item.PSIsContainer) {{ continue }}");
-                break;
-            case IrFileQueryEntryKind.Directories:
-                WriteLine($"if (-not ${prefix}_item.PSIsContainer) {{ continue }}");
-                break;
-        }
-        WriteLine($"${prefix}_hidden = ${prefix}_item.Name.StartsWith('.') -or ((${prefix}_item.Attributes -band [IO.FileAttributes]::Hidden) -ne 0)");
-        WriteLine($"if (${prefix}_visibility -eq 'visible' -and ${prefix}_hidden) {{ continue }}");
-        WriteLine($"if (${prefix}_visibility -eq 'hidden' -and -not ${prefix}_hidden) {{ continue }}");
-        WriteLine($"if (${prefix}_match -and ${prefix}_item.Name -notlike ${prefix}_match) {{ continue }}");
-        WriteLine($"if (${prefix}_exclude -and ${prefix}_item.Name -like ${prefix}_exclude) {{ continue }}");
-        WriteLine($"${prefix}_relative = ${prefix}_item.FullName.Substring(${prefix}_base.Length).TrimStart([char]92, [char]47).Replace('\\', '/')");
-        WriteLine($"${name} += ${prefix}_relative");
+            IrFileQueryEntryKind.Files => " -File",
+            IrFileQueryEntryKind.Directories => " -Directory",
+            _ => string.Empty
+        };
+        // PowerShell supports a computed switch argument and relative names
+        // natively, so a dynamic query is still just a single pipeline.
+        WriteLine($"${name} = @(");
+        _indent++;
+        WriteLine($"Get-ChildItem -LiteralPath ${query}._fs_root -Force -Recurse:$([bool]${query}._fs_recursive){itemKind} -Name -ErrorAction Stop |");
+        _indent++;
+        WriteLine("Where-Object {");
+        _indent++;
+        WriteLine($"${prefix}_entry = Split-Path -Leaf $_");
+        WriteLine($"(${query}._fs_visibility -ne 'visible' -or -not ${prefix}_entry.StartsWith('.')) -and");
+        WriteLine($"(${query}._fs_visibility -ne 'hidden' -or ${prefix}_entry.StartsWith('.')) -and");
+        WriteLine($"(-not ${query}._fs_match -or ${prefix}_entry -like ${query}._fs_match) -and");
+        WriteLine($"(-not ${query}._fs_exclude -or ${prefix}_entry -notlike ${query}._fs_exclude)");
         _indent--;
-        WriteLine("}");
+        WriteLine("} |");
+        WriteLine("ForEach-Object { $_.Replace('\\', '/') }");
+        _indent--;
+        WriteLine(")");
+        _indent--;
     }
 
     private string FileQueryField(IrExpression query, string field)
@@ -63,12 +286,9 @@ public sealed partial class PowerShellEmitter
         {
             var value = field switch
             {
-                "_fs_root" => literal.Root,
-                "_fs_recursive" => literal.Recursive,
-                "_fs_match" => literal.MatchPattern,
-                "_fs_exclude" => literal.ExcludePattern,
-                "_fs_visibility" => literal.Visibility,
-                _ => new IrLiteralExpression(null)
+                "_fs_root" => literal.Root, "_fs_recursive" => literal.Recursive,
+                "_fs_match" => literal.MatchPattern, "_fs_exclude" => literal.ExcludePattern,
+                "_fs_visibility" => literal.Visibility, _ => new IrLiteralExpression(null)
             };
             return EmitValueExpression(value);
         }

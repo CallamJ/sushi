@@ -36,6 +36,7 @@ public sealed partial class PowerShellEmitter
                 return;
 
             case IrAssignmentExpression assignment:
+                if (EmitFileQueryAssignment(assignment)) return;
                 if (assignment.Operator == "=" && assignment.Value is IrConditionalExpression { IsSwitchExpression: true } switchExpression)
                 {
                     EmitSwitchExpressionInto($"${SanitizeName(assignment.Target.Name)}", switchExpression);
