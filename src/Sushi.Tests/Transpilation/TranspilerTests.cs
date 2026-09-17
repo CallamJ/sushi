@@ -206,7 +206,7 @@ public class TranspilerTests
     public void Transpile_PowerShell_StdIntrinsicScript_Succeeds()
     {
         const string source = """
-            var content = std.io.readText("a.txt")
+            var content = std.fs.readText("a.txt")
             print(content)
             """;
 

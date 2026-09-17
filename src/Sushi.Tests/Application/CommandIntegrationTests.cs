@@ -69,12 +69,14 @@ public sealed class CommandIntegrationTests
         var outputPath = Path.ChangeExtension(sourcePath, ".md");
         try
         {
-            var exitCode = await CreateRoot().Parse(new[] { "docs", sourcePath, "--output", outputPath }).InvokeAsync(null, TestContext.Current.CancellationToken);
+            var exitCode = await CreateRoot().Parse(new[] { "docs", sourcePath, "--output", outputPath, "--include-builtins" }).InvokeAsync(null, TestContext.Current.CancellationToken);
             Assert.Equal(0, exitCode);
             var markdown = File.ReadAllText(outputPath);
             Assert.Contains("### greet", markdown);
             Assert.Contains("Say hello.", markdown);
             Assert.Contains("Who to greet.", markdown);
+            Assert.Contains("### std.fs.glob", markdown);
+            Assert.Contains("Returns a sorted `string[]`", markdown);
         }
         finally
         {

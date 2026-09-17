@@ -134,7 +134,45 @@ public sealed class LanguageServerTests
 
         await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Contains("Writes a value followed by a newline.", Encoding.UTF8.GetString(output.ToArray()));
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("writes a value to standard output", wire);
+        Assert.Contains("## Examples", wire);
+    }
+
+    [Fact]
+    public async Task Server_ShowsFullMarkdownForImportedStandardLibraryMember()
+    {
+        const string source = "use std.fs as fs\nvar files = fs.glob(\"*.sushi\")";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/glob-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":59,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/glob-docs.sushi\"},\"position\":{\"line\":1,\"character\":15}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("string[] std.fs.glob(string pattern, string cwd = null)", wire);
+        Assert.Contains("Returns a sorted", wire);
+        Assert.Contains("## Errors and portability", wire);
+    }
+
+    [Fact]
+    public async Task Server_PrefersQualifiedStandardLibraryDocumentationOverSameNamedVariable()
+    {
+        const string source = "use std.process\n\nvar args = process.args()";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/process-args-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":60,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/process-args-docs.sushi\"},\"position\":{\"line\":2,\"character\":19}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("Returns a", wire);
+        Assert.Contains("script name", wire);
+        Assert.DoesNotContain("var args = process.args()", wire);
     }
 
     [Fact]

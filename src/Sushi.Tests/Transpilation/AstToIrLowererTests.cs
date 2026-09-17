@@ -115,7 +115,7 @@ public class AstToIrLowererTests
     public void Lower_StdIntrinsicCall_ProducesIntrinsicIr()
     {
         const string source = """
-            var exists = std.io.exists("a.txt")
+            var exists = std.fs.exists("a.txt")
             """;
 
         var program = Parse(source);
@@ -152,10 +152,10 @@ public class AstToIrLowererTests
     }
 
     [Fact]
-    public void Lower_UnknownStdIntrinsic_ReportsDiagnostic()
+    public void Lower_RemovedStdIoAlias_ReportsDiagnostic()
     {
         const string source = """
-            var x = std.io.unknown("a.txt")
+            var x = std.io.readText("a.txt")
             """;
 
         var program = Parse(source);

@@ -1,6 +1,7 @@
 namespace Sushi.Transpilation.Intrinsics;
 
 using System.Globalization;
+using Sushi.Transpilation.IR;
 
 /// <summary>
 /// Editor-facing view of Sushi's standard API. Compiler intrinsics are sourced
@@ -31,25 +32,22 @@ public sealed class StandardLibraryCatalog
                 parameter.IsVariadic,
                 parameter.HasDefaultValue,
                 parameter.DefaultValue)).ToArray(),
-            signature.ReturnType.Name ?? "object",
-            DocumentationFor(signature)));
+            DisplayType(signature.ReturnType),
+            StandardLibraryDocumentation.For(signature.CanonicalName)));
 
         return new StandardLibraryCatalog(intrinsicFunctions.Append(new StandardLibraryFunction(
             "string",
             [new StandardLibraryParameter("object", "value", false, false, null)],
             "string",
-            "Converts a value to its string representation.")));
+            StandardLibraryDocumentation.For("string"))));
     }
 
-    private static string DocumentationFor(IntrinsicSignature signature) => signature.CanonicalName switch
+    private static string DisplayType(IrTypeRef type)
     {
-        "print" => "Writes a value without adding a trailing newline.",
-        "println" => "Writes a value followed by a newline.",
-        "std.target.shell" => "Returns the target shell name selected for compilation.",
-        "std.target.platform" => "Returns the target platform selected for compilation.",
-        _ when signature.DeprecationMessage is not null => signature.DeprecationMessage,
-        _ => $"Standard library function `{signature.CanonicalName}`."
-    };
+        if (type.Name == "array") return $"{DisplayType(type.ElementType ?? IrTypeRef.Any)}[]";
+        return type.Name ?? "any";
+    }
+
 }
 
 public sealed record StandardLibraryFunction(

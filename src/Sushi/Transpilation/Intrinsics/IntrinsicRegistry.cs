@@ -120,24 +120,6 @@ public sealed class IntrinsicRegistry
                 "std.fs.exists",
                 IntrinsicId.IoExists,
                 new[] { new IntrinsicParameter("path") }),
-            // Compatibility names for the beta. New code should use std.fs.*.
-            new IntrinsicSignature(
-                "std.io.readText",
-                IntrinsicId.IoReadText,
-                new[] { new IntrinsicParameter("path") }, "std.io.* is deprecated; use std.fs.* instead."),
-            new IntrinsicSignature(
-                "std.io.writeText",
-                IntrinsicId.IoWriteText,
-                new[]
-                {
-                    new IntrinsicParameter("path"),
-                    new IntrinsicParameter("text"),
-                    new IntrinsicParameter("append", hasDefaultValue: true, defaultValue: false)
-                }, "std.io.* is deprecated; use std.fs.* instead."),
-            new IntrinsicSignature(
-                "std.io.exists",
-                IntrinsicId.IoExists,
-                new[] { new IntrinsicParameter("path") }, "std.io.* is deprecated; use std.fs.* instead."),
             new IntrinsicSignature(
                 "std.path.join",
                 IntrinsicId.PathJoin,

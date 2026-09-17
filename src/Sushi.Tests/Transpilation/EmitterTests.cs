@@ -298,7 +298,7 @@ public class EmitterTests
         var program = new IrProgram(new IrStatement[]
         {
             new IrVariableDeclarationStatement("ok", new IrIntrinsicCallExpression(
-                "std.io.exists",
+                "std.fs.exists",
                 IntrinsicId.IoExists,
                 new IrExpression[] { new IrLiteralExpression("a.txt") }))
         });
@@ -317,7 +317,7 @@ public class EmitterTests
         var program = new IrProgram(new IrStatement[]
         {
             new IrVariableDeclarationStatement("content", new IrIntrinsicCallExpression(
-                "std.io.readText",
+                "std.fs.readText",
                 IntrinsicId.IoReadText,
                 new IrExpression[] { new IrLiteralExpression("a.txt") }))
         });
@@ -429,7 +429,7 @@ public class EmitterTests
         var program = new IrProgram(new IrStatement[]
         {
             new IrExpressionStatement(new IrIntrinsicCallExpression(
-                "std.io.writeText",
+                "std.fs.writeText",
                 IntrinsicId.IoWriteText,
                 new IrExpression[]
                 {
@@ -454,7 +454,7 @@ public class EmitterTests
         var program = new IrProgram(new IrStatement[]
         {
             new IrExpressionStatement(new IrIntrinsicCallExpression(
-                "std.io.writeText",
+                "std.fs.writeText",
                 IntrinsicId.IoWriteText,
                 new IrExpression[]
                 {

@@ -638,14 +638,28 @@ internal sealed class SushiLanguageServer
         if (token is null) return null;
         var symbol = _semanticWorkspace.SymbolAt(document.Uri, document.Text, offset);
         var builtInName = _semanticWorkspace.QualifiedNameAt(document.Uri, document.Text, token);
-        var text = symbol is null
-            ? (SushiSemanticModel.IsTypeName(token.Text)
+        var hasBuiltIn = StandardLibrary.TryGetFunction(builtInName, out var builtIn) ||
+                         StandardLibrary.TryGetFunction(token.Text, out builtIn);
+        var text = SushiSemanticModel.IsTypeName(token.Text) && !IsCallToken(model, token)
+            ? SushiCode(token.Text)
+            : hasBuiltIn && (symbol is null || IsQualifiedMemberToken(model, token))
+            ? SushiCode($"{builtIn.ReturnType} {builtIn.Name}({string.Join(", ", builtIn.Parameters.Select(parameter => parameter.DisplayName))})") + "\n\n" + builtIn.Documentation
+            : symbol is null
                 ? SushiCode(token.Text)
-                : StandardLibrary.TryGetFunction(builtInName, out var builtIn) || StandardLibrary.TryGetFunction(token.Text, out builtIn)
-                    ? SushiCode($"{builtIn.ReturnType} {builtIn.Name}({string.Join(", ", builtIn.Parameters.Select(parameter => parameter.DisplayName))})") + "\n\n" + builtIn.Documentation
-                    : SushiCode(token.Text))
-            : HoverText(model, symbol);
+                : HoverText(model, symbol);
         return new { contents = new { kind = "markdown", value = text }, range = TokenRange(document.Text, token) };
+    }
+
+    private static bool IsQualifiedMemberToken(SushiSemanticModel model, ClassifiedToken token)
+    {
+        var index = model.Tokens.ToList().FindIndex(candidate => candidate.Start == token.Start);
+        return index > 0 && model.Tokens[index - 1].Kind == ClassifiedTokenKind.Dot;
+    }
+
+    private static bool IsCallToken(SushiSemanticModel model, ClassifiedToken token)
+    {
+        var index = model.Tokens.ToList().FindIndex(candidate => candidate.Start == token.Start);
+        return index >= 0 && index + 1 < model.Tokens.Count && model.Tokens[index + 1].Kind == ClassifiedTokenKind.LeftParen;
     }
 
     private static string HoverText(SushiSemanticModel model, SushiSymbol symbol)

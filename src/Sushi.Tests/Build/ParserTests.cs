@@ -2803,7 +2803,7 @@ namespace Sushi.Tests
         public void TestTopLevelMemberCallExpressionStatement()
         {
             var ast = Parse(@"
-                std.io.exists(""file.txt"")
+                std.fs.exists(""file.txt"")
             ");
             Assert.Single(ast.Declarations);
             Assert.IsType<ExpressionStatementNode>(ast.Declarations[0]);
@@ -2817,7 +2817,7 @@ namespace Sushi.Tests
         public void TestTopLevelMemberCallFollowedByVariable()
         {
             var ast = Parse(@"
-                std.io.exists(""file.txt"")
+                std.fs.exists(""file.txt"")
                 var x = 42
             ");
             Assert.Equal(2, ast.Declarations.Count);

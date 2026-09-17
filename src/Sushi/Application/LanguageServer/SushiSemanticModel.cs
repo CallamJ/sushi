@@ -169,7 +169,47 @@ internal sealed class SushiSemanticModel
         for (var cursor = index - 1; cursor >= 1 && tokens[cursor].Kind == ClassifiedTokenKind.Dot &&
              tokens[cursor - 1].Kind == ClassifiedTokenKind.Identifier; cursor -= 2)
             parts.Insert(0, tokens[cursor - 1].Text);
-        return string.Join('.', parts);
+        var name = string.Join('.', parts);
+        if (StandardLibrary.TryGetFunction(name, out _)) return name;
+
+        for (var useIndex = 0; useIndex < tokens.Count; useIndex++)
+        {
+            if (!tokens[useIndex].IsKeyword("use")) continue;
+            var cursor = useIndex + 1;
+            var importParts = new List<string>();
+            while (cursor < tokens.Count && tokens[cursor].Kind == ClassifiedTokenKind.Identifier)
+            {
+                importParts.Add(tokens[cursor].Text);
+                cursor++;
+                if (cursor >= tokens.Count || tokens[cursor].Kind != ClassifiedTokenKind.Dot) break;
+                cursor++;
+            }
+            if (importParts.Count < 2 || importParts[0] != "std") continue;
+
+            var importedName = string.Join('.', importParts);
+            if (cursor < tokens.Count && tokens[cursor].IsKeyword("as") && cursor + 1 < tokens.Count &&
+                tokens[cursor + 1].Kind == ClassifiedTokenKind.Identifier)
+            {
+                var alias = tokens[cursor + 1].Text;
+                if (parts[0] == alias)
+                {
+                    var candidate = importedName + (parts.Count == 1 ? "" : "." + string.Join('.', parts.Skip(1)));
+                    if (StandardLibrary.TryGetFunction(candidate, out _)) return candidate;
+                }
+                continue;
+            }
+
+            if (StandardLibrary.TryGetFunction(importedName, out _) && parts.Count == 1 && parts[0] == importParts[^1])
+                return importedName;
+
+            // `use std.fs` exposes `fs.member`; expand that familiar module form.
+            if (parts.Count > 1 && parts[0] == importParts[^1])
+            {
+                var candidate = "std." + name;
+                if (StandardLibrary.TryGetFunction(candidate, out _)) return candidate;
+            }
+        }
+        return name;
     }
 
     public IEnumerable<SushiSymbol> MembersFor(string? type)

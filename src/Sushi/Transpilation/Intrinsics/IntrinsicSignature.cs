@@ -30,9 +30,9 @@ public sealed class IntrinsicParameter
         "append" or "allowFailure" or "recursive" or "stream" => "bool",
         "code" or "limit" or "milliseconds" or "timeoutMs" => "int",
         "args" or "stages" => "array",
-        "cwd" or "input" or "env" or "headers" or "result" => "object",
+        "input" or "env" or "headers" or "result" => "object",
         "contentType" or "path" or "source" or "destination" or "command" or "url" or "text" or
-        "sep" or "needle" or "prefix" or "old" or "new" or "pattern" or "name" or "fallback" => "string",
+        "sep" or "needle" or "prefix" or "old" or "new" or "pattern" or "name" or "fallback" or "cwd" => "string",
         _ => "object"
     };
 }
@@ -68,7 +68,8 @@ public sealed class IntrinsicSignature
         IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or
         IntrinsicId.StringIsMatch or IntrinsicId.IoExists or IntrinsicId.EnvHas => IrTypeRef.Primitive("bool"),
         IntrinsicId.StringLength or IntrinsicId.FsSize => IrTypeRef.Primitive("int"),
-        IntrinsicId.StringSplit or IntrinsicId.ProcessArgs or IntrinsicId.FsGlob => IrTypeRef.Primitive("array"),
+        IntrinsicId.StringSplit or IntrinsicId.ProcessArgs or IntrinsicId.FsGlob =>
+            IrTypeRef.Primitive("array", elementType: IrTypeRef.Primitive("string")),
         IntrinsicId.TargetShell or IntrinsicId.TargetPlatform or IntrinsicId.StringTrim or IntrinsicId.StringLower or
         IntrinsicId.StringUpper or IntrinsicId.StringReplace or IntrinsicId.IoReadText or IntrinsicId.PathJoin or
         IntrinsicId.PathDirname or IntrinsicId.PathBasename or IntrinsicId.PathExtension or IntrinsicId.PathStem or

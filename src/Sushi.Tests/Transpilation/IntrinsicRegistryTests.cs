@@ -10,7 +10,7 @@ public class IntrinsicRegistryTests
     {
         var registry = IntrinsicRegistry.CreateDefault();
 
-        var ok = registry.TryResolve("std.io.readText", out var signature);
+        var ok = registry.TryResolve("std.fs.readText", out var signature);
 
         Assert.True(ok);
         Assert.NotNull(signature);
@@ -28,6 +28,16 @@ public class IntrinsicRegistryTests
     }
 
     [Fact]
+    public void Resolve_RemovedIoAliases_Fail()
+    {
+        var registry = IntrinsicRegistry.CreateDefault();
+
+        Assert.False(registry.TryResolve("std.io.readText", out _));
+        Assert.False(registry.TryResolve("std.io.writeText", out _));
+        Assert.False(registry.TryResolve("std.io.exists", out _));
+    }
+
+    [Fact]
     public void Resolve_Milestone3Intrinsics_Succeed()
     {
         var registry = IntrinsicRegistry.CreateDefault();
@@ -42,6 +52,7 @@ public class IntrinsicRegistryTests
         Assert.Equal(IntrinsicId.FsGlob, fsGlob.Id);
         Assert.Equal(IntrinsicId.FsSize, fsSize.Id);
         Assert.Equal("int", fsSize.ReturnType.Name);
+        Assert.Equal("string", fsGlob.ReturnType.ElementType?.Name);
         Assert.Equal(IntrinsicId.HttpGet, httpGet.Id);
     }
 
@@ -60,6 +71,32 @@ public class IntrinsicRegistryTests
         Assert.Equal("int", length.ReturnType.Name);
         Assert.Equal(IntrinsicId.StringSplit, split.Id);
         Assert.Equal(IntrinsicId.StringMatch, match.Id);
+    }
+
+    [Fact]
+    public void StandardLibraryCatalog_ProvidesCompleteMarkdownForEveryActiveMember()
+    {
+        var functions = StandardLibraryCatalog.CreateDefault().Functions;
+
+        Assert.Equal(53, functions.Count);
+        foreach (var function in functions)
+        {
+            Assert.Contains("## Usage", function.Documentation);
+            Assert.Contains("## Parameters", function.Documentation);
+            Assert.Contains("## Returns", function.Documentation);
+            Assert.Contains("## Examples", function.Documentation);
+            Assert.Contains("## Errors and portability", function.Documentation);
+        }
+    }
+
+    [Fact]
+    public void StandardLibraryCatalog_UsesPreciseGlobSignatureTypes()
+    {
+        var catalog = StandardLibraryCatalog.CreateDefault();
+
+        Assert.True(catalog.TryGetFunction("std.fs.glob", out var glob));
+        Assert.Equal("string[]", glob.ReturnType);
+        Assert.Equal("string", glob.Parameters[1].TypeName);
     }
 
     [Theory]

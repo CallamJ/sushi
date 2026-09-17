@@ -29,6 +29,9 @@ Use `--target auto` to select the host default, or choose one of:
 `bash-linux`, `bash-macos`, `zsh-linux`, `zsh-macos`, `powershell-linux`,
 `powershell-macos`, and `powershell-windows`.
 
+The [standard-library reference](docs/stdlib/index.md) documents every built-in
+member, including imports, examples, errors, and target-specific behavior.
+
 Sushi also supports `check`, `run`, and `watch` commands. See the
 [language guide](docs/language-guide.md), [module and object guide](docs/modules-and-objects.md),
 and [IDE support guide](docs/ide-support.md) for details.

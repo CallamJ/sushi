@@ -10,7 +10,7 @@ public class IntrinsicCallBinderTests
     public void Bind_DefaultArgument_IsInjected()
     {
         var signature = new IntrinsicSignature(
-            "std.io.writeText",
+            "std.fs.writeText",
             IntrinsicId.IoWriteText,
             new[]
             {
@@ -37,7 +37,7 @@ public class IntrinsicCallBinderTests
     public void Bind_NamedArguments_AreReordered()
     {
         var signature = new IntrinsicSignature(
-            "std.io.writeText",
+            "std.fs.writeText",
             IntrinsicId.IoWriteText,
             new[]
             {

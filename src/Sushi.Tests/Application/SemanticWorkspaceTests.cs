@@ -31,6 +31,6 @@ public sealed class SemanticWorkspaceTests
         var model = workspace.Analyze("file:///semantic.sushi", source);
         var token = model.Tokens.Single(token => token.Text == "glob");
 
-        Assert.Equal("fs.glob", model.QualifiedNameAt(token));
+        Assert.Equal("std.fs.glob", model.QualifiedNameAt(token));
     }
 }
