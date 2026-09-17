@@ -120,7 +120,13 @@ public sealed class StandardLibraryEndToEndTests
             File.WriteAllText(Path.Combine(root, "glob", "one.sushi"), "");
             File.WriteAllText(Path.Combine(root, "glob", "nested", "two.sushi"), "");
         }),
-        Case("std.fs.size", "use std.fs.size\nprintln(size(\"size.txt\"))", output: "5\n", setup: root => File.WriteAllText(Path.Combine(root, "size.txt"), "sushi")),
+        Case("std.fs.fileSize", "use std.fs.fileSize\nprintln(fileSize(\"size.txt\"))", output: "5\n", setup: root => File.WriteAllText(Path.Combine(root, "size.txt"), "sushi")),
+        Case("std.fs.directorySize", "use std.fs.directorySize\nprintln(directorySize(\"sizes\"))\nprintln(directorySize(\"sizes\", recursive: true))", output: "5\n10\n", setup: root =>
+        {
+            Directory.CreateDirectory(Path.Combine(root, "sizes", "nested"));
+            File.WriteAllText(Path.Combine(root, "sizes", "top.txt"), "sushi");
+            File.WriteAllText(Path.Combine(root, "sizes", "nested", "deep.txt"), "sushi");
+        }),
         Case("std.fs.isFile", "use std.fs.isFile\nprintln(isFile(\"file.txt\"))", output: "true\n", setup: root => File.WriteAllText(Path.Combine(root, "file.txt"), "")),
         Case("std.fs.isDirectory", "use std.fs.isDirectory\nprintln(isDirectory(\"folder\"))", output: "true\n", setup: root => Directory.CreateDirectory(Path.Combine(root, "folder"))),
         Case("std.fs.createDirectory", "use std.fs.createDirectory\ncreateDirectory(\"made/nested\")", verify: (root, _, _) => Assert.True(Directory.Exists(Path.Combine(root, "made", "nested")))),

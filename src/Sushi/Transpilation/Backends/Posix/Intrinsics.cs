@@ -71,7 +71,8 @@ public sealed partial class PosixEmitter
             IntrinsicId.IoExists => $"$([[ -e {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
             IntrinsicId.FsIsFile => $"$([[ -f {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
             IntrinsicId.FsIsDirectory => $"$([[ -d {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
-            IntrinsicId.FsSize => EmitFsSize(call.Arguments),
+            IntrinsicId.FsFileSize => EmitFsFileSize(call.Arguments),
+            IntrinsicId.FsDirectorySize => EmitFsDirectorySize(call.Arguments),
             IntrinsicId.PathJoin => EmitPathJoin(call.Arguments),
             IntrinsicId.PathDirname => $"$(dirname -- {Arg(call.Arguments, 0)})",
             IntrinsicId.PathBasename => $"$(basename -- {Arg(call.Arguments, 0)})",
@@ -191,10 +192,35 @@ public sealed partial class PosixEmitter
     private string EmitFsCreateDirectory(IReadOnlyList<IrExpression> arguments) =>
         $"mkdir -p -- {Arg(arguments, 0)}";
 
-    private string EmitFsSize(IReadOnlyList<IrExpression> arguments) =>
-        _context.TargetProfile.Platform == TargetPlatform.Macos
-            ? $"$(if [[ -f {Arg(arguments, 0)} ]]; then stat -f '%z' -- {Arg(arguments, 0)}; else printf 'std.fs.size: regular file required\\n' >&2; exit 1; fi)"
-            : $"$(if [[ -f {Arg(arguments, 0)} ]]; then stat -c '%s' -- {Arg(arguments, 0)}; else printf 'std.fs.size: regular file required\\n' >&2; exit 1; fi)";
+    private string EmitFsFileSize(IReadOnlyList<IrExpression> arguments)
+    {
+        var path = Arg(arguments, 0);
+        var stat = _context.TargetProfile.Platform == TargetPlatform.Macos
+            ? $"stat -f '%z' -- {path}"
+            : $"stat -c '%s' -- {path}";
+        return $"$([[ -f {path} ]] || {{ printf 'std.fs.fileSize: regular file required\\n' >&2; exit 1; }}; {stat})";
+    }
+
+    private string EmitFsDirectorySize(IReadOnlyList<IrExpression> arguments)
+    {
+        var path = Arg(arguments, 0);
+        var recursive = arguments[1];
+        var recursiveFind = EmitDirectorySizeFind(path, recursive: true);
+        var shallowFind = EmitDirectorySizeFind(path, recursive: false);
+        var find = recursive is IrLiteralExpression { Value: true } ? recursiveFind
+            : recursive is IrLiteralExpression { Value: false } ? shallowFind
+            : $"if [[ {Arg(arguments, 1)} == true ]]; then {recursiveFind}; else {shallowFind}; fi";
+
+        return $"$([[ -d {path} ]] || {{ printf 'std.fs.directorySize: directory required\\n' >&2; exit 1; }}; total=0; while IFS= read -r bytes; do total=$((total + bytes)); done < <({find}); printf '%s' \"$total\")";
+    }
+
+    private string EmitDirectorySizeFind(string path, bool recursive)
+    {
+        var depth = recursive ? string.Empty : " -mindepth 1 -maxdepth 1";
+        return _context.TargetProfile.Platform == TargetPlatform.Macos
+            ? $"find -P {path}{depth} -type f -exec stat -f '%z' -- {{}} +"
+            : $"find -P {path}{depth} -type f -printf '%s\\n'";
+    }
 
     private string EmitFsRemove(IReadOnlyList<IrExpression> arguments) =>
         $"if [[ {Arg(arguments, 1)} == 'true' ]]; then rm -rf -- {Arg(arguments, 0)}; else rm -f -- {Arg(arguments, 0)}; fi";

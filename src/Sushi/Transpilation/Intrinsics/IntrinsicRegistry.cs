@@ -232,9 +232,17 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.ConsoleReadLine,
                 Array.Empty<IntrinsicParameter>()),
             new IntrinsicSignature(
-                "std.fs.size",
-                IntrinsicId.FsSize,
+                "std.fs.fileSize",
+                IntrinsicId.FsFileSize,
                 new[] { new IntrinsicParameter("path", typeName: "string") }),
+            new IntrinsicSignature(
+                "std.fs.directorySize",
+                IntrinsicId.FsDirectorySize,
+                new[]
+                {
+                    new IntrinsicParameter("path", typeName: "string"),
+                    new IntrinsicParameter("recursive", hasDefaultValue: true, defaultValue: false)
+                }),
             new IntrinsicSignature(
                 "std.fs.isFile",
                 IntrinsicId.FsIsFile,

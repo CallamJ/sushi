@@ -45,12 +45,16 @@ public class IntrinsicRegistryTests
         Assert.True(registry.TryResolve("std.process.run", out var processRun));
         Assert.False(registry.TryResolve("std.json.parse", out _));
         Assert.False(registry.TryResolve("std.fs.glob", out _));
-        Assert.True(registry.TryResolve("std.fs.size", out var fsSize));
+        Assert.False(registry.TryResolve("std.fs.size", out _));
+        Assert.True(registry.TryResolve("std.fs.fileSize", out var fsFileSize));
+        Assert.True(registry.TryResolve("std.fs.directorySize", out var fsDirectorySize));
         Assert.True(registry.TryResolve("std.http.get", out var httpGet));
 
         Assert.Equal(IntrinsicId.ProcessRun, processRun.Id);
-        Assert.Equal(IntrinsicId.FsSize, fsSize.Id);
-        Assert.Equal("int", fsSize.ReturnType.Name);
+        Assert.Equal(IntrinsicId.FsFileSize, fsFileSize.Id);
+        Assert.Equal(IntrinsicId.FsDirectorySize, fsDirectorySize.Id);
+        Assert.Equal("int", fsFileSize.ReturnType.Name);
+        Assert.Equal("int", fsDirectorySize.ReturnType.Name);
         Assert.Equal(IntrinsicId.HttpGet, httpGet.Id);
     }
 
@@ -76,7 +80,7 @@ public class IntrinsicRegistryTests
     {
         var functions = StandardLibraryCatalog.CreateDefault().Functions;
 
-        Assert.Equal(53, functions.Count);
+        Assert.Equal(54, functions.Count);
         foreach (var function in functions)
         {
             Assert.Contains("## Usage", function.Documentation);
@@ -101,14 +105,23 @@ public class IntrinsicRegistryTests
     [Theory]
     [InlineData("std.fs.isFile")]
     [InlineData("std.fs.isDirectory")]
-    [InlineData("std.os.cwd")]
-    [InlineData("std.console.readLine")]
     public void Resolve_FileSystemPredicates_HasBooleanReturnType(string name)
     {
         var registry = IntrinsicRegistry.CreateDefault();
 
         Assert.True(registry.TryResolve(name, out var signature));
         Assert.Equal("bool", signature.ReturnType.Name);
+    }
+
+    [Theory]
+    [InlineData("std.os.cwd")]
+    [InlineData("std.console.readLine")]
+    public void Resolve_StringReturningIntrinsics_HasStringReturnType(string name)
+    {
+        var registry = IntrinsicRegistry.CreateDefault();
+
+        Assert.True(registry.TryResolve(name, out var signature));
+        Assert.Equal("string", signature.ReturnType.Name);
     }
 
     [Theory]

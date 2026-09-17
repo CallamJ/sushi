@@ -163,7 +163,8 @@ for (var file : files) {
 }
 ```
 
-`std.fs.size(path)` returns a regular file's size in bytes as an `int`.
+`std.fs.fileSize(path)` returns a regular file's size in bytes as an `int`.
+`std.fs.directorySize(path, recursive: true)` sums the sizes of files below a directory.
 
 `std.archive.zip(source, destination)` lowers to `zip` on Bash/Zsh and
 `Compress-Archive` on PowerShell. Target tools such as `curl`, `zip`, `find`,

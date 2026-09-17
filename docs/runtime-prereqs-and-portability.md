@@ -77,12 +77,13 @@ to native target enumeration at each terminal call; no Sushi glob helper is emit
 - A missing or non-directory root is a runtime error.
 - Directory symlinks are not traversed.
 
-### 2.5 `std.fs.size(path)`
+### 2.5 `std.fs.fileSize(path)` and `std.fs.directorySize(path, recursive = false)`
 
-Returns the file size in bytes as an integer. The path must identify a regular
-file; missing paths, inaccessible paths, and directories are runtime errors.
-The operation lowers directly to `stat` on Bash/Zsh and `Get-Item`.Length on
-PowerShell, so it does not add a Sushi runtime helper.
+`fileSize` returns one regular file's byte size. `directorySize` returns the
+sum of regular-file byte sizes in a directory, optionally including nested
+directories. Each has a distinct contract: passing the wrong path kind is a
+runtime error. Both lower directly to native `stat`/`find` on Bash/Zsh and
+`Get-Item`/`Get-ChildItem` on PowerShell, with no Sushi runtime helper.
 
 ### 2.6 `std.http.get/post`
 

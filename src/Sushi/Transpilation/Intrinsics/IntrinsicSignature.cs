@@ -68,7 +68,7 @@ public sealed class IntrinsicSignature
         IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or
         IntrinsicId.StringIsMatch or IntrinsicId.IoExists or IntrinsicId.EnvHas or
         IntrinsicId.FsIsFile or IntrinsicId.FsIsDirectory => IrTypeRef.Primitive("bool"),
-        IntrinsicId.StringLength or IntrinsicId.FsSize => IrTypeRef.Primitive("int"),
+        IntrinsicId.StringLength or IntrinsicId.FsFileSize or IntrinsicId.FsDirectorySize => IrTypeRef.Primitive("int"),
         IntrinsicId.StringSplit or IntrinsicId.ProcessArgs =>
             IrTypeRef.Primitive("array", elementType: IrTypeRef.Primitive("string")),
         IntrinsicId.TargetShell or IntrinsicId.TargetPlatform or IntrinsicId.StringTrim or IntrinsicId.StringLower or

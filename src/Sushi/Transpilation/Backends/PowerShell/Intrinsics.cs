@@ -73,7 +73,8 @@ public sealed partial class PowerShellEmitter
             IntrinsicId.IoExists => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)})",
             IntrinsicId.FsIsFile => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)} -PathType Leaf)",
             IntrinsicId.FsIsDirectory => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)} -PathType Container)",
-            IntrinsicId.FsSize => $"([int64](Get-Item -LiteralPath {Arg(call.Arguments, 0)}).Length)",
+            IntrinsicId.FsFileSize => EmitFsFileSize(call.Arguments),
+            IntrinsicId.FsDirectorySize => EmitFsDirectorySize(call.Arguments),
             IntrinsicId.PathJoin => EmitPathJoin(call.Arguments),
             IntrinsicId.PathDirname => $"(Split-Path -Path {Arg(call.Arguments, 0)} -Parent)",
             IntrinsicId.PathBasename => $"(Split-Path -Path {Arg(call.Arguments, 0)} -Leaf)",
@@ -251,8 +252,23 @@ public sealed partial class PowerShellEmitter
         return EmitAggregateIntrinsicFallback(IntrinsicId.ProcessRequireSuccess);
     }
 
-    private string EmitFsSize(IReadOnlyList<IrExpression> arguments) =>
-        $"([int64]$(if ((Get-Item -LiteralPath {Arg(arguments, 0)}).PSIsContainer) {{ throw 'std.fs.size: regular file required' }} else {{ (Get-Item -LiteralPath {Arg(arguments, 0)}).Length }}))";
+    private string EmitFsFileSize(IReadOnlyList<IrExpression> arguments)
+    {
+        var path = Arg(arguments, 0);
+        return $"([int64]$(if (!(Test-Path -LiteralPath {path} -PathType Leaf)) {{ throw 'std.fs.fileSize: regular file required' }}; (Get-Item -LiteralPath {path}).Length))";
+    }
+
+    private string EmitFsDirectorySize(IReadOnlyList<IrExpression> arguments)
+    {
+        var path = Arg(arguments, 0);
+        var recursive = arguments[1];
+        var recursiveEnumeration = $"Get-ChildItem -LiteralPath {path} -Force -File -Recurse";
+        var shallowEnumeration = $"Get-ChildItem -LiteralPath {path} -Force -File";
+        var enumeration = recursive is IrLiteralExpression { Value: true } ? recursiveEnumeration
+            : recursive is IrLiteralExpression { Value: false } ? shallowEnumeration
+            : $"$(if ([bool]({Arg(arguments, 1)})) {{ {recursiveEnumeration} }} else {{ {shallowEnumeration} }})";
+        return $"([int64]$(if (!(Test-Path -LiteralPath {path} -PathType Container)) {{ throw 'std.fs.directorySize: directory required' }}; ({enumeration} | Measure-Object -Property Length -Sum).Sum))";
+    }
 
     private string EmitFsCreateDirectory(IReadOnlyList<IrExpression> arguments) =>
         $"(New-Item -ItemType Directory -Force -Path {Arg(arguments, 0)})";
