@@ -40,6 +40,7 @@ public sealed class AstToIrLowerer
     private const string UnknownValueTypeCode = "SUSHI1058";
     private const string InvalidSliceTargetCode = "SUSHI1059";
     private const string InvalidIndexTargetCode = "SUSHI1060";
+    private const string DuplicateSwitchLabelCode = "SUSHI1061";
     private static readonly Dictionary<string, string> StringMethodIntrinsicMap = new(StringComparer.Ordinal)
     {
         ["trim"] = "std.string.trim",
@@ -80,6 +81,7 @@ public sealed class AstToIrLowerer
     private readonly Dictionary<string, string> _standardImportAliases = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _standardImportNames = new(StringComparer.Ordinal);
     private readonly HashSet<string> _standardImportedPaths = new(StringComparer.Ordinal);
+    private readonly HashSet<ConditionalExpressionNode> _validatedSwitchExpressions = new();
 
     private string _sourcePath = "";
     private string? _currentFunctionName;
@@ -136,6 +138,7 @@ public sealed class AstToIrLowerer
         _standardImportAliases.Clear();
         _standardImportNames.Clear();
         _standardImportedPaths.Clear();
+        _validatedSwitchExpressions.Clear();
         _tempId = 0;
         _lambdaId = 0;
         _loopDepth = 0;
@@ -702,10 +705,7 @@ public sealed class AstToIrLowerer
             UnaryExpressionNode unary when unary.Operator == "?" => LowerTruthiness(unary),
             UnaryExpressionNode unary => LowerUnary(unary),
             BinaryExpressionNode binary => LowerBinary(binary),
-            ConditionalExpressionNode conditional => new IrConditionalExpression(
-                LowerConditionalCondition(conditional),
-                LowerExpression(conditional.TrueExpression),
-                LowerExpression(conditional.FalseExpression), conditional.IsSwitchExpression),
+            ConditionalExpressionNode conditional => LowerConditionalExpression(conditional),
             ArrayLiteralExpressionNode array => new IrArrayLiteralExpression(array.Elements.Select(LowerExpression)),
             ObjectLiteralExpressionNode obj => LowerObjectLiteral(obj),
             InterpolatedStringExpressionNode interpolated => LowerInterpolatedString(interpolated),
@@ -718,6 +718,73 @@ public sealed class AstToIrLowerer
             LambdaExpressionNode lambda => LowerLambdaExpression(lambda),
             _ => UnsupportedExpression(node)
         };
+    }
+
+    private IrExpression LowerConditionalExpression(ConditionalExpressionNode conditional)
+    {
+        ValidateSwitchExpressionLabels(conditional);
+        return new IrConditionalExpression(
+            LowerConditionalCondition(conditional),
+            LowerExpression(conditional.TrueExpression),
+            LowerExpression(conditional.FalseExpression),
+            conditional.IsSwitchExpression);
+    }
+
+    private void ValidateSwitchExpressionLabels(ConditionalExpressionNode root)
+    {
+        if (!root.IsSwitchExpression || !_validatedSwitchExpressions.Add(root)) return;
+
+        var labels = new Dictionary<string, ExpressionNode>(StringComparer.Ordinal);
+        ExpressionNode current = root;
+        while (current is ConditionalExpressionNode { IsSwitchExpression: true } arm)
+        {
+            _validatedSwitchExpressions.Add(arm);
+            if (arm.Condition is BinaryExpressionNode { Operator: "==" } comparison &&
+                TryGetSwitchLabelKey(comparison.Right, out var key, out var display))
+            {
+                if (labels.ContainsKey(key))
+                {
+                    AddDiagnostic(
+                        DuplicateSwitchLabelCode,
+                        $"Duplicate switch label {display}.",
+                        comparison.Right.Line,
+                        comparison.Right.Column);
+                }
+                else
+                {
+                    labels[key] = comparison.Right;
+                }
+            }
+            current = arm.FalseExpression;
+        }
+    }
+
+    private static bool TryGetSwitchLabelKey(ExpressionNode expression, out string key, out string display)
+    {
+        if (expression is LiteralExpressionNode literal)
+        {
+            var value = literal.Value;
+            key = value switch
+            {
+                null => "null",
+                string text => "string:" + text,
+                char character => "char:" + character,
+                bool boolean => "bool:" + boolean,
+                _ => value.GetType().FullName + ":" + Convert.ToString(value, CultureInfo.InvariantCulture)
+            };
+            display = value switch
+            {
+                null => "null",
+                string text => $"\"{text}\"",
+                char character => $"'{character}'",
+                _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "unknown"
+            };
+            return true;
+        }
+
+        key = string.Empty;
+        display = string.Empty;
+        return false;
     }
 
     private IrExpression LowerSlice(SliceExpressionNode slice)

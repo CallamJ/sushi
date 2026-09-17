@@ -398,6 +398,32 @@ public class TranspilerTests
     }
 
     [Fact]
+    public void Transpile_SwitchExpressionDuplicateLabel_FailsAtRepeatedLabel()
+    {
+        const string source = """
+            string suffix = "K"
+            int mult = switch (suffix) {
+                "K", "T" -> 1000
+                "M" -> 1000000
+                "T" -> 1000000000000
+                default -> 1
+            }
+            """;
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "duplicate-switch.sushi",
+            TargetLanguage = TargetLanguage.Bash
+        });
+
+        var diagnostic = Assert.Single(result.Diagnostics, item => item.Code == "SUSHI1061");
+        Assert.Contains("Duplicate switch label \"T\"", diagnostic.Message);
+        Assert.Equal(5, diagnostic.Span.Line);
+        Assert.Equal(5, diagnostic.Span.Column);
+    }
+
+    [Fact]
     public void Transpile_UserFunction_MissingRequiredArgument_Fails()
     {
         const string source = """
