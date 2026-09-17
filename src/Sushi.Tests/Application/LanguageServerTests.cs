@@ -176,6 +176,24 @@ public sealed class LanguageServerTests
     }
 
     [Fact]
+    public async Task Server_ShowsStandardLibraryDocumentationForStringMethodSugar()
+    {
+        const string source = "string directorySizeArg = \"100MB\"\nvar valid = directorySizeArg.isMatch(\"^[0-9]+$\")";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/string-sugar-docs.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/string-sugar-docs.sushi\"},\"position\":{\"line\":1,\"character\":29}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("bool isMatch(string pattern)", wire);
+        Assert.Contains("regular expression", wire);
+        Assert.Contains("## Examples", wire);
+    }
+
+    [Fact]
     public async Task Server_DoesNotTreatBuiltInTypesAsConversionFunctionsInHover()
     {
         const string source = "class Settings { string dee = \"hello\", d2 = \"hi\" }";

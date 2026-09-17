@@ -638,12 +638,13 @@ internal sealed class SushiLanguageServer
         if (token is null) return null;
         var symbol = _semanticWorkspace.SymbolAt(document.Uri, document.Text, offset);
         var builtInName = _semanticWorkspace.QualifiedNameAt(document.Uri, document.Text, token);
-        var hasBuiltIn = StandardLibrary.TryGetFunction(builtInName, out var builtIn) ||
+        var isStringSugar = TryGetStringSugarFunction(model, token, out var builtIn);
+        var hasBuiltIn = isStringSugar || StandardLibrary.TryGetFunction(builtInName, out builtIn) ||
                          StandardLibrary.TryGetFunction(token.Text, out builtIn);
         var text = SushiSemanticModel.IsTypeName(token.Text) && !IsCallToken(model, token)
             ? SushiCode(token.Text)
             : hasBuiltIn && (symbol is null || IsQualifiedMemberToken(model, token))
-            ? SushiCode($"{builtIn.ReturnType} {builtIn.Name}({string.Join(", ", builtIn.Parameters.Select(parameter => parameter.DisplayName))})") + "\n\n" + builtIn.Documentation
+            ? BuiltInHoverText(builtIn, isStringSugar)
             : symbol is null
                 ? SushiCode(token.Text)
                 : HoverText(model, symbol);
@@ -660,6 +661,26 @@ internal sealed class SushiLanguageServer
     {
         var index = model.Tokens.ToList().FindIndex(candidate => candidate.Start == token.Start);
         return index >= 0 && index + 1 < model.Tokens.Count && model.Tokens[index + 1].Kind == ClassifiedTokenKind.LeftParen;
+    }
+
+    private static bool TryGetStringSugarFunction(SushiSemanticModel model, ClassifiedToken token, out StandardLibraryFunction function)
+    {
+        function = null!;
+        var index = model.Tokens.ToList().FindIndex(candidate => candidate.Start == token.Start);
+        if (index < 2 || model.Tokens[index - 1].Kind != ClassifiedTokenKind.Dot) return false;
+        var receiver = model.Tokens[index - 2];
+        var receiverType = model.TypeOf(receiver);
+        if (!String.Equals(receiverType, "string", StringComparison.OrdinalIgnoreCase) &&
+            !String.Equals(receiverType, "str", StringComparison.OrdinalIgnoreCase)) return false;
+        return StandardLibrary.TryGetFunction($"std.string.{token.Text}", out function);
+    }
+
+    private static string BuiltInHoverText(StandardLibraryFunction function, bool omitImplicitReceiver)
+    {
+        var parameters = omitImplicitReceiver ? function.Parameters.Skip(1) : function.Parameters;
+        var name = omitImplicitReceiver ? function.Name["std.string.".Length..] : function.Name;
+        return SushiCode($"{function.ReturnType} {name}({string.Join(", ", parameters.Select(parameter => parameter.DisplayName))})") +
+               "\n\n" + function.Documentation;
     }
 
     private static string HoverText(SushiSemanticModel model, SushiSymbol symbol)
