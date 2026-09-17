@@ -301,6 +301,9 @@ jobs:
             artifact="${relative%%/*}"
             filename="${relative#*/}"
             filename="${filename//\//_}"
+            case "$filename" in
+              *.pdb) continue ;;
+            esac
             cp "$asset" "release-assets/${artifact}-${filename}"
           done < <(find artifacts -type f -print0)
           find release-assets -type f -print0 | xargs -0 gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber
