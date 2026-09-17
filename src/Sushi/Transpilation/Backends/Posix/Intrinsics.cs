@@ -215,10 +215,10 @@ public sealed partial class PosixEmitter
         $"mv -f -- {Arg(arguments, 0)} {Arg(arguments, 1)}";
 
     private string EmitArchiveZip(IReadOnlyList<IrExpression> arguments) =>
-        $"zip -r -- {Arg(arguments, 1)} {Arg(arguments, 0)}";
+        $"zip -qr {Arg(arguments, 1)} {Arg(arguments, 0)}";
 
     private string EmitArchiveUnzip(IReadOnlyList<IrExpression> arguments) =>
-        $"unzip -o -- {Arg(arguments, 0)} -d {Arg(arguments, 1)}";
+        $"unzip -oq {Arg(arguments, 0)} -d {Arg(arguments, 1)}";
 
     private string EmitEnvSet(IReadOnlyList<IrExpression> arguments)
     {
@@ -306,11 +306,21 @@ public sealed partial class PosixEmitter
 
     private string EmitProcessFailInvocation(IReadOnlyList<IrExpression> arguments)
     {
+        if (arguments.FirstOrDefault() is IrIdentifierExpression identifier)
+        {
+            var name = SanitizeVariableName(identifier.Name);
+            return $"if [[ \"${{{name}_ok-}}\" != true ]]; then exit \"${{{name}_code:-1}}\"; fi";
+        }
         return $"__sushi_process_fail {Arg(arguments, 0)}";
     }
 
     private string EmitProcessRequireSuccessInvocation(IReadOnlyList<IrExpression> arguments)
     {
+        if (arguments.FirstOrDefault() is IrIdentifierExpression identifier)
+        {
+            var name = SanitizeVariableName(identifier.Name);
+            return $"if [[ \"${{{name}_ok-}}\" != true ]]; then exit \"${{{name}_code:-1}}\"; fi";
+        }
         return $"__sushi_process_require_success {Arg(arguments, 0)}";
     }
 
@@ -330,7 +340,7 @@ public sealed partial class PosixEmitter
     }
 
     private string EmitHttpDownload(IReadOnlyList<IrExpression> arguments) =>
-        $"curl -fsSL -- {Arg(arguments, 0)} -o {Arg(arguments, 1)}";
+        $"curl -fsSL -o {Arg(arguments, 1)} -- {Arg(arguments, 0)}";
 
     private string Arg(IReadOnlyList<IrExpression> arguments, int index)
     {

@@ -906,6 +906,13 @@ public sealed class AstToIrLowerer
             }
         }
         var target = LowerExpression(member.Object);
+        if (TryInferStaticType(target, out var targetType) && targetType.Kind == IrTypeKind.Structural)
+        {
+            var field = targetType.StructuralFields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
+            if (field != null)
+                return new IrMemberAccessExpression(target, member.MemberName, field.Type,
+                    $"struct-field:{member.MemberName}");
+        }
         var inferredTargetType = InferAstExpressionType(member.Object, _knownVariableTypes);
         if (inferredTargetType.IsAnyOrUnknown)
         {
@@ -914,13 +921,6 @@ public sealed class AstToIrLowerer
                 $"Member access '.{member.MemberName}' requires a statically known object type; cast the value first.",
                 member.Line,
                 member.Column);
-        }
-        if (TryInferStaticType(target, out var targetType) && targetType.Kind == IrTypeKind.Structural)
-        {
-            var field = targetType.StructuralFields.FirstOrDefault(candidate => candidate.Name == member.MemberName);
-            if (field != null)
-                return new IrMemberAccessExpression(target, member.MemberName, field.Type,
-                    $"struct-field:{member.MemberName}");
         }
         return new IrMemberAccessExpression(target, member.MemberName);
     }

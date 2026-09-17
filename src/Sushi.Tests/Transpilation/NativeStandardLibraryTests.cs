@@ -12,7 +12,7 @@ public sealed class NativeStandardLibraryTests
         var result = Transpile("std.archive.zip(\"dist\", \"dist.zip\")", TargetLanguage.Bash, TargetPlatform.Linux);
 
         Assert.True(result.Success);
-        Assert.Contains("zip -r --", result.EmittedCode);
+        Assert.Contains("zip -qr", result.EmittedCode);
         Assert.DoesNotContain("__sushi_process", result.EmittedCode);
         Assert.DoesNotContain("__sushi_value", result.EmittedCode);
     }

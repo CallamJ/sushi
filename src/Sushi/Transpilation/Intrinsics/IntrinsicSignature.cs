@@ -74,12 +74,19 @@ public sealed class IntrinsicSignature
         IntrinsicId.StringUpper or IntrinsicId.StringReplace or IntrinsicId.IoReadText or IntrinsicId.PathJoin or
         IntrinsicId.PathDirname or IntrinsicId.PathBasename or IntrinsicId.PathExtension or IntrinsicId.PathStem or
         IntrinsicId.EnvGet or IntrinsicId.ProcessWhich => IrTypeRef.Primitive("string"),
-        IntrinsicId.ProcessRun or IntrinsicId.ProcessPipeline => IrTypeRef.Structural(new[]
+        IntrinsicId.ProcessRun or IntrinsicId.ProcessPipeline or IntrinsicId.ProcessRequireSuccess => IrTypeRef.Structural(new[]
         {
             new IrStructuralField("code", IrTypeRef.Primitive("int"), false),
             new IrStructuralField("stdout", IrTypeRef.Primitive("string"), false),
             new IrStructuralField("stderr", IrTypeRef.Primitive("string"), false),
             new IrStructuralField("ok", IrTypeRef.Primitive("bool"), false)
+        }),
+        IntrinsicId.StringMatch => IrTypeRef.Structural(new[]
+        {
+            new IrStructuralField("ok", IrTypeRef.Primitive("bool"), false),
+            new IrStructuralField("value", IrTypeRef.Primitive("string"), false),
+            new IrStructuralField("index", IrTypeRef.Primitive("int"), false),
+            new IrStructuralField("groups", IrTypeRef.Primitive("array", elementType: IrTypeRef.Primitive("string")), false)
         }),
         IntrinsicId.HttpGet or IntrinsicId.HttpPost => IrTypeRef.Structural(new[]
         {
