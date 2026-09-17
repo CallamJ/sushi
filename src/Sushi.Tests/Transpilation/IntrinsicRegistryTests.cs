@@ -76,11 +76,25 @@ public class IntrinsicRegistryTests
     }
 
     [Fact]
+    public void Resolve_Round_HasOptionalPrecisionAndFloatReturnType()
+    {
+        var registry = IntrinsicRegistry.CreateDefault();
+
+        Assert.True(registry.TryResolve("std.math.round", out var round));
+        Assert.Equal("float", round.ReturnType.Name);
+        Assert.Equal(2, round.Parameters.Count);
+        Assert.Equal("precision", round.Parameters[1].Name);
+        Assert.Equal("int", round.Parameters[1].TypeName);
+        Assert.True(round.Parameters[1].HasDefaultValue);
+        Assert.Equal(0, round.Parameters[1].DefaultValue);
+    }
+
+    [Fact]
     public void StandardLibraryCatalog_ProvidesCompleteMarkdownForEveryActiveMember()
     {
         var functions = StandardLibraryCatalog.CreateDefault().Functions;
 
-        Assert.Equal(54, functions.Count);
+        Assert.Equal(57, functions.Count);
         foreach (var function in functions)
         {
             Assert.Contains("## Usage", function.Documentation);

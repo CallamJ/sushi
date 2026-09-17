@@ -685,6 +685,7 @@ public sealed partial class PosixEmitter
             IrIdentifierExpression identifier when identifier.StaticType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true => true,
             IrLiteralExpression literal => literal.Value is float or double or decimal,
             IrConversionExpression conversion => conversion.TargetType.Name == "float",
+            IrIntrinsicCallExpression intrinsic => intrinsic.ReturnType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true,
             IrIdentifierExpression identifier => _knownFloatVariables.Contains(SanitizeVariableName(identifier.Name)),
             IrUnaryExpression unary when unary.Operator is "+" or "-" => IsDefinitelyFloat(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>

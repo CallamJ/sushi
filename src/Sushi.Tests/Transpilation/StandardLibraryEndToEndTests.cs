@@ -164,6 +164,10 @@ public sealed class StandardLibraryEndToEndTests
         Case("std.console.error", "use std.console.error\nerror(\"sushi error\")", error: "sushi error\n"),
         Case("std.console.readLine", "use std.console.readLine\nprintln(readLine())", output: "sushi input\n", input: "sushi input\n"),
 
+        Case("std.math.round", "use std.math.round\nprintln(round(1.5))\nprintln(round(-1.5))\nprintln(round(1.2345, precision: 2))", output: "2\n-2\n1.23\n"),
+        Case("std.math.floor", "use std.math.floor\nprintln(floor(1.8))\nprintln(floor(-1.2))", output: "1\n-2\n"),
+        Case("std.math.ceil", "use std.math.ceil\nprintln(ceil(1.2))\nprintln(ceil(-1.8))", output: "2\n-1\n"),
+
         Case("std.archive.zip", "use std.archive.zip\nzip(\"archive-source\", \"archive.zip\")", setup: root =>
         {
             Directory.CreateDirectory(Path.Combine(root, "archive-source"));

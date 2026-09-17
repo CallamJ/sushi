@@ -28,6 +28,8 @@ public sealed partial class PosixEmitter
             IntrinsicId.StringReplace => $"{EmitStringReplaceInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.StringIsMatch => $"{EmitStringIsMatchInvocation(call.Arguments)} >/dev/null",
             IntrinsicId.StringMatch => $"{EmitStringMatchInvocation(call.Arguments)} >/dev/null",
+            IntrinsicId.MathRound or IntrinsicId.MathFloor or IntrinsicId.MathCeil =>
+                $"{EmitMathInvocation(call.Id, call.Arguments)} >/dev/null",
             IntrinsicId.IoWriteText => EmitIoWriteText(call.Arguments),
             IntrinsicId.EnvSet => EmitEnvSet(call.Arguments),
             IntrinsicId.EnvUnset => EmitEnvUnset(call.Arguments),
@@ -67,6 +69,8 @@ public sealed partial class PosixEmitter
             IntrinsicId.StringReplace => $"\"$({EmitStringReplaceInvocation(call.Arguments)})\"",
             IntrinsicId.StringIsMatch => $"\"$({EmitStringIsMatchInvocation(call.Arguments)})\"",
             IntrinsicId.StringMatch => $"\"$({EmitStringMatchInvocation(call.Arguments)})\"",
+            IntrinsicId.MathRound or IntrinsicId.MathFloor or IntrinsicId.MathCeil =>
+                $"$({EmitMathInvocation(call.Id, call.Arguments)})",
             IntrinsicId.IoReadText => $"$(cat -- {Arg(call.Arguments, 0)})",
             IntrinsicId.IoExists => $"$([[ -e {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
             IntrinsicId.FsIsFile => $"$([[ -f {Arg(call.Arguments, 0)} ]] && printf 'true' || printf 'false')",
@@ -126,6 +130,22 @@ public sealed partial class PosixEmitter
     private string EmitStringLengthInvocation(IReadOnlyList<IrExpression> arguments)
     {
         return $"printf '%s' {Arg(arguments, 0)} | wc -m";
+    }
+
+    private string EmitMathInvocation(IntrinsicId id, IReadOnlyList<IrExpression> arguments)
+    {
+        if (id == IntrinsicId.MathRound)
+        {
+            return $"LC_ALL=C awk -v value={Arg(arguments, 0)} -v precision={Arg(arguments, 1)} 'BEGIN {{ scale = 10 ^ precision; result = int(value * scale + (value < 0 ? -0.5 : 0.5)) / scale; if (result == 0) result = 0; printf \"%.17g\", result }}'";
+        }
+
+        var operation = id switch
+        {
+            IntrinsicId.MathFloor => "value < 0 && value != int(value) ? int(value) - 1 : int(value)",
+            IntrinsicId.MathCeil => "value > 0 && value != int(value) ? int(value) + 1 : int(value)",
+            _ => throw new InvalidOperationException($"Unsupported math intrinsic '{id}'.")
+        };
+        return $"LC_ALL=C awk -v value={Arg(arguments, 0)} 'BEGIN {{ printf \"%.0f\", ({operation}) }}'";
     }
 
     private string EmitStringLengthValue(IReadOnlyList<IrExpression> arguments)

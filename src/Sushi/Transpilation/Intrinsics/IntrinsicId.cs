@@ -53,5 +53,8 @@ public enum IntrinsicId
     ProcessWhich,
     ProcessSleep,
     ConsoleError,
-    ConsoleReadLine
+    ConsoleReadLine,
+    MathRound,
+    MathFloor,
+    MathCeil
 }

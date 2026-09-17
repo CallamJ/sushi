@@ -28,6 +28,8 @@ public sealed partial class PowerShellEmitter
             IntrinsicId.StringReplace => $"$null = {EmitStringReplace(call.Arguments)}",
             IntrinsicId.StringIsMatch => $"$null = {EmitStringIsMatch(call.Arguments)}",
             IntrinsicId.StringMatch => $"$null = {EmitStringMatch(call.Arguments)}",
+            IntrinsicId.MathRound or IntrinsicId.MathFloor or IntrinsicId.MathCeil =>
+                $"$null = {EmitMath(call.Id, call.Arguments)}",
             IntrinsicId.IoWriteText => EmitIoWriteText(call.Arguments),
             IntrinsicId.EnvSet => EmitEnvSet(call.Arguments),
             IntrinsicId.EnvUnset => $"Remove-Item -Path (\"Env:\" + [string]({Arg(call.Arguments, 0)})) -ErrorAction SilentlyContinue",
@@ -69,6 +71,7 @@ public sealed partial class PowerShellEmitter
             IntrinsicId.StringReplace => EmitStringReplace(call.Arguments),
             IntrinsicId.StringIsMatch => EmitStringIsMatch(call.Arguments),
             IntrinsicId.StringMatch => EmitStringMatch(call.Arguments),
+            IntrinsicId.MathRound or IntrinsicId.MathFloor or IntrinsicId.MathCeil => EmitMath(call.Id, call.Arguments),
             IntrinsicId.IoReadText => $"(Get-Content -Raw -LiteralPath {Arg(call.Arguments, 0)})",
             IntrinsicId.IoExists => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)})",
             IntrinsicId.FsIsFile => $"(Test-Path -LiteralPath {Arg(call.Arguments, 0)} -PathType Leaf)",
@@ -256,6 +259,25 @@ public sealed partial class PowerShellEmitter
     {
         var path = Arg(arguments, 0);
         return $"([int64]$(if (!(Test-Path -LiteralPath {path} -PathType Leaf)) {{ throw 'std.fs.fileSize: regular file required' }}; (Get-Item -LiteralPath {path}).Length))";
+    }
+
+    private string EmitMath(IntrinsicId id, IReadOnlyList<IrExpression> arguments)
+    {
+        if (id == IntrinsicId.MathRound)
+        {
+            var value = Arg(arguments, 0);
+            var precision = Arg(arguments, 1);
+            var scale = $"[Math]::Pow(10, [int]({precision}))";
+            return $"([Math]::Round([double]({value}) * {scale}, [MidpointRounding]::AwayFromZero) / {scale})";
+        }
+
+        var operation = id switch
+        {
+            IntrinsicId.MathFloor => $"[Math]::Floor([double]({Arg(arguments, 0)}))",
+            IntrinsicId.MathCeil => $"[Math]::Ceiling([double]({Arg(arguments, 0)}))",
+            _ => throw new InvalidOperationException($"Unsupported math intrinsic '{id}'.")
+        };
+        return $"([int64]({operation}))";
     }
 
     private string EmitFsDirectorySize(IReadOnlyList<IrExpression> arguments)

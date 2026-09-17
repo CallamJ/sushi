@@ -232,6 +232,23 @@ public sealed class IntrinsicRegistry
                 IntrinsicId.ConsoleReadLine,
                 Array.Empty<IntrinsicParameter>()),
             new IntrinsicSignature(
+                "std.math.round",
+                IntrinsicId.MathRound,
+                new[]
+                {
+                    new IntrinsicParameter("value", typeName: "float"),
+                    new IntrinsicParameter("precision", hasDefaultValue: true, defaultValue: 0, typeName: "int")
+                },
+                returnType: Sushi.Transpilation.IR.IrTypeRef.Primitive("float")),
+            new IntrinsicSignature(
+                "std.math.floor",
+                IntrinsicId.MathFloor,
+                new[] { new IntrinsicParameter("value", typeName: "float") }),
+            new IntrinsicSignature(
+                "std.math.ceil",
+                IntrinsicId.MathCeil,
+                new[] { new IntrinsicParameter("value", typeName: "float") }),
+            new IntrinsicSignature(
                 "std.fs.fileSize",
                 IntrinsicId.FsFileSize,
                 new[] { new IntrinsicParameter("path", typeName: "string") }),
