@@ -122,6 +122,8 @@ internal sealed class SushiSemanticModel
                 if (equals >= 0 && Tokens.Skip(equals).TakeWhile(candidate => candidate.Kind is not ClassifiedTokenKind.Semicolon && candidate.Line == Tokens[equals].Line)
                     .Any(candidate => candidate.Kind == ClassifiedTokenKind.Identifier && candidate.Text == "query"))
                     return "FileQuery";
+                if (equals + 1 < Tokens.Count && Tokens[equals].IsKeyword("new") && Tokens[equals + 1].Kind == ClassifiedTokenKind.Identifier)
+                    return Tokens[equals + 1].Text;
                 if (equals >= 0 && equals < Tokens.Count) return TypeOf(Tokens[equals]);
             }
             return null;
@@ -135,6 +137,8 @@ internal sealed class SushiSemanticModel
             var callable = Symbols.FirstOrDefault(candidate => candidate.Name == token.Text &&
                 candidate.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method);
             if (callable is not null) return callable.DeclaredType ?? InferReturnType(callable);
+            if (StandardLibrary.TryGetFunction(QualifiedNameAt(token), out var qualifiedIntrinsic)) return qualifiedIntrinsic.ReturnType;
+            if (TryFileQueryMemberAt(index, out var fileQueryMember)) return fileQueryMember.ReturnType;
             if (StandardLibrary.TryGetFunction(token.Text, out var intrinsic)) return intrinsic.ReturnType;
         }
         return null;
@@ -223,11 +227,55 @@ internal sealed class SushiSemanticModel
             yield break; // intrinsic string members are supplied by the catalog layer
         foreach (var symbol in Symbols.Where(symbol => symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method))
         {
-            // Methods/fields currently carry their declaring class in the lexical scope. Until
-            // class symbols gain a qualified owner, expose only names that are unambiguous.
-            if (symbol.DeclaredType is not null || normalized.Equals("any", StringComparison.OrdinalIgnoreCase))
+            if (MemberBelongsTo(normalized, symbol))
                 yield return symbol;
         }
+    }
+
+    public bool MemberBelongsTo(string? type, SushiSymbol symbol)
+    {
+        if (symbol.Kind is not (SushiSymbolKind.Field or SushiSymbolKind.Method) || String.IsNullOrWhiteSpace(type)) return false;
+        return string.Equals(ContainingClassName(symbol.DeclarationIndex), type, StringComparison.Ordinal);
+    }
+
+    private bool TryFileQueryMemberAt(int index, out StandardLibraryFunction function)
+    {
+        function = null!;
+        if (index < 2 || Tokens[index - 1].Kind != ClassifiedTokenKind.Dot) return false;
+        var receiver = Tokens[index - 2];
+        var receiverType = TypeOf(receiver);
+        if (receiver.Kind == ClassifiedTokenKind.RightParen)
+        {
+            var open = FindOpeningParenthesis(index - 2);
+            if (open > 0) receiverType = TypeOf(Tokens[open - 1]);
+        }
+        return string.Equals(receiverType, "FileQuery", StringComparison.Ordinal) &&
+               StandardLibrary.TryGetFileQueryMember($"FileQuery.{Tokens[index].Text}", out function);
+    }
+
+    private int FindOpeningParenthesis(int close)
+    {
+        var depth = 0;
+        for (var index = close; index >= 0; index--)
+        {
+            if (Tokens[index].Kind == ClassifiedTokenKind.RightParen) depth++;
+            else if (Tokens[index].Kind == ClassifiedTokenKind.LeftParen && --depth == 0) return index;
+        }
+        return -1;
+    }
+
+    private string? ContainingClassName(int declarationIndex)
+    {
+        var depth = 0;
+        for (var index = declarationIndex; index >= 0; index--)
+        {
+            if (Tokens[index].Kind == ClassifiedTokenKind.RightBrace) { depth++; continue; }
+            if (Tokens[index].Kind != ClassifiedTokenKind.LeftBrace) continue;
+            if (depth > 0) { depth--; continue; }
+            if (index >= 2 && Tokens[index - 2].IsKeyword("class") && Tokens[index - 1].Kind == ClassifiedTokenKind.Identifier)
+                return Tokens[index - 1].Text;
+        }
+        return null;
     }
 
     public IEnumerable<ClassifiedToken> ReferencesOf(SushiSymbol symbol) => Tokens.Where(token =>

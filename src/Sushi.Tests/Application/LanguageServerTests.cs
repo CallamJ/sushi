@@ -632,6 +632,50 @@ public sealed class LanguageServerTests
         Assert.Contains("Sushi check passed", wire);
     }
 
+    [Fact]
+    public async Task Server_ProvidesDedicatedFileQueryMemberDocsCompletionAndSignatureHelp()
+    {
+        const string uri = "file:///tmp/file-query-lsp.sushi";
+        const string source = "use std.fs as fs\nvar query = fs.query(\"src\")\nquery.\nvar refined = query.matching(\"*.cs\")\nstring[] files = fs.query().";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":70,\"method\":\"textDocument/completion\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":2,\"character\":6}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":71,\"method\":\"textDocument/hover\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":3,\"character\":20}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":72,\"method\":\"textDocument/signatureHelp\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":3,\"character\":29}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":73,\"method\":\"textDocument/completion\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":4,\"character\":28}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("matching(string pattern)", wire);
+        Assert.Contains("excluding(string pattern)", wire);
+        Assert.Contains("returns a new query that keeps entries", wire);
+        Assert.Contains("FileQuery.matching(string pattern)", wire);
+        Assert.DoesNotContain("\"label\":\"getPath()\"", wire);
+    }
+
+    [Fact]
+    public async Task Server_UsesTerminalAndClassReceiverTypesForMemberCompletion()
+    {
+        const string uri = "file:///tmp/member-receiver-types.sushi";
+        const string source = "use std.fs as fs\nclass File { string path getPath() { return path } }\nclass FileDifferent { string thing sillyFunc() { return thing } }\nvar filey = new File(\"path\")\nfiley.\nstring[] files = fs.query().directories().";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":74,\"method\":\"textDocument/completion\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":4,\"character\":6}}}}}}") +
+            Frame($"{{\"jsonrpc\":\"2.0\",\"id\":75,\"method\":\"textDocument/completion\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":5,\"character\":43}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Equal(1, wire.Split("\"label\":\"getPath()\"").Length - 1);
+        Assert.DoesNotContain("\"label\":\"sillyFunc()\"", wire);
+        Assert.Contains("\"label\":\"length()\"", wire);
+    }
+
     private static string Frame(string json) => $"Content-Length: {Encoding.UTF8.GetByteCount(json)}\r\n\r\n{json}";
     private static string JsonString(string value) => System.Text.Json.JsonSerializer.Serialize(value);
 }

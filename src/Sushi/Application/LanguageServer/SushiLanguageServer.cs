@@ -452,8 +452,9 @@ internal sealed class SushiLanguageServer
             return false;
         // Primitive receivers expose their intrinsic/sugar members, not unrelated
         // user-defined methods that happen to share the document.
-        if (receiverType is "string" or "str" or "int" or "float" or "bool" or "array") return false;
-        return receiverType is null || symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method;
+        if (receiverType is "string" or "str" or "int" or "float" or "bool" or "array" or "FileQuery") return false;
+        if (receiverType is not null && model.MemberBelongsTo(receiverType, symbol)) return true;
+        return receiverType is null && (symbol.Kind is SushiSymbolKind.Field or SushiSymbolKind.Method);
     }
 
     private static IEnumerable<CompletionItem> MemberCompletionItems(SushiSemanticModel model, int offset)
@@ -544,16 +545,13 @@ internal sealed class SushiLanguageServer
         }
         if (string.Equals(type, "FileQuery", StringComparison.Ordinal))
         {
-            var docs = StandardLibrary.TryGetFunction("std.fs.query", out var find) ? find.Documentation : null;
-            foreach (var (label, name, detail, count) in new[]
+            foreach (var function in StandardLibrary.FileQueryMembers)
             {
-                ("recursive()", "recursive", "FileQuery", 0), ("matching(string pattern)", "matching", "FileQuery", 1),
-                ("excluding(string pattern)", "excluding", "FileQuery", 1), ("includingHidden()", "includingHidden", "FileQuery", 0),
-                ("hidden()", "hidden", "FileQuery", 0), ("files()", "files", "string[]", 0),
-                ("directories()", "directories", "string[]", 0), ("entries()", "entries", "string[]", 0)
-            })
-                yield return new CompletionItem(label, 2, detail, docs, null,
-                    CallableInsertText(name, count), count > 0 ? 2 : null);
+                var name = function.Name["FileQuery.".Length..];
+                var parameters = string.Join(", ", function.Parameters.Select(parameter => parameter.DisplayName));
+                yield return new CompletionItem($"{name}({parameters})", 2, function.ReturnType, function.Documentation, null,
+                    CallableInsertText(name, function.Parameters.Count), function.Parameters.Count > 0 ? 2 : null);
+            }
         }
     }
 
@@ -652,7 +650,9 @@ internal sealed class SushiLanguageServer
         var symbol = _semanticWorkspace.SymbolAt(document.Uri, document.Text, offset);
         var builtInName = _semanticWorkspace.QualifiedNameAt(document.Uri, document.Text, token);
         var isStringSugar = TryGetStringSugarFunction(model, token, out var builtIn);
-        var hasBuiltIn = isStringSugar || StandardLibrary.TryGetFunction(builtInName, out builtIn) ||
+        var isFileQueryMember = TryGetFileQueryMember(model, token, out var fileQueryMember);
+        if (isFileQueryMember) builtIn = fileQueryMember;
+        var hasBuiltIn = isStringSugar || isFileQueryMember || StandardLibrary.TryGetFunction(builtInName, out builtIn) ||
                          StandardLibrary.TryGetFunction(token.Text, out builtIn);
         var text = SushiSemanticModel.IsTypeName(token.Text) && !IsCallToken(model, token)
             ? SushiCode(token.Text)
@@ -686,6 +686,34 @@ internal sealed class SushiLanguageServer
         if (!String.Equals(receiverType, "string", StringComparison.OrdinalIgnoreCase) &&
             !String.Equals(receiverType, "str", StringComparison.OrdinalIgnoreCase)) return false;
         return StandardLibrary.TryGetFunction($"std.string.{token.Text}", out function);
+    }
+
+    private static bool TryGetFileQueryMember(SushiSemanticModel model, ClassifiedToken token, out StandardLibraryFunction function)
+    {
+        function = null!;
+        var index = model.Tokens.ToList().FindIndex(candidate => candidate.Start == token.Start);
+        if (index < 2 || model.Tokens[index - 1].Kind != ClassifiedTokenKind.Dot) return false;
+        var receiver = model.Tokens[index - 2];
+        var receiverType = model.TypeOf(receiver);
+        if (receiver.Kind == ClassifiedTokenKind.RightParen)
+        {
+            var close = index - 2;
+            var open = FindOpeningParenthesis(model.Tokens, close);
+            if (open > 0) receiverType = model.TypeOf(model.Tokens[open - 1]);
+        }
+        if (!string.Equals(receiverType, "FileQuery", StringComparison.Ordinal)) return false;
+        return StandardLibrary.TryGetFileQueryMember($"FileQuery.{token.Text}", out function);
+    }
+
+    private static int FindOpeningParenthesis(IReadOnlyList<ClassifiedToken> tokens, int close)
+    {
+        var depth = 0;
+        for (var index = close; index >= 0; index--)
+        {
+            if (tokens[index].Kind == ClassifiedTokenKind.RightParen) depth++;
+            else if (tokens[index].Kind == ClassifiedTokenKind.LeftParen && --depth == 0) return index;
+        }
+        return -1;
     }
 
     private static string BuiltInHoverText(StandardLibraryFunction function, bool omitImplicitReceiver)
@@ -910,7 +938,9 @@ internal sealed class SushiLanguageServer
         if (symbol is null || symbol.Kind is not (SushiSymbolKind.Function or SushiSymbolKind.Method))
             symbol = model.Symbols.FirstOrDefault(candidate => candidate.Name == name.Text && candidate.Kind is SushiSymbolKind.Function or SushiSymbolKind.Method);
 
-        var signature = symbol is null ? BuiltInSignature(CallName(model.Tokens, open, name)) : SignatureFor(model, symbol);
+        var signature = TryGetFileQueryMember(model, name, out var fileQueryMember)
+            ? BuiltInSignature(fileQueryMember.Name)
+            : symbol is null ? BuiltInSignature(CallName(model.Tokens, open, name)) : SignatureFor(model, symbol);
         if (signature is null) return null;
         var activeParameter = ActiveParameter(model.Tokens, open, offset);
         return new

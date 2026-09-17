@@ -11,16 +11,23 @@ using Sushi.Transpilation.IR;
 public sealed class StandardLibraryCatalog
 {
     private readonly Dictionary<string, StandardLibraryFunction> _functions;
+    private readonly Dictionary<string, StandardLibraryFunction> _fileQueryMembers;
 
-    private StandardLibraryCatalog(IEnumerable<StandardLibraryFunction> functions)
+    private StandardLibraryCatalog(IEnumerable<StandardLibraryFunction> functions, IEnumerable<StandardLibraryFunction>? fileQueryMembers = null)
     {
         _functions = functions.ToDictionary(function => function.Name, StringComparer.Ordinal);
+        _fileQueryMembers = (fileQueryMembers ?? Array.Empty<StandardLibraryFunction>())
+            .ToDictionary(function => function.Name, StringComparer.Ordinal);
     }
 
     public IReadOnlyCollection<StandardLibraryFunction> Functions => _functions.Values;
+    public IReadOnlyCollection<StandardLibraryFunction> FileQueryMembers => _fileQueryMembers.Values;
 
     public bool TryGetFunction(string name, out StandardLibraryFunction function) =>
         _functions.TryGetValue(name, out function!);
+
+    public bool TryGetFileQueryMember(string name, out StandardLibraryFunction function) =>
+        _fileQueryMembers.TryGetValue(name, out function!);
 
     public static StandardLibraryCatalog CreateDefault()
     {
@@ -35,6 +42,18 @@ public sealed class StandardLibraryCatalog
             DisplayType(signature.ReturnType),
             StandardLibraryDocumentation.For(signature.CanonicalName)));
 
+        var fileQueryMembers = new[]
+        {
+            new StandardLibraryFunction("FileQuery.recursive", [], "FileQuery", StandardLibraryDocumentation.For("FileQuery.recursive")),
+            new StandardLibraryFunction("FileQuery.matching", [new StandardLibraryParameter("string", "pattern", false, false, null)], "FileQuery", StandardLibraryDocumentation.For("FileQuery.matching")),
+            new StandardLibraryFunction("FileQuery.excluding", [new StandardLibraryParameter("string", "pattern", false, false, null)], "FileQuery", StandardLibraryDocumentation.For("FileQuery.excluding")),
+            new StandardLibraryFunction("FileQuery.includingHidden", [], "FileQuery", StandardLibraryDocumentation.For("FileQuery.includingHidden")),
+            new StandardLibraryFunction("FileQuery.hidden", [], "FileQuery", StandardLibraryDocumentation.For("FileQuery.hidden")),
+            new StandardLibraryFunction("FileQuery.files", [], "string[]", StandardLibraryDocumentation.For("FileQuery.files")),
+            new StandardLibraryFunction("FileQuery.directories", [], "string[]", StandardLibraryDocumentation.For("FileQuery.directories")),
+            new StandardLibraryFunction("FileQuery.entries", [], "string[]", StandardLibraryDocumentation.For("FileQuery.entries"))
+        };
+
         return new StandardLibraryCatalog(intrinsicFunctions
             .Append(new StandardLibraryFunction(
                 "std.fs.query",
@@ -45,7 +64,7 @@ public sealed class StandardLibraryCatalog
                 "string",
                 [new StandardLibraryParameter("object", "value", false, false, null)],
                 "string",
-                StandardLibraryDocumentation.For("string"))));
+                StandardLibraryDocumentation.For("string"))), fileQueryMembers);
     }
 
     private static string DisplayType(IrTypeRef type)
