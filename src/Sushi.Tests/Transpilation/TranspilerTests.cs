@@ -484,6 +484,58 @@ public class TranspilerTests
         }
     }
 
+    [Theory]
+    [InlineData(TargetLanguage.Bash, "bash", ".sh")]
+    [InlineData(TargetLanguage.Zsh, "zsh", ".zsh")]
+    [InlineData(TargetLanguage.Powershell51, "pwsh", ".ps1")]
+    public void Transpile_ArrayNegativeIndexesAndSlices_UseSharedSemantics(TargetLanguage target, string shell, string extension)
+    {
+        const string source = """
+            string[] items = ["s", "u", "s", "h", "i"]
+            println(items[-1])
+            string[] middle = items[-3:-1]
+            for (string item : middle) { print(item) }
+            println()
+            string[] prefix = items[:-1]
+            for (string item : prefix) { print(item) }
+            println()
+            string[] all = items[-99:]
+            for (string item : all) { print(item) }
+            println()
+            """;
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "negative-array-index.sushi",
+            TargetLanguage = target
+        });
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+
+        var path = Path.Combine(Path.GetTempPath(), $"sushi-negative-array-index-{Guid.NewGuid():N}{extension}");
+        try
+        {
+            File.WriteAllText(path, result.EmittedCode);
+            var startInfo = target == TargetLanguage.Powershell51
+                ? new ProcessStartInfo(shell, $"-NoProfile -File \"{path}\"")
+                : new ProcessStartInfo(shell, path);
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            startInfo.UseShellExecute = false;
+            using var process = Process.Start(startInfo);
+            Assert.NotNull(process);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 0, error);
+            Assert.Equal("i\nsh\nsush\nsushi", output.Replace("\r\n", "\n").Trim());
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     [Fact]
     public void Transpile_UserFunction_MissingRequiredArgument_Fails()
     {

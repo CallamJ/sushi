@@ -300,13 +300,15 @@ public sealed partial class PowerShellEmitter
         var isArray = targetExpression is IrIdentifierExpression identifier &&
                       _arrayInitializers.ContainsKey(SanitizeName(identifier.Name));
         if (isArray)
-        {
-            if (endExpression == null)
-                return "@(" + target + ")[([int]" + start + ")..($(@(" + target + ").Count) - 1)]";
-            var arrayEnd = EmitValueExpression(endExpression);
-            return "@(" + target + ")[([int]" + start + ")..([int](" + arrayEnd + ") - 1)]";
-        }
+            return EmitNativeArraySlice(target, startExpression, endExpression);
         return EmitNativeStringSlice(targetExpression, startExpression, endExpression);
+    }
+
+    private string EmitNativeArraySlice(string target, IrExpression? startExpression, IrExpression? endExpression)
+    {
+        var start = startExpression == null ? "$null" : EmitValueExpression(startExpression);
+        var end = endExpression == null ? "$null" : EmitValueExpression(endExpression);
+        return $"@(& {{ param([object[]]$items, $start, $end) if ($null -eq $start) {{ $start = 0 }} else {{ $start = [int]$start }}; if ($null -eq $end) {{ $end = $items.Count }} else {{ $end = [int]$end }}; if ($start -lt 0) {{ $start += $items.Count }}; if ($end -lt 0) {{ $end += $items.Count }}; $start = [Math]::Min($items.Count, [Math]::Max(0, $start)); $end = [Math]::Min($items.Count, [Math]::Max(0, $end)); if ($end -le $start) {{ return @() }}; $items[$start..($end - 1)] }} @({target}) {start} {end})";
     }
 
     private string EmitNativeStringIndex(IrIndexExpression index)

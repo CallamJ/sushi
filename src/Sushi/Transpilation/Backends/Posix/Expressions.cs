@@ -96,13 +96,7 @@ public sealed partial class PosixEmitter
                 var isArray = _nativeArrayVariables.ContainsKey(targetName);
                 if (!isArray)
                     return PrepareNativeStringSlice(targetName, slice, inFunction);
-                var targetReference = isArray ? $"{targetName}[@]" : targetName;
-                var startText = slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start);
-                if (slice.End == null)
-                    return $"\"${{{targetReference}:{startText}}}\"";
-                var endText = EmitNativeSliceBound(slice.End);
-                var lengthText = startText == "0" ? endText : $"({endText} - {startText})";
-                return $"\"${{{targetReference}:{startText}:{lengthText}}}\"";
+                return PrepareNativeArraySlice(targetName, slice, inFunction);
             }
 
             case IrIndexExpression index when IsStringExpression(index.Target):
@@ -1032,13 +1026,7 @@ public sealed partial class PosixEmitter
             var stringTarget = targetName ?? DeclareTemp(EmitValueExpression(slice.Target), _currentFunctionName != null);
             return PrepareNativeStringSlice(stringTarget, slice, _currentFunctionName != null);
         }
-        var targetReference = isArray ? $"{targetName}[@]" : target;
-        var start = slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start);
-        if (slice.End == null)
-            return $"\"${{{targetReference}:{start}}}\"";
-        var end = EmitNativeSliceBound(slice.End);
-        var length = start == "0" ? end : $"({end} - {start})";
-        return $"\"${{{targetReference}:{start}:{length}}}\"";
+        return PrepareNativeArraySlice(targetName!, slice, _currentFunctionName != null);
     }
 
     private string EmitNativeIndexValue(IrIndexExpression index)
@@ -1091,6 +1079,20 @@ public sealed partial class PosixEmitter
         WriteLine($"if (( {end} < {start} )); then {end}={start}; fi");
         var sliceLength = DeclareTemp($"$(( {end} - {start} ))", inFunction);
         return $"\"${{{target}:{start}:{sliceLength}}}\"";
+    }
+
+    private string PrepareNativeArraySlice(string target, IrSliceExpression slice, bool inFunction)
+    {
+        var start = DeclareTemp(slice.Start == null ? "0" : EmitNativeSliceBound(slice.Start), inFunction);
+        var end = DeclareTemp(slice.End == null ? $"${{#{target}[@]}}" : EmitNativeSliceBound(slice.End), inFunction);
+        var length = $"${{#{target}[@]}}";
+        WriteLine($"if (( {start} < 0 )); then {start}=$(( {length} + {start} )); fi");
+        WriteLine($"if (( {end} < 0 )); then {end}=$(( {length} + {end} )); fi");
+        WriteLine($"if (( {start} < 0 )); then {start}=0; elif (( {start} > {length} )); then {start}={length}; fi");
+        WriteLine($"if (( {end} < 0 )); then {end}=0; elif (( {end} > {length} )); then {end}={length}; fi");
+        WriteLine($"if (( {end} < {start} )); then {end}={start}; fi");
+        var sliceLength = DeclareTemp($"$(( {end} - {start} ))", inFunction);
+        return $"\"${{{target}[@]:{start}:{sliceLength}}}\"";
     }
 
     private static bool IsStringExpression(IrExpression expression) => expression switch

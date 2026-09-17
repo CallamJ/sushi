@@ -129,6 +129,18 @@ public sealed partial class PosixEmitter
                     _recordVariables.Remove(name);
                     break;
                 }
+                if (initializer is IrSliceExpression slice &&
+                    slice.Target is IrIdentifierExpression sliceTarget &&
+                    _nativeArrayVariables.ContainsKey(SanitizeVariableName(sliceTarget.Name)))
+                {
+                    var values = PrepareNativeArraySlice(SanitizeVariableName(sliceTarget.Name), slice, inFunction);
+                    WriteLine($"{(inFunction ? "local " : "declare ")}-a {name}=({values})");
+                    _nativeArrayVariables[name] = name;
+                    _arrayInitializers.Remove(name);
+                    _nativeObjectVariables.Remove(name);
+                    _recordVariables.Remove(name);
+                    break;
+                }
                 if (initializer is IrArrayLiteralExpression array)
                 {
                     var values = array.Elements.Any(element => element is IrObjectLiteralExpression)
