@@ -294,4 +294,13 @@ jobs:
         run: |
           tag="${{ inputs.release_tag || github.ref_name }}"
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Sushi $tag"
-          find artifacts -type f -print0 | xargs -0 gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber
+          rm -rf release-assets
+          mkdir -p release-assets
+          while IFS= read -r -d '' asset; do
+            relative="${asset#artifacts/}"
+            artifact="${relative%%/*}"
+            filename="${relative#*/}"
+            filename="${filename//\//_}"
+            cp "$asset" "release-assets/${artifact}-${filename}"
+          done < <(find artifacts -type f -print0)
+          find release-assets -type f -print0 | xargs -0 gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber
