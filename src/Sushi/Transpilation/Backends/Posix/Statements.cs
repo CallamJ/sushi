@@ -237,8 +237,7 @@ public sealed partial class PosixEmitter
                 break;
 
             case IrFunctionDeclarationStatement function:
-                EmitGeneratedFunctionComment(function);
-                EmitFunctionDeclaration(function);
+                EmitFunctionDeclaration(function, EmitGeneratedFunctionComment(function));
                 break;
 
             case IrReturnStatement returnStatement:
@@ -405,9 +404,10 @@ public sealed partial class PosixEmitter
         WriteLine("done");
     }
 
-    private void EmitFunctionDeclaration(IrFunctionDeclarationStatement statement)
+    private void EmitFunctionDeclaration(IrFunctionDeclarationStatement statement, string? headerComment = null)
     {
-        WriteLine($"{SanitizeFunctionName(statement.Name)}() {{");
+        var suffix = string.IsNullOrEmpty(headerComment) ? string.Empty : $" # {headerComment}";
+        WriteLine($"{SanitizeFunctionName(statement.Name)}() {{{suffix}");
         _indent++;
 
         var previousFunctionName = _currentFunctionName;
@@ -446,29 +446,31 @@ public sealed partial class PosixEmitter
         var mutatesReceiver = FunctionMutatesReceiver(statement.Body);
         var returnsObject = !isConstructor && IsNamedObjectType(statement.ReturnType);
         var argIndex = _currentFunctionReturnsValue ? 2 : 1;
+        var parameterBindings = new List<string>();
+        var parameterContracts = new List<(IrTypeRef Type, string Value, string Description)>();
         if (isConstructor)
         {
             if (_dialect.IsZsh)
             {
-                WriteLine("local this_name=\"$1\"");
-                WriteLine("local -A this=()");
+                parameterBindings.Add("local this_name=\"$1\"");
+                parameterBindings.Add("local -A this=()");
             }
             else
             {
-                WriteLine("local -n this=\"$1\"");
+                parameterBindings.Add("local -n this=\"$1\"");
             }
             _nativeObjectVariables.Add("this");
         }
         else if (returnsObject)
         {
             if (_dialect.IsZsh)
-                WriteLine($"local {_currentOutputName}=\"$1\"");
+                parameterBindings.Add($"local {_currentOutputName}=\"$1\"");
             else
-                WriteLine($"local -n {_currentOutputName}=\"$1\"");
+                parameterBindings.Add($"local -n {_currentOutputName}=\"$1\"");
         }
         else if (_currentFunctionReturnsValue)
         {
-            WriteLine(_dialect.IsZsh
+            parameterBindings.Add(_dialect.IsZsh
                 ? $"local {_currentOutputName}=\"$1\""
                 : $"local -n {_currentOutputName}=\"$1\"");
         }
@@ -483,7 +485,7 @@ public sealed partial class PosixEmitter
             }
             if (parameter.IsVarargs)
             {
-                WriteLine($"local -a {param}=(\"${{@:{argIndex}}}\")");
+                parameterBindings.Add($"local -a {param}=(\"${{@:{argIndex}}}\")");
                 _nativeArrayVariables[param] = param;
                 if (parameter.DeclaredType.Name == "int") _integerArrayVariables.Add(param);
             }
@@ -495,7 +497,7 @@ public sealed partial class PosixEmitter
                     {
                         var fieldName = $"{param}_{SanitizeVariableName(field.Name)}";
                         var prefix = field.Type.Name == "int" ? "local -i " : "local ";
-                        WriteLine($"{prefix}{fieldName}=\"${argIndex}\"");
+                        parameterBindings.Add($"{prefix}{fieldName}=\"${argIndex}\"");
                         argIndex++;
                     }
                     _recordVariables.Add(param);
@@ -506,33 +508,33 @@ public sealed partial class PosixEmitter
                     if (_dialect.IsZsh)
                     {
                         var referenceName = $"{param}_name";
-                        WriteLine($"local {referenceName}=\"${argIndex}\"");
+                        parameterBindings.Add($"local {referenceName}=\"${argIndex}\"");
                         _zshObjectParameterNames[param] = referenceName;
                         if (parameter.Name == "this" && !mutatesReceiver)
                             _zshReadOnlyObjectParameters.Add(param);
                         else
-                            WriteLine($"local -A {param}=( \"${{(@kvP){referenceName}}}\" )");
+                            parameterBindings.Add($"local -A {param}=( \"${{(@kvP){referenceName}}}\" )");
                     }
                     else
                     {
-                        WriteLine($"local -n {param}=\"${argIndex}\"");
+                        parameterBindings.Add($"local -n {param}=\"${argIndex}\"");
                     }
                     if (parameter.DeclaredType.Name == "array") _nativeArrayVariables[param] = param;
                     else if (!_zshReadOnlyObjectParameters.Contains(param)) _nativeObjectVariables.Add(param);
                 }
                 else if (parameter.DeclaredType.Name == "int")
                 {
-                    WriteLine($"local -i {param}=\"${argIndex}\"");
+                    parameterBindings.Add($"local -i {param}=\"${argIndex}\"");
                 }
                 else
                 {
-                    WriteLine($"local {param}=\"${argIndex}\"");
+                    parameterBindings.Add($"local {param}=\"${argIndex}\"");
                 }
                 argIndex++;
-                EmitContractCheckForValue(
+                parameterContracts.Add((
                     parameter.DeclaredType,
                     $"\"${{{param}:-}}\"",
-                    $"parameter '{parameter.Name}' of function '{statement.Name}'");
+                    $"parameter '{parameter.Name}' of function '{statement.Name}'"));
             }
 
             if (parameter.DeclaredType.Kind == IrTypeKind.Primitive &&
@@ -546,6 +548,11 @@ public sealed partial class PosixEmitter
                 _knownFloatVariables.Add(param);
             }
         }
+
+        if (parameterBindings.Count > 0)
+            WriteLine(string.Join("; ", parameterBindings));
+        foreach (var contract in parameterContracts)
+            EmitContractCheckForValue(contract.Type, contract.Value, contract.Description);
 
         EmitStatement(statement.Body, inFunction: true);
         if (!EndsWithReturn(statement.Body))
@@ -573,14 +580,14 @@ public sealed partial class PosixEmitter
         WriteLine("}");
     }
 
-    private void EmitGeneratedFunctionComment(IrFunctionDeclarationStatement function)
+    private string EmitGeneratedFunctionComment(IrFunctionDeclarationStatement function)
     {
         var name = function.Name;
         var isTypeMember = function.Role is IrFunctionRole.Method or IrFunctionRole.Constructor or IrFunctionRole.Adapter;
         var parameters = string.Join(", ", function.Parameters
             .Where(parameter => parameter.Name != "this" &&
                                 !parameter.Name.StartsWith("__sushi_enum_field_", StringComparison.Ordinal))
-            .Select(parameter => parameter.IsVarargs ? $"{parameter.Name}..." : parameter.Name));
+            .Select(parameter => $"{FormatCommentType(parameter.DeclaredType)} {parameter.Name}{(parameter.IsVarargs ? "..." : string.Empty)}"));
         var ownerType = function.OwnerTypeId?.StartsWith("type:", StringComparison.Ordinal) == true
             ? function.OwnerTypeId["type:".Length..]
             : null;
@@ -591,13 +598,13 @@ public sealed partial class PosixEmitter
             IrFunctionRole.Constructor when name.StartsWith("__sushi_new_", StringComparison.Ordinal) => ownerType ?? name["__sushi_new_".Length..],
             _ => name
         };
-        var signature = $"{displayName}({parameters})";
-        var label = function.Role switch
+        var signature = $"{FormatCommentType(function.ReturnType)} {displayName}({parameters})";
+        var headerSignature = function.Role switch
         {
-            IrFunctionRole.Method => $"method: {displayName}({parameters})",
+            IrFunctionRole.Method => signature,
             IrFunctionRole.Constructor => $"constructor: {displayName}({parameters})",
-            IrFunctionRole.Adapter => $"adapter: {displayName}({parameters})",
-            _ => $"function: {signature}"
+            IrFunctionRole.Adapter => signature,
+            _ => signature
         };
         if (isTypeMember)
         {
@@ -609,15 +616,20 @@ public sealed partial class PosixEmitter
                 WriteLine($"# --- {kind}: {type} ---");
             }
         }
-        WriteLine("");
-        if (isTypeMember)
+        return headerSignature;
+    }
+
+    private static string FormatCommentType(IrTypeRef type)
+    {
+        if (type.ElementType != null)
+            return $"{FormatCommentType(type.ElementType)}[]";
+        return type.Kind switch
         {
-            WriteLine($"# {label}");
-        }
-        else
-        {
-            WriteLine($"# {label}");
-        }
+            IrTypeKind.Any => "any",
+            IrTypeKind.Unknown => "unknown",
+            IrTypeKind.Structural => "object",
+            _ => type.Name ?? "unknown"
+        };
     }
 
     private static bool IsTypeMemberFunction(string name) =>
