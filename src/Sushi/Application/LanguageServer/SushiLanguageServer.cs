@@ -696,6 +696,9 @@ internal sealed class SushiLanguageServer
             _ => $"{symbol.Kind.ToString().ToLowerInvariant()} {symbol.Name}"
         };
         signature = DeclarationWithInitializer(model, symbol) ?? signature;
+        var inferredType = InferredTypeForVariable(model, symbol);
+        if (inferredType is not null)
+            signature = SignatureWithInferredType(signature, inferredType);
         var documentation = symbol.Documentation;
         if (documentation is null && symbol.Kind == SushiSymbolKind.Parameter)
             documentation = model.Symbols
@@ -705,8 +708,17 @@ internal sealed class SushiLanguageServer
         var parameterDocumentation = symbol.Kind == SushiSymbolKind.Parameter
             ? documentation?.ParameterDocumentation(symbol.Name)
             : null;
-        return SushiCode(signature) + DocumentationMarkdown(documentation) +
+        return SushiCode(signature) +
+               DocumentationMarkdown(documentation) +
                (String.IsNullOrWhiteSpace(parameterDocumentation) ? "" : $"\n\n**Parameter:** {RenderDocumentation(parameterDocumentation)}");
+    }
+
+    private static string SignatureWithInferredType(string signature, string inferredType)
+    {
+        const string inferredDeclarationPrefix = "var ";
+        return !signature.StartsWith(inferredDeclarationPrefix, StringComparison.Ordinal)
+            ? signature
+            : inferredType + " " + signature[inferredDeclarationPrefix.Length..];
     }
 
     private static string ParameterSignature(SushiSemanticModel model, SushiSymbol symbol)
@@ -999,22 +1011,75 @@ internal sealed class SushiLanguageServer
         var document = Document(parameters);
         var model = _semanticWorkspace.Analyze(document.Uri, document.Text);
         var hints = new List<object>();
-        for (var index = 0; index + 2 < model.Tokens.Count; index++)
+        foreach (var symbol in model.Symbols)
         {
-            if (!model.Tokens[index].IsKeyword("var") || model.Tokens[index + 1].Kind != ClassifiedTokenKind.Identifier || !model.Tokens[index + 2].IsOperator("=")) continue;
-            var initializer = index + 3 < model.Tokens.Count ? model.Tokens[index + 3] : null;
-            var type = initializer?.Kind switch
-            {
-                ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString => "string",
-                ClassifiedTokenKind.IntegerLiteral => "int",
-                ClassifiedTokenKind.FloatLiteral => "float",
-                _ => null
-            };
+            var type = InferredTypeForVariable(model, symbol);
             if (type is null) continue;
-            var position = Position(document.Text, model.Tokens[index + 1].End);
+            // Keep the source spelling as `var`, then show its inferred type
+            // before the declaration name.
+            var varToken = model.Tokens[symbol.DeclarationIndex - 1];
+            var position = Position(document.Text, varToken.End);
             hints.Add(new { position, label = $": {type}", kind = 1, paddingLeft = true });
         }
         return hints;
+    }
+
+    private static string? InferredTypeForVariable(SushiSemanticModel model, SushiSymbol symbol)
+    {
+        if (symbol.Kind is not (SushiSymbolKind.Variable or SushiSymbolKind.Field)) return null;
+        var nameIndex = symbol.DeclarationIndex;
+        if (nameIndex < 1 || !model.Tokens[nameIndex - 1].IsKeyword("var") ||
+            nameIndex + 2 >= model.Tokens.Count || !model.Tokens[nameIndex + 1].IsOperator("=")) return null;
+        return InferredExpressionType(model, nameIndex + 2);
+    }
+
+    private static string? InferredExpressionType(SushiSemanticModel model, int start)
+    {
+        if (start >= model.Tokens.Count) return null;
+        var token = model.Tokens[start];
+        if (token.Kind is ClassifiedTokenKind.StringLiteral or ClassifiedTokenKind.InterpolatedString) return "string";
+        if (token.Kind == ClassifiedTokenKind.IntegerLiteral) return "int";
+        if (token.Kind == ClassifiedTokenKind.FloatLiteral) return "float";
+        if (token.IsKeyword("true") || token.IsKeyword("false")) return "bool";
+        if (token.IsKeyword("new") && start + 1 < model.Tokens.Count && model.Tokens[start + 1].Kind == ClassifiedTokenKind.Identifier)
+            return model.Tokens[start + 1].Text;
+        if (token.Kind == ClassifiedTokenKind.LeftBracket)
+        {
+            var element = start + 1 < model.Tokens.Count ? InferredExpressionType(model, start + 1) : null;
+            return element is null or "any" ? null : element + "[]";
+        }
+
+        var callee = LastCalleeToken(model, start);
+        if (callee is not null)
+        {
+            var qualified = model.QualifiedNameAt(callee);
+            if (StandardLibrary.TryGetFunction(qualified, out var builtIn) && builtIn.ReturnType is not "any" and not "void")
+                return builtIn.ReturnType;
+            if (TryGetStringSugarFunction(model, callee, out var stringMethod) && stringMethod.ReturnType is not "any" and not "void")
+                return stringMethod.ReturnType;
+            var callable = model.SymbolFor(callee);
+            var returnType = callable is null ? null : model.ReturnTypeOf(callable);
+            if (returnType is not null and not "any" and not "void") return returnType;
+        }
+
+        var type = model.TypeOf(token);
+        return type is null or "any" or "void" ? null : type;
+    }
+
+    private static ClassifiedToken? LastCalleeToken(SushiSemanticModel model, int start)
+    {
+        var cursor = start;
+        if (cursor >= model.Tokens.Count || model.Tokens[cursor].Kind != ClassifiedTokenKind.Identifier) return null;
+        var callee = model.Tokens[cursor];
+        while (cursor + 2 < model.Tokens.Count && model.Tokens[cursor + 1].Kind == ClassifiedTokenKind.Dot &&
+               model.Tokens[cursor + 2].Kind == ClassifiedTokenKind.Identifier)
+        {
+            cursor += 2;
+            callee = model.Tokens[cursor];
+        }
+        return cursor + 1 < model.Tokens.Count && model.Tokens[cursor + 1].Kind == ClassifiedTokenKind.LeftParen
+            ? callee
+            : null;
     }
 
     private object FormattingEdits(JsonElement parameters)

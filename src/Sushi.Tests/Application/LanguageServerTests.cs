@@ -194,6 +194,24 @@ public sealed class LanguageServerTests
     }
 
     [Fact]
+    public async Task Server_ShowsInferredTypeHintsAndKeepsVarInVariableHover()
+    {
+        const string source = "class File {}\nvar filey = new File(\"path\", \"type\")";
+        var input = new MemoryStream(Encoding.UTF8.GetBytes(
+            Frame($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///tmp/inferred-file.sushi\",\"version\":1,\"text\":{JsonString(source)}}}}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":62,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/inferred-file.sushi\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":1,\"character\":40}}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"id\":63,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///tmp/inferred-file.sushi\"},\"position\":{\"line\":1,\"character\":5}}}") +
+            Frame("{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}")));
+        var output = new MemoryStream();
+
+        await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
+
+        var wire = Encoding.UTF8.GetString(output.ToArray());
+        Assert.Contains("\"id\":62,\"result\":[{\"position\":{\"line\":1,\"character\":3},\"label\":\": File\"", wire);
+        Assert.Contains("File filey = new File", wire);
+    }
+
+    [Fact]
     public async Task Server_DoesNotTreatBuiltInTypesAsConversionFunctionsInHover()
     {
         const string source = "class Settings { string dee = \"hello\", d2 = \"hi\" }";
@@ -438,7 +456,7 @@ public sealed class LanguageServerTests
         Assert.Contains("\"id\":24,\"result\":{\"signatures\":[{\"label\":\"println(object value = \\u0022\\u0022)\"", wire);
         Assert.Contains("\"id\":25,\"result\":{\"signatures\":[{\"label\":\"std.fs.readText(string path)\"", wire);
         Assert.Contains("\"id\":18,\"result\":[{\"startLine\":0", wire);
-        Assert.Contains("\"id\":19,\"result\":[{\"position\":{\"line\":3,\"character\":9},\"label\":\": int\"", wire);
+        Assert.Contains("\"id\":19,\"result\":[{\"position\":{\"line\":3,\"character\":3},\"label\":\": int\"", wire);
         Assert.Contains("\"id\":20,\"result\":[{\"name\":\"greet\"", wire);
     }
 
@@ -522,7 +540,7 @@ public sealed class LanguageServerTests
         await new SushiLanguageServer(input, output, TextWriter.Null).RunAsync(TestContext.Current.CancellationToken);
 
         var wire = Encoding.UTF8.GetString(output.ToArray());
-        Assert.Contains("var answer = 40 \\u002B 2", wire);
+        Assert.Contains("int answer = 40 \\u002B 2", wire);
         Assert.Contains("string label = \\u0022first\\u0022 \\u002B\\n        \\u0022 second\\u0022", wire);
     }
 
