@@ -442,6 +442,45 @@ public class TranspilerTests
         Assert.Equal(16, diagnostic.Span.Column);
     }
 
+    [Fact]
+    public void Transpile_PowerShellDirectorySize_EmptyDirectoryIsZero()
+    {
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = "use std.fs.directorySize\nprintln(directorySize(\"empty\", recursive: true))",
+            SourcePath = "empty-directory-size.sushi",
+            TargetLanguage = TargetLanguage.Powershell51
+        });
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+
+        var root = Path.Combine(Path.GetTempPath(), $"sushi-empty-directory-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.Combine(root, "empty"));
+        var path = Path.Combine(root, "program.ps1");
+        try
+        {
+            File.WriteAllText(path, result.EmittedCode);
+            using var process = Process.Start(new ProcessStartInfo("pwsh", $"-NoProfile -File \"{path}\"")
+            {
+                WorkingDirectory = root,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            });
+            Assert.NotNull(process);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 0, error);
+            Assert.Equal("0", output.Trim());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(TargetLanguage.Bash, "bash", ".sh")]
     [InlineData(TargetLanguage.Zsh, "zsh", ".zsh")]
@@ -869,6 +908,99 @@ public class TranspilerTests
         Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
         Assert.Contains("[string] getPath()", result.EmittedCode);
         Assert.DoesNotContain("[object] getPath()", result.EmittedCode);
+    }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash, "bash")]
+    [InlineData(TargetLanguage.Zsh, "zsh")]
+    public void Transpile_PosixFloatConditionAndStringConcatenation_UsesTypedLowering(TargetLanguage target, string shell)
+    {
+        const string source = """
+            use std.math.round
+            string label(float size) {
+                while (size >= 1000.0) {
+                    size /= 1000.0
+                }
+                return round(size, precision: 2) + " KB"
+            }
+            string amount = "1719KB"
+            amount = amount[:amount.length() - 2]
+            println(label(float(amount)))
+            """;
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "float-condition-and-string.sushi",
+            TargetLanguage = target
+        });
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+
+        var path = Path.Combine(Path.GetTempPath(), $"sushi-float-condition-{Guid.NewGuid():N}.sh");
+        try
+        {
+            File.WriteAllText(path, result.EmittedCode);
+            using var process = Process.Start(new ProcessStartInfo(shell, path)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            });
+            Assert.NotNull(process);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 0, error);
+            Assert.Equal("1.72 KB", output.Trim());
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash, "bash")]
+    [InlineData(TargetLanguage.Zsh, "zsh")]
+    public void Transpile_PosixStringCompoundAssignment_Concatenates(TargetLanguage target, string shell)
+    {
+        const string source = """
+            string message = ""
+            message += "sushi"
+            message += " rocks"
+            println(message)
+            """;
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "string-compound-assignment.sushi",
+            TargetLanguage = target
+        });
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        Assert.DoesNotContain("message=$((", result.EmittedCode);
+
+        var path = Path.Combine(Path.GetTempPath(), $"sushi-string-compound-{Guid.NewGuid():N}.sh");
+        try
+        {
+            File.WriteAllText(path, result.EmittedCode);
+            using var process = Process.Start(new ProcessStartInfo(shell, path)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            });
+            Assert.NotNull(process);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 0, error);
+            Assert.Equal("sushi rocks", output.Trim());
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     [Theory]

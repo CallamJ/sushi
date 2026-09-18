@@ -136,7 +136,7 @@ public sealed partial class PosixEmitter
     {
         if (id == IntrinsicId.MathRound)
         {
-            return $"LC_ALL=C awk -v value={Arg(arguments, 0)} -v precision={Arg(arguments, 1)} 'BEGIN {{ scale = 10 ^ precision; result = int(value * scale + (value < 0 ? -0.5 : 0.5)) / scale; if (result == 0) result = 0; printf \"%.17g\", result }}'";
+            return $"LC_ALL=C awk -v value={Arg(arguments, 0)} -v precision={Arg(arguments, 1)} 'BEGIN {{ precision = int(precision); if (precision < 0) exit 2; scale = 10 ^ precision; result = int(value * scale + (value < 0 ? -0.5 : 0.5)) / scale; if (result == 0) result = 0; printf \"%.*f\", precision, result }}'";
         }
 
         var operation = id switch

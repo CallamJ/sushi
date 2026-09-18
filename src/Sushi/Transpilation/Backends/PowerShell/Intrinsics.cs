@@ -284,12 +284,16 @@ public sealed partial class PowerShellEmitter
     {
         var path = Arg(arguments, 0);
         var recursive = arguments[1];
-        var recursiveEnumeration = $"Get-ChildItem -LiteralPath {path} -Force -File -Recurse";
-        var shallowEnumeration = $"Get-ChildItem -LiteralPath {path} -Force -File";
+        var recursiveEnumeration = "Get-ChildItem -LiteralPath $directory -Force -File -Recurse";
+        var shallowEnumeration = "Get-ChildItem -LiteralPath $directory -Force -File";
         var enumeration = recursive is IrLiteralExpression { Value: true } ? recursiveEnumeration
             : recursive is IrLiteralExpression { Value: false } ? shallowEnumeration
             : $"$(if ([bool]({Arg(arguments, 1)})) {{ {recursiveEnumeration} }} else {{ {shallowEnumeration} }})";
-        return $"([int64]$(if (!(Test-Path -LiteralPath {path} -PathType Container)) {{ throw 'std.fs.directorySize: directory required' }}; ({enumeration} | Measure-Object -Property Length -Sum).Sum))";
+
+        // Measure-Object may emit no record for an empty pipeline.  Under
+        // StrictMode, accessing `.Sum` on that null result throws, so collect
+        // it first and make an empty directory explicitly measure as zero.
+        return $"$(& {{ param($directory) if (!(Test-Path -LiteralPath $directory -PathType Container)) {{ throw 'std.fs.directorySize: directory required' }}; $measure = @({enumeration} | Measure-Object -Property Length -Sum); if ($measure.Count -eq 0 -or $null -eq $measure[0].Sum) {{ [int64]0 }} else {{ [int64]$measure[0].Sum }} }} {path})";
     }
 
     private string EmitFsCreateDirectory(IReadOnlyList<IrExpression> arguments) =>

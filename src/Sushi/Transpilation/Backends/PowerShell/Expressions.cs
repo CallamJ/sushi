@@ -183,6 +183,8 @@ public sealed partial class PowerShellEmitter
             IrConditionalExpression conditional when conditional.IsSwitchExpression => EmitSwitchExpression(conditional),
             IrConditionalExpression conditional =>
                 $"$(if ({EmitConditionExpression(conditional.Condition)}) {{ {EmitValueExpression(conditional.TrueExpression)} }} else {{ {EmitValueExpression(conditional.FalseExpression)} }})",
+            IrBinaryExpression binary when binary.Operator == "+" && IsStringExpression(binary) =>
+                $"([string]({EmitValueExpression(binary.Left)}) + [string]({EmitValueExpression(binary.Right)}))",
             IrBinaryExpression binary when binary.Operator == "+" =>
                 $"({EmitValueExpression(binary.Left)} + {EmitValueExpression(binary.Right)})",
             IrBinaryExpression binary =>
@@ -339,6 +341,7 @@ public sealed partial class PowerShellEmitter
         IrLiteralExpression { Value: string } => true,
         IrMemberAccessExpression member => member.ValueType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true,
         IrIntrinsicCallExpression intrinsic => intrinsic.ReturnType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true,
+        IrBinaryExpression { Operator: "+" } binary => IsStringExpression(binary.Left) || IsStringExpression(binary.Right),
         _ => false
     };
 

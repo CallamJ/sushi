@@ -73,7 +73,7 @@ to native target enumeration at each terminal call; no Sushi glob helper is emit
 - Roots and patterns accept normal runtime string expressions.
 - Filters apply to entry names; recursion is explicit.
 - Hidden entries are excluded by default.
-- Results are root-relative with `/` separators and target-native ordering.
+- Results are relative to the query root: the root prefix is removed, paths are never absolute, and `/` is used as the separator. Ordering is target-native.
 - A missing or non-directory root is a runtime error.
 - Directory symlinks are not traversed.
 
