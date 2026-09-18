@@ -175,7 +175,8 @@ public sealed partial class PosixEmitter
     private string BuildFindCommand(FileQueryPlan plan, IrFileQueryEntryKind kind)
     {
         var parts = new List<string> { "find -P . -mindepth 1" };
-        if (!plan.Recursive) parts.Add("-prune");
+        if (!plan.Recursive) parts.Add("-maxdepth 1");
+        parts.Add("! -type l");
         if (kind == IrFileQueryEntryKind.Files) parts.Add("-type f");
         if (kind == IrFileQueryEntryKind.Directories) parts.Add("-type d");
         if (plan.Visibility == "visible") parts.Add("! -name '.*'");
@@ -278,6 +279,7 @@ public sealed partial class PosixEmitter
         // Portable find starts relative paths with './'. Normalize that small
         // presentation prefix while avoiding an absolute-path/base dance.
         WriteLine($"{prefix}_path=\"${{{prefix}_path#./}}\"");
+        WriteLine($"[[ -L \"${{{prefix}_path}}\" ]] && continue");
         WriteLine($"[[ {recursive} == true || \"${{{prefix}_path}}\" != */* ]] || continue");
         WriteLine($"{prefix}_entry=\"${{{prefix}_path##*/}}\"");
         if (execution.EntryKind == IrFileQueryEntryKind.Files) WriteLine($"[[ -f \"${{{prefix}_path}}\" ]] || continue");
@@ -327,4 +329,5 @@ public sealed partial class PosixEmitter
     private string FileQueryShellField(IrExpression query, string field) => query is IrIdentifierExpression identifier
         ? $"${{{SanitizeVariableName(identifier.Name)}[{field}]-}}"
         : FileQueryField(query, field);
+
 }

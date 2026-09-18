@@ -332,9 +332,16 @@ public sealed partial class PosixEmitter
 
     private string PrepareArithmetic(IrBinaryExpression binary, bool inFunction)
     {
-        if (binary.Operator == "+" && ContainsStringLiteral(binary) && TryEmitInlineString(binary, out var inlineString))
+        if (binary.Operator == "+" && IsStringExpression(binary))
         {
-            return $"\"{inlineString}\"";
+            if (TryEmitInlineString(binary, out var inlineString))
+                return $"\"{inlineString}\"";
+
+            var stringLeft = DeclareTemp(PrepareValue(binary.Left, inFunction), inFunction);
+            var stringRight = DeclareTemp(PrepareValue(binary.Right, inFunction), inFunction);
+            var stringResult = DeclareTemp("''", inFunction);
+            WriteLine($"{stringResult}=\"${{{stringLeft}-}}${{{stringRight}-}}\"");
+            return $"\"${{{stringResult}-}}\"";
         }
 
         if (CanEmitInlineInteger(binary))
@@ -423,14 +430,6 @@ public sealed partial class PosixEmitter
         return false;
     }
 
-    private static bool ContainsStringLiteral(IrExpression expression) => expression switch
-    {
-        IrLiteralExpression { Value: string or char } => true,
-        IrBinaryExpression { Operator: "+" } binary =>
-            ContainsStringLiteral(binary.Left) || ContainsStringLiteral(binary.Right),
-        _ => false
-    };
-
     private static string EscapePosixDoubleQuotedContent(string value) => value
         .Replace("\\", "\\\\", StringComparison.Ordinal)
         .Replace("\"", "\\\"", StringComparison.Ordinal)
@@ -482,6 +481,8 @@ public sealed partial class PosixEmitter
 
         if (expression is IrBinaryExpression comparison && comparison.Operator is "==" or "!=")
         {
+            if (UsesFloatingPointOperands(comparison))
+                return EmitAwkComparison(comparison);
             var left = PrepareValue(comparison.Left, inFunction);
             var right = PrepareValue(comparison.Right, inFunction);
             return $"[[ {left} {comparison.Operator} {right} ]]";
@@ -489,6 +490,8 @@ public sealed partial class PosixEmitter
 
         if (expression is IrBinaryExpression relational && relational.Operator is "<" or ">" or "<=" or ">=")
         {
+            if (UsesFloatingPointOperands(relational))
+                return EmitAwkComparison(relational);
             if (CanEmitInlineInteger(relational.Left) && CanEmitInlineInteger(relational.Right))
             {
                 return $"(( {EmitInlineInteger(relational.Left)} {relational.Operator} {EmitInlineInteger(relational.Right)} ))";
@@ -559,8 +562,8 @@ public sealed partial class PosixEmitter
             IrLiteralExpression { Value: false } => "false",
             IrIdentifierExpression identifier => $"[[ \"${{{SanitizeVariableName(identifier.Name)}:-}}\" == 'true' ]]",
             IrUnaryExpression { Operator: "!" } unary => $"! {PrepareBooleanCondition(unary.Operand, inFunction)}",
-            IrBinaryExpression { Operator: "&&" } binary => $"{PrepareBooleanCondition(binary.Left, inFunction)} && {PrepareBooleanCondition(binary.Right, inFunction)}",
-            IrBinaryExpression { Operator: "||" } binary => $"{PrepareBooleanCondition(binary.Left, inFunction)} || {PrepareBooleanCondition(binary.Right, inFunction)}",
+            IrBinaryExpression { Operator: "&&" } binary => $"( {PrepareBooleanCondition(binary.Left, inFunction)} && {PrepareBooleanCondition(binary.Right, inFunction)} )",
+            IrBinaryExpression { Operator: "||" } binary => $"( {PrepareBooleanCondition(binary.Left, inFunction)} || {PrepareBooleanCondition(binary.Right, inFunction)} )",
             IrBinaryExpression binary when binary.Operator is "==" or "!=" or "<" or ">" or "<=" or ">=" => PrepareCondition(binary, inFunction),
             IrIntrinsicCallExpression predicate when predicate.Id is IntrinsicId.StringContains or IntrinsicId.StringStartsWith or IntrinsicId.StringEndsWith or IntrinsicId.StringIsMatch =>
                 PrepareCondition(predicate, inFunction),
@@ -651,7 +654,9 @@ public sealed partial class PosixEmitter
     private string DeclareUninitializedTemp(bool inFunction)
     {
         var name = _names.Generated(TargetNameKind.Variable, "_tmp" + (++_valueTempId));
-        if (inFunction) WriteLine($"local {name}");
+        // In zsh, `local name` prints an inherited value during recursion. Initializing the
+        // temporary also gives both shells the intended empty-value semantics.
+        if (inFunction) WriteLine($"local {name}=''");
         return name;
     }
 
@@ -700,6 +705,9 @@ public sealed partial class PosixEmitter
             _ => false
         };
     }
+
+    private bool UsesFloatingPointOperands(IrBinaryExpression comparison) =>
+        IsDefinitelyFloat(comparison.Left) || IsDefinitelyFloat(comparison.Right);
 
     private string EmitAwkArithmetic(string left, string right, string op)
     {
@@ -756,6 +764,8 @@ public sealed partial class PosixEmitter
             IrLiteralExpression literal => literal.Value is sbyte or byte or short or ushort or int or uint or long or ulong,
             IrIdentifierExpression identifier => !_knownFloatVariables.Contains(SanitizeVariableName(identifier.Name)) &&
                                                  _knownIntegerVariables.Contains(SanitizeVariableName(identifier.Name)),
+            IrCollectionLengthExpression => true,
+            IrIntrinsicCallExpression { Id: IntrinsicId.StringLength, Arguments: [IrIdentifierExpression] } => true,
             IrUnaryExpression unary when unary.Operator is "+" or "-" => CanEmitInlineInteger(unary.Operand),
             IrBinaryExpression binary when binary.Operator is "+" or "-" or "*" or "/" or "%" =>
                 CanEmitInlineInteger(binary.Left) && CanEmitInlineInteger(binary.Right),
@@ -769,6 +779,13 @@ public sealed partial class PosixEmitter
         {
             IrLiteralExpression literal => Convert.ToString(literal.Value, CultureInfo.InvariantCulture) ?? "0",
             IrIdentifierExpression identifier => SanitizeVariableName(identifier.Name),
+            IrCollectionLengthExpression { Target: IrIdentifierExpression identifier }
+                when _nativeArrayVariables.TryGetValue(SanitizeVariableName(identifier.Name), out var arrayName) =>
+                $"${{#{arrayName}[@]}}",
+            IrCollectionLengthExpression { Target: IrIdentifierExpression identifier } =>
+                $"${{#{SanitizeVariableName(identifier.Name)}}}",
+            IrIntrinsicCallExpression { Id: IntrinsicId.StringLength, Arguments: [IrIdentifierExpression identifier] } =>
+                $"${{#{SanitizeVariableName(identifier.Name)}}}",
             IrUnaryExpression unary => $"{unary.Operator}{EmitInlineInteger(unary.Operand)}",
             IrBinaryExpression binary => $"({EmitInlineInteger(binary.Left)} {binary.Operator} {EmitInlineInteger(binary.Right)})",
             _ => "0"
@@ -848,7 +865,7 @@ public sealed partial class PosixEmitter
 
         if (expression is IrBinaryExpression comparison && comparison.Operator is "==" or "!=")
         {
-            if (IsDefinitelyFloat(comparison))
+            if (UsesFloatingPointOperands(comparison))
                 return EmitAwkComparison(comparison);
             var op = comparison.Operator == "==" ? "==" : "!=";
             return $"[[ {EmitComparableValue(comparison.Left)} {op} {EmitComparableValue(comparison.Right)} ]]";
@@ -856,7 +873,7 @@ public sealed partial class PosixEmitter
 
         if (expression is IrBinaryExpression relational && relational.Operator is "<" or ">" or "<=" or ">=")
         {
-            if (IsDefinitelyFloat(relational))
+            if (UsesFloatingPointOperands(relational))
                 return EmitAwkComparison(relational);
             return $"(( {EmitArithmeticExpression(relational.Left)} {relational.Operator} {EmitArithmeticExpression(relational.Right)} ))";
         }
@@ -1021,6 +1038,7 @@ public sealed partial class PosixEmitter
         IrLiteralExpression { Value: string } => true,
         IrMemberAccessExpression member => member.ValueType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true,
         IrIntrinsicCallExpression intrinsic => intrinsic.ReturnType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true,
+        IrBinaryExpression { Operator: "+" } binary => IsStringExpression(binary.Left) || IsStringExpression(binary.Right),
         _ => false
     };
 
@@ -1189,6 +1207,9 @@ public sealed partial class PosixEmitter
         {
             return SanitizeVariableName(identifier.Name);
         }
+
+        if (CanEmitInlineInteger(expression))
+            return $"$(( {EmitInlineInteger(expression)} ))";
 
         return EmitArithmeticExpression(expression);
     }

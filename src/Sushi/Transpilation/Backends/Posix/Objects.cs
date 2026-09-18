@@ -34,6 +34,12 @@ public sealed partial class PosixEmitter
             return $"{name}={EmitValueExpression(assignment.Value)}";
         }
 
+        if (assignment.Operator == "+=" &&
+            assignment.Target.StaticType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return $"{name}=\"${{{name}-}}\"{EmitValueExpression(assignment.Value)}";
+        }
+
         if (IsDefinitelyFloat(assignment.Value) || _knownFloatVariables.Contains(name))
         {
             var currentValue = $"\"${{{name}:-}}\"";
@@ -140,6 +146,12 @@ public sealed partial class PosixEmitter
         }
 
         var right = DeclareTemp(value, inFunction);
+        if (assignment.Operator == "+=" &&
+            assignment.Target.StaticType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            WriteLine($"{name}=\"${{{name}-}}${{{right}-}}\"");
+            return;
+        }
         if (IsDefinitelyFloat(assignment.Value) || _knownFloatVariables.Contains(name))
         {
             var currentValue = $"\"${{{name}:-}}\"";
@@ -201,6 +213,9 @@ public sealed partial class PosixEmitter
             var member = EmitObjectSubscript(assignment.MemberName);
             if (assignment.Operator == "=")
                 WriteLine($"{target}[{member}]={PrepareValue(assignment.Value, inFunction)}");
+            else if (assignment.Operator == "+=" &&
+                     assignment.MemberType.Name?.Equals("string", StringComparison.OrdinalIgnoreCase) == true)
+                WriteLine($"{target}[{member}]=\"${{{target}[{member}]:-}}\"{PrepareValue(assignment.Value, inFunction)}");
             else if (assignment.MemberType.Name?.Equals("float", StringComparison.OrdinalIgnoreCase) == true ||
                      IsDefinitelyFloat(assignment.Value))
             {
@@ -221,7 +236,25 @@ public sealed partial class PosixEmitter
         IrFunctionDeclarationStatement function,
         bool inFunction)
     {
-        var arguments = new List<string> { Escape.PosixSingleQuoted(destination) };
+        // Bash and Zsh resolve nameref targets dynamically. A recursive call that passes a
+        // compiler-local temporary (for example, _tmp31) can therefore bind to the callee's
+        // own _tmp31 instead of the caller's. Use a depth-qualified global slot for scalar
+        // recursive results, then copy it back into the caller's local destination.
+        var needsRecursiveResultSlot = inFunction &&
+                                       String.Equals(_currentFunctionName, function.Name, StringComparison.Ordinal) &&
+                                       IsScalarReturnType(function.ReturnType);
+        string? recursiveResultSlot = null;
+        var arguments = new List<string>();
+        if (needsRecursiveResultSlot)
+        {
+            var depth = _dialect.IsZsh ? "${#funcstack}" : "${#FUNCNAME[@]}";
+            recursiveResultSlot = DeclareTemp($"\"__sushi_return_{depth}\"", inFunction: true);
+            arguments.Add($"\"${{{recursiveResultSlot}-}}\"");
+        }
+        else
+        {
+            arguments.Add(Escape.PosixSingleQuoted(destination));
+        }
         for (var index = 0; index < call.Arguments.Count; index++)
         {
             var argument = call.Arguments[index].Value;
@@ -254,7 +287,18 @@ public sealed partial class PosixEmitter
                 arguments.Add(PrepareValue(argument, inFunction));
         }
         WriteLine($"{SanitizeFunctionName(call.Callee)} {string.Join(" ", arguments)}");
+        if (recursiveResultSlot != null)
+        {
+            var value = _dialect.IsZsh
+                ? $"\"${{(P){recursiveResultSlot}}}\""
+                : $"\"${{!{recursiveResultSlot}}}\"";
+            WriteLine($"{destination}={value}");
+            WriteLine($"unset \"${{{recursiveResultSlot}-}}\"");
+        }
     }
+
+    private static bool IsScalarReturnType(IrTypeRef type) =>
+        type.Kind == IrTypeKind.Primitive && type.Name?.ToLowerInvariant() is "string" or "int" or "float" or "bool";
 
     private bool TryGetObjectReturningCall(
         IrExpression expression,

@@ -219,4 +219,130 @@ public sealed class FileQueryTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash, "bash", ".sh")]
+    [InlineData(TargetLanguage.Zsh, "zsh", ".zsh")]
+    [InlineData(TargetLanguage.Powershell51, "pwsh", ".ps1")]
+    public void FileQuery_ExcludesSymbolicLinks(
+        TargetLanguage target, string shell, string extension)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"sushi-query-order-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(root, "alpha"));
+        Directory.CreateDirectory(Path.Combine(root, "zeta"));
+        File.WriteAllText(Path.Combine(root, "alpha", "first.txt"), "");
+        File.WriteAllText(Path.Combine(root, "middle.txt"), "");
+        File.CreateSymbolicLink(Path.Combine(root, "linked-file.txt"), Path.Combine(root, "middle.txt"));
+        Directory.CreateSymbolicLink(Path.Combine(root, "linked-directory"), Path.Combine(root, "alpha"));
+
+        var sushiRoot = root.Replace("\\", "/").Replace("\"", "\\\"");
+        var source = $$"""
+            use std.fs as fs
+            string[] entries = fs.query("{{sushiRoot}}").recursive().entries()
+            for (string entry : entries) { println(entry) }
+            """;
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "query-order.sushi",
+            TargetLanguage = target,
+            TargetProfile = new TargetProfile(target, TargetPlatform.Linux)
+        });
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+
+        var path = Path.Combine(Path.GetTempPath(), $"sushi-query-order-{Guid.NewGuid():N}{extension}");
+        try
+        {
+            File.WriteAllText(path, result.EmittedCode);
+            var start = target == TargetLanguage.Powershell51
+                ? new ProcessStartInfo(shell, $"-NoProfile -File \"{path}\"")
+                : new ProcessStartInfo(shell, path);
+            start.RedirectStandardOutput = true;
+            start.RedirectStandardError = true;
+            start.UseShellExecute = false;
+            using var process = Process.Start(start);
+            Assert.NotNull(process);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 0, error);
+            Assert.Equal(
+                new[] { "alpha", "alpha/first.txt", "middle.txt", "zeta" },
+                output.Replace("\r\n", "\n").Trim().Split('\n').OrderBy(value => value));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(TargetLanguage.Bash, "bash", ".sh")]
+    [InlineData(TargetLanguage.Zsh, "zsh", ".zsh")]
+    public void FileQuery_RecursiveFunctionKeepsEachInvocationResult(
+        TargetLanguage target, string shell, string extension)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"sushi-query-recursion-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(root, "one", "nested"));
+        Directory.CreateDirectory(Path.Combine(root, "two"));
+        File.WriteAllText(Path.Combine(root, "one", "a.txt"), "");
+        File.WriteAllText(Path.Combine(root, "one", "nested", "b.txt"), "");
+        File.WriteAllText(Path.Combine(root, "two", "c.txt"), "");
+        var sushiRoot = root.Replace("\\", "/").Replace("\"", "\\\"");
+        var source = $$"""
+            use std.fs as fs
+            use std.path as path
+            string visit(string directory) {
+                string[] entries = fs.query(directory).entries()
+                string output = ""
+                for (string entry : entries) {
+                    string entryPath = path.join(directory, entry)
+                    if (fs.isDirectory(entryPath)) {
+                        output += visit(entryPath)
+                    } else {
+                        output += entry + "\n"
+                    }
+                }
+                return output
+            }
+            println(visit("{{sushiRoot}}"))
+            """;
+
+        var result = new Transpiler().Transpile(new TranspileRequest
+        {
+            SourceText = source,
+            SourcePath = "query-recursion.sushi",
+            TargetLanguage = target,
+            TargetProfile = new TargetProfile(target, TargetPlatform.Linux)
+        });
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+
+        var path = Path.Combine(Path.GetTempPath(), $"sushi-query-recursion-{Guid.NewGuid():N}{extension}");
+        try
+        {
+            File.WriteAllText(path, result.EmittedCode);
+            var start = new ProcessStartInfo(shell, path)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            };
+            using var process = Process.Start(start);
+            Assert.NotNull(process);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.True(process.ExitCode == 0, error);
+            Assert.Equal(new[] { "a.txt", "b.txt", "c.txt" },
+                output.Replace("\r\n", "\n").Trim().Split('\n').OrderBy(value => value));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
 }

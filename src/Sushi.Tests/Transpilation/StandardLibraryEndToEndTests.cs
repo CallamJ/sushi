@@ -114,12 +114,14 @@ public sealed class StandardLibraryEndToEndTests
         Case("std.fs.writeText", "use std.fs.writeText\nwriteText(\"written.txt\", \"sushi\")", verify: (root, _, _) => Assert.Equal("sushi", File.ReadAllText(Path.Combine(root, "written.txt")))),
         Case("std.fs.readText", "use std.fs.readText\nprintln(readText(\"read.txt\"))", output: "sushi\n", setup: root => File.WriteAllText(Path.Combine(root, "read.txt"), "sushi")),
         Case("std.fs.exists", "use std.fs.exists\nprintln(exists(\"present.txt\"))", output: "true\n", setup: root => File.WriteAllText(Path.Combine(root, "present.txt"), "")),
-        Case("std.fs.query", "use std.fs as fs\nvar root = \"glob\"\nvar pattern = \"*.sushi\"\nvar baseQuery = fs.query(root).recursive()\nvar query = baseQuery.matching(pattern)\nstring[] files = query.files()\nfor (string file : files) { println(file) }", output: "one.sushi\nnested/two.sushi\n", setup: root =>
+        Case("std.fs.query", "use std.fs as fs\nvar root = \"glob\"\nvar pattern = \"*.sushi\"\nvar baseQuery = fs.query(root).recursive()\nvar query = baseQuery.matching(pattern)\nstring[] files = query.files()\nfor (string file : files) { println(file) }", ignoreOutput: true, setup: root =>
         {
             Directory.CreateDirectory(Path.Combine(root, "glob", "nested"));
             File.WriteAllText(Path.Combine(root, "glob", "one.sushi"), "");
             File.WriteAllText(Path.Combine(root, "glob", "nested", "two.sushi"), "");
-        }),
+        }, verify: (_, output, _) => Assert.Equal(
+            new[] { "nested/two.sushi", "one.sushi" },
+            Normalize(output).Trim().Split('\n').OrderBy(value => value))),
         Case("std.fs.fileSize", "use std.fs.fileSize\nprintln(fileSize(\"size.txt\"))", output: "5\n", setup: root => File.WriteAllText(Path.Combine(root, "size.txt"), "sushi")),
         Case("std.fs.directorySize", "use std.fs.directorySize\nprintln(directorySize(\"sizes\"))\nprintln(directorySize(\"sizes\", recursive: true))", output: "5\n10\n", setup: root =>
         {
@@ -164,7 +166,7 @@ public sealed class StandardLibraryEndToEndTests
         Case("std.console.error", "use std.console.error\nerror(\"sushi error\")", error: "sushi error\n"),
         Case("std.console.readLine", "use std.console.readLine\nprintln(readLine())", output: "sushi input\n", input: "sushi input\n"),
 
-        Case("std.math.round", "use std.math.round\nprintln(round(1.5))\nprintln(round(-1.5))\nprintln(round(1.2345, precision: 2))", output: "2\n-2\n1.23\n"),
+        Case("std.math.round", "use std.math.round\nprintln(round(1.5))\nprintln(round(-1.5))\nprintln(round(1.2345, precision: 2))\nprintln(round(3.9399999999999999, precision: 2))", output: "2\n-2\n1.23\n3.94\n"),
         Case("std.math.floor", "use std.math.floor\nprintln(floor(1.8))\nprintln(floor(-1.2))", output: "1\n-2\n"),
         Case("std.math.ceil", "use std.math.ceil\nprintln(ceil(1.2))\nprintln(ceil(-1.8))", output: "2\n-1\n"),
 

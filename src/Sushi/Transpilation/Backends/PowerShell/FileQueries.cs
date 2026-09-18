@@ -174,7 +174,10 @@ public sealed partial class PowerShellEmitter
 
     private static List<string> BuildPowerShellFilters(FileQueryPlan plan)
     {
-        var filters = new List<string>();
+        var filters = new List<string>
+        {
+            "($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0"
+        };
         if (plan.Visibility == "visible") filters.Add("$_.Name -notlike '.*'");
         if (plan.Visibility == "hidden") filters.Add("$_.Name -like '.*'");
         if (plan.Exclude is not null) filters.Add($"$_.Name -notlike {plan.Exclude}");
@@ -259,22 +262,24 @@ public sealed partial class PowerShellEmitter
             IrFileQueryEntryKind.Directories => " -Directory",
             _ => string.Empty
         };
-        // PowerShell supports a computed switch argument and relative names
-        // natively, so a dynamic query is still just a single pipeline.
+        // Keep the object until filtering is complete so links can be
+        // excluded consistently with find -P on Bash and Zsh.
+        WriteLine($"${prefix}_base = (Resolve-Path -LiteralPath ${query}._fs_root -ErrorAction Stop).Path");
         WriteLine($"${name} = @(");
         _indent++;
-        WriteLine($"Get-ChildItem -LiteralPath ${query}._fs_root -Force -Recurse:$([bool]${query}._fs_recursive){itemKind} -Name -ErrorAction Stop |");
+        WriteLine($"Get-ChildItem -LiteralPath ${prefix}_base -Force -Recurse:$([bool]${query}._fs_recursive){itemKind} -ErrorAction Stop |");
         _indent++;
         WriteLine("Where-Object {");
         _indent++;
-        WriteLine($"${prefix}_entry = Split-Path -Leaf $_");
+        WriteLine($"${prefix}_entry = $_.Name");
+        WriteLine("($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0 -and");
         WriteLine($"(${query}._fs_visibility -ne 'visible' -or -not ${prefix}_entry.StartsWith('.')) -and");
         WriteLine($"(${query}._fs_visibility -ne 'hidden' -or ${prefix}_entry.StartsWith('.')) -and");
         WriteLine($"(-not ${query}._fs_match -or ${prefix}_entry -like ${query}._fs_match) -and");
         WriteLine($"(-not ${query}._fs_exclude -or ${prefix}_entry -notlike ${query}._fs_exclude)");
         _indent--;
         WriteLine("} |");
-        WriteLine("ForEach-Object { $_.Replace('\\', '/') }");
+        WriteLine($"ForEach-Object {{ $_.FullName.Substring(${prefix}_base.Length).TrimStart([char]92, [char]47).Replace('\\', '/') }}");
         _indent--;
         WriteLine(")");
         _indent--;
@@ -294,4 +299,5 @@ public sealed partial class PowerShellEmitter
         }
         return EmitValueExpression(new IrMemberAccessExpression(query, field, IrTypeRef.Primitive("string")));
     }
+
 }

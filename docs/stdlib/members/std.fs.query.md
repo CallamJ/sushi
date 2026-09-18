@@ -35,7 +35,9 @@ Filters return a new query and leave the original query unchanged.
 
 ## Results
 
-`files()`, `directories()`, and `entries()` return root-relative `string[]` paths with `/` separators. Ordering is native to the selected target shell. Directory symlinks are not traversed.
+`files()`, `directories()`, and `entries()` return paths relative to the query root as `string[]`: the root prefix is removed, results are never absolute, and `/` is always the separator. For example, `fs.query("src").files()` returns `main.sushi`, not `src/main.sushi` or an absolute path.
+
+Result order is determined by the native filesystem enumeration and is not guaranteed. Symbolic links (including directory links) are excluded from all query results and are never traversed. This avoids target-specific link-following behavior and cycles.
 
 ## Returns
 
