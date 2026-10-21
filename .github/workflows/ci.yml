@@ -147,7 +147,7 @@ jobs:
 
   benchmark:
     name: Benchmark (${{ matrix.target }})
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_benchmark)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_benchmark
     strategy:
       fail-fast: false
       matrix:

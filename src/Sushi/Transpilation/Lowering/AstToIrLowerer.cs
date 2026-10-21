@@ -333,7 +333,7 @@ public sealed class AstToIrLowerer
 
             case VariableDeclarationStatementNode declaration:
             {
-                if (!_declaredVariables.Add(declaration.Name))
+                if (!_declaredVariables.Contains(declaration.Name))
                 {
                     AddDiagnostic(
                         DuplicateVariableCode,
@@ -349,6 +349,7 @@ public sealed class AstToIrLowerer
                     ValidateConditionalArms(declaration.Initializer, declaredType,
                         declaration.Line, declaration.Column, $"initializer for variable '{declaration.Name}'", InferredTypeConflictCode);
                 var initializer = declaration.Initializer != null ? LowerExpression(declaration.Initializer) : null;
+                _declaredVariables.Add(declaration.Name);
                 var declarationName = _functionDepth == 0 ? ResolveTopLevel(declaration.Name) : declaration.Name;
                 DeclareVariableType(declaration.Name, declaration.Type, initializer, declaration.Line, declaration.Column);
                 if (declarationName != declaration.Name)
@@ -2517,6 +2518,8 @@ public sealed class AstToIrLowerer
         {
             return;
         }
+
+        if (_functionDepth > 0 && _declaredVariables.Contains(identifier.Name)) return;
 
         if (_topLevelVariableLines.TryGetValue(identifier.Name, out var declarationLine))
         {
