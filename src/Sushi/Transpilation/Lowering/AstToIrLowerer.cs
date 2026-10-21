@@ -333,7 +333,7 @@ public sealed class AstToIrLowerer
 
             case VariableDeclarationStatementNode declaration:
             {
-                if (!_declaredVariables.Contains(declaration.Name))
+                if (_declaredVariables.Contains(declaration.Name))
                 {
                     AddDiagnostic(
                         DuplicateVariableCode,
